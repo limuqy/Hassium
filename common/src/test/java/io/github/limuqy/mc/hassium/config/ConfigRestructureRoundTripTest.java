@@ -269,8 +269,8 @@ class ConfigRestructureRoundTripTest {
         // chunk 区块核心抽查
         assertEquals(6000, values.get(ConfigSchema.CHUNK_CLEANUP_INTERVAL_TICKS));
         assertEquals(0.3, values.get(ConfigSchema.CHUNK_HOT_SCORE_THRESHOLD));
-        // 黑名单 5 项（handshake / BE 专用通道随退役移除）
-        assertEquals(5, values.get(ConfigSchema.MASTER_COMPRESSION_BLACKLIST).size());
+        // 压缩黑名单默认空（daf9a3f5：控制面硬编码）
+        assertEquals(0, values.get(ConfigSchema.MASTER_COMPRESSION_BLACKLIST).size());
     }
 }
 

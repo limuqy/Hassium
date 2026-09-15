@@ -277,10 +277,12 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
      */
     @Override
     public void sendPlayInit(ServerPlayer player, int negotiatedCaps, long worldSeed,
-                             byte[] stemNbt, boolean seedGenEnabled) {
+                             byte[] stemNbt, boolean seedGenEnabled,
+                             java.util.List<String> dimensionIds) {
         try {
             LoginHandshake.PlayInitPayload payload =
-                    new LoginHandshake.PlayInitPayload(negotiatedCaps, worldSeed, stemNbt, seedGenEnabled);
+                    new LoginHandshake.PlayInitPayload(negotiatedCaps, worldSeed, stemNbt,
+                            seedGenEnabled, dimensionIds);
             FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
             payload.encode(buf);
 #if MC_VER < MC_1_21_1
@@ -288,8 +290,9 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
 #else
             ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.PLAY_INIT_S2C_TYPE, buf));
 #endif
-            Constants.LOG.info("[PLAY_INIT] Sent play_init to {} (caps={})",
-                    player.getName().getString(), LoginHandshake.describeCaps(negotiatedCaps));
+            Constants.LOG.info("[PLAY_INIT] Sent play_init to {} (caps={}, dims={})",
+                    player.getName().getString(), LoginHandshake.describeCaps(negotiatedCaps),
+                    dimensionIds != null ? dimensionIds.size() : 0);
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to send play init packet to {}", player.getName().getString(), e);
         }

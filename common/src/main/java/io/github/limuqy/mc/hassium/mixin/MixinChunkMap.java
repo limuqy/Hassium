@@ -191,14 +191,24 @@ public class MixinChunkMap {
         }
     }
 
-    /** 本 ChunkMap 所属维度（影子上下文；null 回落 OVERWORLD，与既有钩子同口径）。 */
+    /** 本 ChunkMap 所属维度（影子上下文）。
+     *  优先 {@code this.level}；解析失败用 tracking 维，再失败才 OVERWORLD
+     *  （禁止在 level 可解析时误回落主世界）。 */
     @Unique
     private String hassium$shadowDimension() {
         String dimension = LevelCompat.getDimensionId(this.level);
-        if (dimension == null) {
-            dimension = io.github.limuqy.mc.hassium.utils.DimensionKey.OVERWORLD;
+        if (dimension != null) {
+            return dimension;
         }
-        return dimension;
+        try {
+            String tracked = io.github.limuqy.mc.hassium.network.seedgen.ShadowTrackingSession
+                    .getInstance().currentDimension();
+            if (tracked != null && !tracked.isEmpty()) {
+                return tracked;
+            }
+        } catch (Throwable ignored) {
+        }
+        return io.github.limuqy.mc.hassium.utils.DimensionKey.OVERWORLD;
     }
 
     /**

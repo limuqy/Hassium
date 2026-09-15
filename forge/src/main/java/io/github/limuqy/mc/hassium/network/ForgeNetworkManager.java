@@ -670,18 +670,24 @@ public class ForgeNetworkManager implements INetworkManagerService {
      */
     @Override
     public void sendPlayInit(ServerPlayer player, int negotiatedCaps, long worldSeed,
-                             byte[] stemNbt, boolean seedGenEnabled) {
+                             byte[] stemNbt, boolean seedGenEnabled,
+                             java.util.List<String> dimensionIds) {
         try {
+            LoginHandshake.PlayInitPayload payload =
+                    new LoginHandshake.PlayInitPayload(negotiatedCaps, worldSeed, stemNbt,
+                            seedGenEnabled, dimensionIds);
 #if MC_VER < MC_1_21_1
             if (CHANNEL != null) {
-                CHANNEL.sendTo(new LoginHandshake.PlayInitPayload(negotiatedCaps, worldSeed, stemNbt, seedGenEnabled),
+                CHANNEL.sendTo(payload,
                         player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
             }
 #else
-            sendToPlayer(player, new LoginHandshake.PlayInitPayload(negotiatedCaps, worldSeed, stemNbt, seedGenEnabled));
+            sendToPlayer(player, payload);
 #endif
-            LOGGER.info("Hassium: Sent play init to {} (caps={})", player.getName().getString(),
-                    io.github.limuqy.mc.hassium.network.handshake.LoginHandshake.describeCaps(negotiatedCaps));
+            LOGGER.info("Hassium: Sent play init to {} (caps={}, dims={})",
+                    player.getName().getString(),
+                    io.github.limuqy.mc.hassium.network.handshake.LoginHandshake.describeCaps(negotiatedCaps),
+                    dimensionIds != null ? dimensionIds.size() : 0);
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to send play init to {}", player.getName().getString(), e);
         }

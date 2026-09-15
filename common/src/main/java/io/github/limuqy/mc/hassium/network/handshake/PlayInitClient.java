@@ -22,8 +22,9 @@ public final class PlayInitClient {
         Constants.LOG.info("Hassium: play init (caps={}, seedGen={})",
                 LoginHandshake.describeCaps(payload.negotiatedCaps()), payload.seedGenEnabled());
 
-        // SeedGen 种子/LevelStem（enabled=false 时 seed=0 且 stem 为空，不泄露）
+        // SeedGen 种子/LevelStem + 服务端维度清单（enabled=false 时 seed=0 且 stem 为空，不泄露）
         ClientChunkPipeline.getInstance().setServerSeedInfo(
-                payload.worldSeed(), payload.stemNbt(), payload.seedGenEnabled());
+                payload.worldSeed(), payload.stemNbt(), payload.seedGenEnabled(),
+                payload.dimensionIds());
     }
 }

@@ -106,13 +106,34 @@ class DimensionKeyTest {
     }
 
     @Test
-    void isCacheableDimension_whitelistOnly() {
+    void isCacheableDimension_defaultThreePlusMarkedCustom() {
         assertTrue(DimensionKey.isCacheableDimension(DimensionKey.OVERWORLD));
         assertTrue(DimensionKey.isCacheableDimension(DimensionKey.NETHER));
         assertTrue(DimensionKey.isCacheableDimension(DimensionKey.END));
         assertFalse(DimensionKey.isCacheableDimension("minecraft:custom"));
         assertFalse(DimensionKey.isCacheableDimension(null));
         assertFalse(DimensionKey.isCacheableDimension(""));
+
+        String custom = "twilightforest:twilight_forest";
+        assertFalse(DimensionKey.isCacheableDimension(custom));
+        DimensionKey.markCacheable(custom);
+        assertTrue(DimensionKey.isCacheableDimension(custom));
+        DimensionKey.resetCacheable();
+        assertFalse(DimensionKey.isCacheableDimension(custom),
+                "resetCacheable must drop custom dims");
+        assertTrue(DimensionKey.isCacheableDimension(DimensionKey.OVERWORLD));
+    }
+
+    @Test
+    void cacheableDimensions_snapshotContainsDefaults() {
+        var dims = DimensionKey.cacheableDimensions();
+        assertTrue(dims.contains(DimensionKey.OVERWORLD));
+        assertTrue(dims.contains(DimensionKey.NETHER));
+        assertTrue(dims.contains(DimensionKey.END));
+        DimensionKey.markCacheable("aoa3:abyss");
+        assertTrue(DimensionKey.cacheableDimensions().contains("aoa3:abyss"));
+        DimensionKey.resetCacheable();
+        assertFalse(DimensionKey.cacheableDimensions().contains("aoa3:abyss"));
     }
 
     @Test

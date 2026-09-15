@@ -351,6 +351,24 @@ public final class ShadowLightCompute {
     }
 
     /**
+     * 非阻塞取锁：渲染线程 / flush 不得在 chunkLock 上无限等待。
+     * 持锁方若在 setBlockState→getChunk managedBlock（NeoForge 流体邻柱），
+     * 阻塞取锁会把 Render thread 冻死（es3 hang）。拿不到锁返回 empty 语义由调用方处理。
+     */
+    public static <T> java.util.Optional<T> tryWithChunkLock(ChunkPos pos,
+            java.util.function.Supplier<T> action) {
+        java.util.concurrent.locks.ReentrantLock lock = chunkLock(pos);
+        if (!lock.tryLock()) {
+            return java.util.Optional.empty();
+        }
+        try {
+            return java.util.Optional.ofNullable(action.get());
+        } finally {
+            unlockChunk(pos);
+        }
+    }
+
+    /**
      * 供 OVD 本地生成/磁盘/注入打包复用同一把 chunk 锁：buildPacket 会读取
      * LevelChunkSection 的 PalettedContainer（write → acquire），若与 hash 比对/
      * 光照引擎更新并发，可能序列化出“计数非空但方块数据被读成空气”的撕裂包。
@@ -779,6 +797,11 @@ public final class ShadowLightCompute {
             return false;
         }
         String resolved = dimension == null ? currentDimension() : dimension;
+        // 切维竞态：客户端已是 TF、tracking/OVD 仍按 OVERWORLD publish → 脚下闪主世界柱。
+        if (clientDimensionMismatch(resolved)) {
+            notePublishBlocked(renderOnly, "clientDimensionMismatch", pos);
+            return false;
+        }
         ShadowSeedServer server = ShadowServerRegistry.getInstance().getOrCreate();
         if (server == null) {
             notePublishBlocked(renderOnly, "shadowServerNull", pos);
@@ -846,6 +869,9 @@ public final class ShadowLightCompute {
         server.loadFromDiskAsync(dimension, pos, loaded -> {
             DISK_PUBLISH_INFLIGHT.remove(key);
             try {
+                if (clientDimensionMismatch(dimension)) {
+                    return;
+                }
                 if (loaded == null) {
                     onDiskPublishMiss(dimension, pos, localGeneration, renderOnly);
                     return;
@@ -1177,13 +1203,16 @@ public final class ShadowLightCompute {
         net.minecraft.world.level.chunk.LevelChunk chunk = shadow == null ? null
                 : shadow.injectedChunk(dimension, pos.x, pos.z);
         if (localHash == null && chunk != null) {
-            localHash = withChunkLock(pos, () -> {
-                long computed = io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil
+            // tryLock：渲染线程（ChunkAuthority→requestFull）不得在 chunkLock 上阻塞，
+            // 否则 seedgen-main 持锁 managedBlock 时整客户端冻死（es3 hang）。
+            Long computed = tryWithChunkLock(pos, () -> {
+                long h = io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil
                         .combineSectionHashes(io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil
                                 .computeSectionHashes(chunk));
-                io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.put(dimension, pos, computed);
-                return computed;
-            });
+                io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.put(dimension, pos, h);
+                return h;
+            }).orElse(null);
+            localHash = computed;
         }
         if (localHash == null) {
             return new io.github.limuqy.mc.hassium.network.ShadowPullRequestC2SPacket.Entry(
@@ -1194,18 +1223,22 @@ public final class ShadowLightCompute {
                     pos.x, pos.z, localHash, List.of(), 0);
         }
         final long hashForEntry = localHash;
-        return withChunkLock(pos, () -> {
-            io.github.limuqy.mc.hassium.network.sectiondelta.SectionDeltaSnapshot snapshot =
-                    io.github.limuqy.mc.hassium.network.sectiondelta.SectionDeltaSnapshots
-                            .getOrCapture(dimension, pos, chunk);
-            long[] hashes = snapshot.sectionHashes();
-            List<Long> sectionHashes = new ArrayList<>(hashes.length);
-            for (long hash : hashes) {
-                sectionHashes.add(hash);
-            }
-            return new io.github.limuqy.mc.hassium.network.ShadowPullRequestC2SPacket.Entry(
-                    pos.x, pos.z, hashForEntry, sectionHashes, snapshot.planes(), 0);
-        });
+        java.util.Optional<io.github.limuqy.mc.hassium.network.ShadowPullRequestC2SPacket.Entry> locked =
+                tryWithChunkLock(pos, () -> {
+                    io.github.limuqy.mc.hassium.network.sectiondelta.SectionDeltaSnapshot snapshot =
+                            io.github.limuqy.mc.hassium.network.sectiondelta.SectionDeltaSnapshots
+                                    .getOrCapture(dimension, pos, chunk);
+                    long[] hashes = snapshot.sectionHashes();
+                    List<Long> sectionHashes = new ArrayList<>(hashes.length);
+                    for (long hash : hashes) {
+                        sectionHashes.add(hash);
+                    }
+                    return new io.github.limuqy.mc.hassium.network.ShadowPullRequestC2SPacket.Entry(
+                            pos.x, pos.z, hashForEntry, sectionHashes, snapshot.planes(), 0);
+                });
+        return locked.orElseGet(() ->
+                new io.github.limuqy.mc.hassium.network.ShadowPullRequestC2SPacket.Entry(
+                        pos.x, pos.z, hashForEntry, List.of(), 0));
     }
 
     /** 已登记 hash 或驻留影子柱均可作为统一比较拉取的本地基线。 */
@@ -1288,8 +1321,36 @@ public final class ShadowLightCompute {
     }
 
 
-    /** 客户端当前维度 id（{@code namespace:path}；mc.level 不可用回退 OVERWORLD）。 */
+    /** 客户端当前维度 id（{@code namespace:path}）。
+     * 优先 {@code mc.level}；切维窗口 level 为空时用影子 tracking 维度，**不得**静默回落
+     * OVERWORLD——否则 TF 等自定义维柱会按主世界键注入/回放（脚下出现主世界地形）。 */
     static String currentDimension() {
+        try {
+            Minecraft mc = Minecraft.getInstance();
+            if (mc != null && mc.level != null) {
+                String id = LevelCompat.getDimensionId(mc.level);
+                if (id != null) {
+                    return id;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        try {
+            String tracked = ShadowTrackingSession.getInstance().currentDimension();
+            if (tracked != null && !tracked.isEmpty()) {
+                return tracked;
+            }
+        } catch (Throwable ignored) {
+        }
+        return DimensionKey.OVERWORLD;
+    }
+
+    /**
+     * 仅当客户端已有 {@code ClientLevel} 时返回其维 id；否则 null。
+     * publish 门禁用：与 {@link #currentDimension()} 不同，**绝不**用 tracking/OVERWORLD 填空——
+     * 切维瞬间客户端已是 TF、tracking 仍主世界时，必须拒绝把主世界柱推进 TF 世界。
+     */
+    private static String clientLevelDimension() {
         try {
             Minecraft mc = Minecraft.getInstance();
             if (mc != null && mc.level != null) {
@@ -1297,7 +1358,13 @@ public final class ShadowLightCompute {
             }
         } catch (Throwable ignored) {
         }
-        return DimensionKey.OVERWORLD;
+        return null;
+    }
+
+    /** 发布门禁：客户端 Level 已就绪时，柱维必须与客户端维一致。 */
+    private static boolean clientDimensionMismatch(String resolved) {
+        String clientDim = clientLevelDimension();
+        return clientDim != null && resolved != null && !clientDim.equals(resolved);
     }
 
     /** 内存区块 hash：ShadowStorageHashes 表优先（注入/读盘已登记），无表现算。 */
@@ -1320,13 +1387,17 @@ public final class ShadowLightCompute {
         pending.put(key, new PendingEntry(packet, traceOrigin(TraceOrigin.SERVER_PUSH)));
         pump();
     }
-    /** 投递可渲染柱；区块追踪与邻域由影子端原版 ChunkMap 管理。 */
+    /** 投递可渲染柱；区块追踪与邻域由影子端原版 ChunkMap 管理。
+     *  必须使用调用方传入的 {@code dimension}（pull/push 响应已带维）；
+     *  此前误用 {@link #currentDimension()} 在切维窗口会把 TF 柱按主世界键入表。 */
     public static void submitVisible(String dimension, ChunkPos pos,
                                      ClientboundLevelChunkWithLightPacket packet) {
         if (pos == null || packet == null || !isEnabled()) {
             return;
         }
-        String activeDimension = currentDimension();
+        String activeDimension = dimension != null && !dimension.isEmpty()
+                ? dimension
+                : currentDimension();
         ShadowSeedServer server = ShadowServerRegistry.getInstance().get();
         if (server != null) {
             server.setPersistenceRole(activeDimension, pos, ShadowChunkPersistenceRole.VISIBLE_FULL_LIGHT);

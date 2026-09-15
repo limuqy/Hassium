@@ -105,21 +105,24 @@ public class NeoForgeNetworkManager implements INetworkManagerService {
     }
 
     /**
-     * Play 期激活 Payload (S2C)：登录协商结果 + SeedGen 种子
+     * Play 期激活 Payload (S2C)：登录协商结果 + SeedGen 种子 + 服务端维度清单
      * （线格式 = common {@link LoginHandshake.PlayInitPayload}）。
      */
     public record PlayInitNeoPayload(int negotiatedCaps, long worldSeed, byte[] stemNbt,
-                                     boolean seedGenEnabled) implements CustomPacketPayload {
+                                     boolean seedGenEnabled,
+                                     java.util.List<String> dimensionIds)
+            implements CustomPacketPayload {
         public static final Type<PlayInitNeoPayload> TYPE =
                 new Type<>(ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C));
 
         public static final StreamCodec<FriendlyByteBuf, PlayInitNeoPayload> STREAM_CODEC = StreamCodec.of(
                 (buf, p) -> new LoginHandshake.PlayInitPayload(
-                        p.negotiatedCaps(), p.worldSeed(), p.stemNbt(), p.seedGenEnabled()).encode(buf),
+                        p.negotiatedCaps(), p.worldSeed(), p.stemNbt(), p.seedGenEnabled(),
+                        p.dimensionIds()).encode(buf),
                 buf -> {
                     LoginHandshake.PlayInitPayload payload = LoginHandshake.PlayInitPayload.decode(buf);
                     return new PlayInitNeoPayload(payload.negotiatedCaps(), payload.worldSeed(),
-                            payload.stemNbt(), payload.seedGenEnabled());
+                            payload.stemNbt(), payload.seedGenEnabled(), payload.dimensionIds());
                 }
         );
 
@@ -242,7 +245,8 @@ public class NeoForgeNetworkManager implements INetworkManagerService {
                 (payload, context) -> context.enqueueWork(() ->
                         PlayInitClient.handle(new LoginHandshake.PlayInitPayload(
                                 payload.negotiatedCaps(), payload.worldSeed(),
-                                payload.stemNbt(), payload.seedGenEnabled())))
+                                payload.stemNbt(), payload.seedGenEnabled(),
+                                payload.dimensionIds())))
         );
 
         if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()
@@ -386,16 +390,18 @@ public class NeoForgeNetworkManager implements INetworkManagerService {
     }
 
     /**
-     * 发送 Play 期激活包（协商结果 + SeedGen 种子；直连拓扑 S2C payload）。
+     * 发送 Play 期激活包（协商结果 + SeedGen 种子 + 维度清单；直连拓扑 S2C payload）。
      */
     @Override
     public void sendPlayInit(ServerPlayer player, int negotiatedCaps, long worldSeed,
-                             byte[] stemNbt, boolean seedGenEnabled) {
+                             byte[] stemNbt, boolean seedGenEnabled,
+                             java.util.List<String> dimensionIds) {
         try {
             sendServerPayload(player, new PlayInitNeoPayload(
-                    negotiatedCaps, worldSeed, stemNbt, seedGenEnabled));
-            LOGGER.debug("Hassium: Sent play init to {} (caps={})",
-                    player.getName().getString(), LoginHandshake.describeCaps(negotiatedCaps));
+                    negotiatedCaps, worldSeed, stemNbt, seedGenEnabled, dimensionIds));
+            LOGGER.debug("Hassium: Sent play init to {} (caps={}, dims={})",
+                    player.getName().getString(), LoginHandshake.describeCaps(negotiatedCaps),
+                    dimensionIds != null ? dimensionIds.size() : 0);
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to send play init packet", e);
         }

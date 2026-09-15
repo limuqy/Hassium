@@ -1,6 +1,7 @@
 package io.github.limuqy.mc.hassium.utils;
 
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -41,11 +42,19 @@ public final class DimensionKey {
     private static final Map<String, Integer> IDS = new ConcurrentHashMap<>();
     /** id → dimension 反查表（id 分配仅在 computeIfAbsent 内串行化）。 */
     private static final Map<Integer, String> NAMES = new ConcurrentHashMap<>();
+    /**
+     * 可缓存维度集合：默认三主维度；影子端装配成功后追加自定义维度。
+     * 断连由 {@link #resetCacheable()} 复位，避免跨服串用。
+     */
+    private static final Set<String> CACHEABLE = ConcurrentHashMap.newKeySet();
 
     static {
         register(OVERWORLD);
         register(NETHER);
         register(END);
+        CACHEABLE.add(OVERWORLD);
+        CACHEABLE.add(NETHER);
+        CACHEABLE.add(END);
     }
 
     /**
@@ -100,11 +109,33 @@ public final class DimensionKey {
     }
 
     /**
-     * 维度白名单判定：仅三主维度可进客户端缓存链路；
-     * null / 自定义维度一律 false（调用方透传，不进影子比对/落盘/SeedGen）。
+     * 维度白名单判定：默认三主维度；影子端装配成功的自定义维度经
+     * {@link #markCacheable(String)} 追加后同样可进缓存链路。
+     * null / 未装配自定义维度一律 false（调用方透传，不进影子比对/落盘/SeedGen）。
      */
     public static boolean isCacheableDimension(String dimension) {
-        return OVERWORLD.equals(dimension) || NETHER.equals(dimension) || END.equals(dimension);
+        return dimension != null && CACHEABLE.contains(dimension);
+    }
+
+    /** 影子端装配成功后登记可缓存维度（幂等；null/空串忽略）。 */
+    public static void markCacheable(String dimension) {
+        if (dimension != null && !dimension.isEmpty()) {
+            CACHEABLE.add(dimension);
+            register(dimension);
+        }
+    }
+
+    /** 断连复位为默认三维（防跨服自定义维度串用）。 */
+    public static void resetCacheable() {
+        CACHEABLE.clear();
+        CACHEABLE.add(OVERWORLD);
+        CACHEABLE.add(NETHER);
+        CACHEABLE.add(END);
+    }
+
+    /** 当前可缓存维度快照（淘汰扫描等只读消费）。 */
+    public static Set<String> cacheableDimensions() {
+        return Set.copyOf(CACHEABLE);
     }
 
     private static long compose(int dimId, int chunkX, int chunkZ) {

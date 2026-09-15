@@ -408,3 +408,100 @@ hassium_exports/server_192.168.1.100_25565/
 - **投递重试必须有界**：客户端应用权威包时若原版拒收（`Ignoring chunk since it's not in the view range`，快速移动后滞留在投递队列里的旧窗口柱），该拒绝**不可自愈**。`ShadowLightCompute.applyReadyChunk` 连续被拒 `MAX_IGNORED_RETRIES=60`（≈3s）即放弃该投递条目（`release`），**不清**影子注入表与磁盘基线（玩家回到该区域由声明/扫描重新投递）；重试日志按 200 次节流。无上限重试会让整柱在 `ready` 里每帧打转（移动冒烟实测 21s / 102010 行、日志 84MB、渲染线程吃满、客户端 120s 不退出）。
 - 实测：`1.20.1 fabric classic`（`final2`，不移动）R2 `区块缓存 100.0%`（全命中 1082/16.9MB + 部分命中 5/80KB）、`区块加载 0`、`超视渲染 634/缺失 2`、`流量节省 100.0%`（2.6 KB）；`1.20.1 fabric I`（`move3`，`-MoveSeconds 12` 往返移动）R2 `区块缓存 100.0%`（全命中 1081/16.9MB + 部分命中 6/96KB）、`区块加载 0`、**spatial 550/550 无洞**、`超视渲染 634/缺失 2`、`光照缓存 100.0%`，两轮 `=== RESULT: PASS ===`（exit 0）。端到端取证：服务端 189 条 `[AUTHORITY] send`（含 `snapshot=true epoch=3`），客户端 44 条 `hash-hit zero-request`；回收路径取证见 `-MoveSeconds 12` 的 `reclaim=24`（线程 `hassium-shadow-reclaim`）。详见 [`client-chunk-flow-handover.md`](client-chunk-flow-handover.md) §9。
 - 零行为变化取证（2026-09-13，`1.21.1 fabric classic`）：生产态（`P5_TAKEOVER=false`）`1.21.1_fabric_I_p5off2` failures 0 / warnings 0、R1 1636 / R2 453 且封闭空洞 0、`authority gate starved` **0 次**；P5 接管态 `1.21.1_fabric_I_p5fix1` R1 1529 / R2 453、封闭空洞 0（修复前同种子为 1520 / 444，缺落位点 3x3），补发共约 14 批。
+
+## 15. 多维度与自定义维度（2026-08-23）
+
+**三主维度**（overworld / nether / end）：缓存 + SeedGen + 分维度落盘，见 §11/§12。
+
+**自定义维度动态兼容**（TF / AoA / Underworld 等，客户端必装同 mod）：
+
+1. `play_init_s2c` 追加服务端维度 id 列表（append-only，上限 256；旧端不读）
+2. 客户端用**本地 worldgen registry** lookup `LevelStem`（装了维度 mod 即有）
+3. resolve 成功 → 装配进影子 `WorldDimensions` → 缓存 + SeedGen + 落盘 `dimensions/<ns>/<path>/region/`
+4. resolve 失败 → 该维继续原版透传（`applyVanillaDirect`）
+5. 主世界 stem NBT 解码失败（客户端缺生成器 codec）→ **硬关 SeedGen**（仅缓存，`ClientChunkPipeline.disableSeedGen`）
+
+可缓存白名单为动态集合（`DimensionKey.markCacheable` / `resetCacheable`），默认三维，装配成功后追加；断连复位。
+
+| 场景 | 双端 | SeedGen | 缓存 |
+|------|------|---------|------|
+| 新增维度（TF/AoA/Underworld） | **必须客户端装同 mod** | 本地 resolve 成功即可开 | 同左 |
+| 只改地形噪声（史诗地形类） | 服务端即可玩 | **客户端未装同款生成器 → 不要开** `chunk.seedGenEnabled` | 可开 |
+| 主世界 stem 握手 NBT 解码失败 | 客户端缺生成器 codec | 自动硬关 | 不受影响 |
+
+对照实现见 [`handoff-2026-08-22-multi-dimension-cache.md`](handoff/handoff-2026-08-22-multi-dimension-cache.md)。
+
+**装配前置（NeoForge）**：影子 `PackRepository` 须经 `IPlatformHelper.contributeServerDataPacks` 挂上
+`ResourcePackLoader.populatePackRepository(SERVER_DATA)`，否则 mod 内 `data/<ns>/dimension/*.json`
+不进 `datapackDimensions`，自定义维 resolve 失败只能透传。`LEVEL_STEM` 在
+`datapackDimensions()`（非 `datapackWorldgen()`）。
+
+**会话状态**：断连 `DimensionKey.resetCacheable()`；park 复用时按 `storageDimensions()` 重新
+`markCacheable`，否则 R2 该维退回透传、缓存全 miss。
+
+**实测（2026-08-23，`1.21.1_neoforge_I_aoa3g`，AoA3 3.7.16.1 + SeedGen 关）**：
+
+| 轮次 | 维度 | 结果 |
+|------|------|------|
+| R1 | `aoa3:abyss` | 10 维全部 assemble；应用 3058 柱；落盘 `dimensions/aoa3/abyss/region/*.mca`×4 |
+| R2（重连 + park 复用） | `aoa3:abyss` | **全命中 453/7.1MB**；下行 0 B；光照 reuse 453；流量节省 100% |
+
+会话 `=== RESULT: PASS ===`。场景：`hassium/smoke/scenario/aoa3.scenario`（双端 mods 放入 AoA3 jar）。
+
+**内容级探针（`contentCheck`，2026-08-23 补）**：dump 时采样玩家 3×3 柱全量非空气计数 + 脚下方块 id。
+**仅观测 / 场景可选断言，不是全局门禁**——空岛、空置域破基岩、末地虚空等合法全空气柱；
+需要非空地形的场景（如 `aoa3.scenario` 的 abyss）在 `.scenario` 里显式
+`assertProbe contentCheck.playerChunkNonAir`。`aoa3h` R1/R2 均为
+`playerChunkNonAir=22421`、`footBlock=aoa3:abyssal_stone`、`chunksWithNonAir=9/9`
+（R1/R2 计数一致 = 缓存回放与首访应用一致）。
+
+已知边界：WorldLoader 挂全量 mod pack 时偶发 `Blocks.rebuildCache` CME（AoA tag 竞态）——
+`SeedGenLevelCompat.loadWorldStemWithRetry` 重试；仍失败则影子创建失败、缓存整体降级（原版路径）。
+
+**暮色森林双端（2026-08-23）**：
+
+| 会话 | 结果 |
+|------|------|
+| `1.21.1_fabric_I_tf4` | **PASS**：显式挂 `ModResourcePackCreator` 后 `twilightforest` 进 pack 列表并 assemble；R2 全命中 1084 / 省流量 100% |
+| `1.21.1_neoforge_I_tf` | **PASS**：universal jar；R2 全命中约 1084 级（同场景） |
+
+Fabric 差异：`ResourcePackManagerMixin` 未对本项目 `ServerPacksSource` 自动挂 mod pack
+（available 仅 vanilla/bundle/trade_rebalance）——`IPlatformHelper.serverPackSources`
+在构造期追加 `ModResourcePackCreator(SERVER_DATA)`。`versionProperties/1.21.1.properties`
+的 `fabric_api_version` 需 ≥ `0.116.14+1.21.1`（TF 硬依赖）。
+
+**OVD 与自定义维度**：OVD 几何/发布走 `ShadowTrackingSession.currentDimension` +
+`publishOvdCachedChunk(dimension, …)`，**无三维白名单**；自定义维装配成功后与原版维同路径
+（切维 reseat 虚拟玩家 + 清 OVD 盘面）。实测 `1.21.1_neoforge_I_es5` R2 在
+`eternal_starlight:starlight`：`超视渲染 已加载 632，缺失 4`。
+
+**NeoForge stub 协商（TF OVD 0 根因，2026-08-23）**：影子 `Connection` stub 未协商
+NeoForge payload 通道时，`placeNewPlayer` 期间 TF `sync_quests` / AoA `player_data_sync`
+等 `checkPacket` 抛 `UnsupportedOperationException` → tracking 会话创建失败 →
+OVD `virtualPlayer==null` 恒 0。修复：`IPlatformHelper.prepareShadowStubConnection`
+在 NeoForge 上调 `NetworkRegistry.configureMockConnection`（GameTest 同款）。
+`1.21.1_neoforge_I_tf_ovd` R2：**会话 started + 缓存全命中 1162 + OVD 632/4 + 省流量 100%**。
+
+**切维误读主世界缓存（2026-08-23）**：`submitVisible` 曾忽略入参 `dimension`、改用
+`currentDimension()`；切维窗口 `mc.level` 仍可能是主世界 → TF 柱按 OVERWORLD 键入表 →
+脚下回放主世界地形。修复：`submitVisible` 必须用调用方维；`currentDimension()` 在
+`mc.level` 空时回落 **tracking 维** 而非 OVERWORLD；`hassium$shadowDimension` 优先
+`this.level` 再 tracking。`1.21.1_neoforge_I_tf_dimfix` R2：缓存 1085、OVD 632、
+contentCheck 9/9 非空（`playerChunkNonAir=9164`）。
+
+**R1 切维闪主世界（2026-08-23）**：客户端已进 TF、tracking 仍 OVERWORLD 时
+`publishCachedChunk`/OVD 会把主世界柱推进 TF ClientLevel（脚下先主世界再被 TF 柱替换）。
+修复：`clientDimensionMismatch(resolved)` 门禁——`mc.level` 就绪后 publish 维必须等于
+客户端维；异步读盘回调同检；`sweepOvdRing` 在 tracking 维 ≠ 客户端维时整轮跳过。
+
+**硬编码维度审计（2026-08-23）**：
+
+| 位置 | 状态 |
+|------|------|
+| `DimensionKey.isCacheableDimension` | 已动态（默认三维 + markCacheable） |
+| `ShadowCacheEviction` | 已动态 `storageDimensions()` |
+| `ShadowSeedServer.dimensionOfCache` | 已动态（含自定义维，防死锁桥） |
+| OVD tracking / publish | 已按 `currentDimension` 动态 |
+| 1 参 `injectChunk`/`injectedChunk`/… | **兼容重载**（委托 OVERWORLD）；热路径均已用带维签名 |
+| `SmokeProbeWriter.disk.dimensions` | 已扩：附加 `storageDimensions` 自定义维 region 计数 |
+| `benchmark/DictionaryTrainer` | 离线工具，三维存档路径，不动 |

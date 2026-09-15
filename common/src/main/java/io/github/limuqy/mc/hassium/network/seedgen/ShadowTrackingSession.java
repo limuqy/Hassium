@@ -423,6 +423,18 @@ public final class ShadowTrackingSession {
         if (shadow == null || virtualPlayer == null || currentDimension == null) {
             return;
         }
+        // 客户端已切维、tracking 未 reseat：禁止把旧维 OVD 柱推进新 ClientLevel（脚下闪主世界）。
+        try {
+            net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
+            if (mc != null && mc.level != null) {
+                String clientDim = io.github.limuqy.mc.hassium.compat.LevelCompat
+                        .getDimensionId(mc.level);
+                if (clientDim != null && !clientDim.equals(currentDimension)) {
+                    return;
+                }
+            }
+        } catch (Throwable ignored) {
+        }
         int serverVD = serverViewDistance;
         int clientVD = effectiveClientVD;
         if (serverVD <= 0 || clientVD <= serverVD) {

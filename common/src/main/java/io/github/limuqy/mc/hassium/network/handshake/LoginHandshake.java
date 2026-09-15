@@ -1,5 +1,7 @@
 package io.github.limuqy.mc.hassium.network.handshake;
 
+import java.util.ArrayList;
+import java.util.List;
 import net.minecraft.network.FriendlyByteBuf;
 
 /**
@@ -66,9 +68,20 @@ public final class LoginHandshake {
      * @param worldSeed      主世界种子；seedGenEnabled=false 时为 0（避免关功能仍泄露种子）
      * @param stemNbt        LevelStem NBT（可空）
      * @param seedGenEnabled 服务端 SeedGen 开关
+     * @param dimensionIds   服务端维度 id 列表（append-only；旧端不读此段）。
+     *                       客户端用本地 worldgen registry resolve LevelStem，
+     *                       覆盖新增维度 mod（TF/AoA 等客户端必装场景）。
      */
     public record PlayInitPayload(int negotiatedCaps, long worldSeed, byte[] stemNbt,
-                                  boolean seedGenEnabled) {
+                                  boolean seedGenEnabled, List<String> dimensionIds) {
+        /** 维度 id 列表上限（防异常服务端撑爆客户端装配）。 */
+        public static final int MAX_DIMENSION_IDS = 256;
+
+        public PlayInitPayload(int negotiatedCaps, long worldSeed, byte[] stemNbt,
+                               boolean seedGenEnabled) {
+            this(negotiatedCaps, worldSeed, stemNbt, seedGenEnabled, List.of());
+        }
+
         public void encode(FriendlyByteBuf buf) {
             buf.writeVarInt(negotiatedCaps);
             buf.writeLong(worldSeed);
@@ -77,6 +90,12 @@ public final class LoginHandshake {
                 buf.writeBytes(stemNbt);
             }
             buf.writeBoolean(seedGenEnabled);
+            List<String> dims = dimensionIds != null ? dimensionIds : List.of();
+            int count = Math.min(dims.size(), MAX_DIMENSION_IDS);
+            buf.writeVarInt(count);
+            for (int i = 0; i < count; i++) {
+                buf.writeUtf(dims.get(i), 128);
+            }
         }
 
         public static PlayInitPayload decode(FriendlyByteBuf buf) {
@@ -89,7 +108,18 @@ public final class LoginHandshake {
                 buf.readBytes(stemNbt);
             }
             boolean enabled = buf.readableBytes() >= 1 && buf.readBoolean();
-            return new PlayInitPayload(caps, worldSeed, stemNbt, enabled);
+            List<String> dimensionIds = List.of();
+            if (buf.readableBytes() >= 1) {
+                int dimCount = buf.readVarInt();
+                if (dimCount > 0 && dimCount <= MAX_DIMENSION_IDS
+                        && dimCount <= buf.readableBytes()) {
+                    dimensionIds = new ArrayList<>(dimCount);
+                    for (int i = 0; i < dimCount; i++) {
+                        dimensionIds.add(buf.readUtf(128));
+                    }
+                }
+            }
+            return new PlayInitPayload(caps, worldSeed, stemNbt, enabled, dimensionIds);
         }
     }
 

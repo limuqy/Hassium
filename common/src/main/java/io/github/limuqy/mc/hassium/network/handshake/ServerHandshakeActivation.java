@@ -211,7 +211,9 @@ public final class ServerHandshakeActivation {
                     && HassiumConfigService.getInstance().isSeedGenEnabled();
             long worldSeed = SeedGenTail.handshakeWorldSeed(seedLevel, enabled);
             byte[] stemNbt = enabled ? SeedGenTail.encodeLevelStemNbt(seedLevel) : null;
-            Services.NETWORK_MANAGER.sendPlayInit(player, caps, worldSeed, stemNbt, enabled);
+            java.util.List<String> dimensionIds = SeedGenTail.collectDimensionIds(
+                    io.github.limuqy.mc.hassium.compat.PlayerCompat.getMinecraftServer(player));
+            Services.NETWORK_MANAGER.sendPlayInit(player, caps, worldSeed, stemNbt, enabled, dimensionIds);
         } catch (Exception e) {
             Constants.LOG.warn("Hassium: Failed to send play init to {}",
                     player.getName().getString(), e);

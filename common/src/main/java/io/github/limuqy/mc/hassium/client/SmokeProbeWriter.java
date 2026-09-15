@@ -78,6 +78,7 @@ public final class SmokeProbeWriter {
             sb.append(",\n");
             appendStats(sb, NetworkStats.getMetrics());
             appendClientCache(sb, mc, dimension);
+            appendContentCheck(sb, mc);
             appendCounters(sb);
             appendDisk(sb);
             appendChunkTrace(sb, dimension);
@@ -185,6 +186,100 @@ public final class SmokeProbeWriter {
         sb.append("  },\n");
     }
 
+    /**
+     * contentCheck：玩家脚下 3×3 柱的非空气方块计数 + 脚下方块 id。
+     * <p>
+     * <b>仅观测，不作全局门禁</b>：空岛 / 空置域 / 末地虚空等合法全空气柱。
+     * 需要非空地形的场景在 {@code .scenario} 里显式 {@code assertProbe
+     * contentCheck.playerChunkNonAir}。探针段只增不改既有键。
+     */
+    private static void appendContentCheck(StringBuilder sb, net.minecraft.client.Minecraft mc) {
+        ContentCheck check = sampleContentCheck(mc);
+        sb.append("  \"contentCheck\": {\n");
+        field(sb, "sampledChunks", check.sampledChunks());
+        field(sb, "chunksWithNonAir", check.chunksWithNonAir());
+        field(sb, "minNonAir", check.minNonAir());
+        field(sb, "maxNonAir", check.maxNonAir());
+        field(sb, "playerChunkNonAir", check.playerChunkNonAir());
+        lastField(sb, "footBlock", check.footBlock());
+        sb.append("  },\n");
+    }
+
+    public record ContentCheck(long sampledChunks, long chunksWithNonAir, long minNonAir,
+                               long maxNonAir, long playerChunkNonAir, String footBlock) {}
+
+    /** 供 assertProbe 复用的同一采样（与 contentCheck 段同源）。 */
+    public static ContentCheck sampleContentCheck(net.minecraft.client.Minecraft mc) {
+        long sampled = 0L;
+        long withNonAir = 0L;
+        long minNonAir = 0L;
+        long maxNonAir = 0L;
+        long playerChunkNonAir = -1L;
+        String footBlock = null;
+        if (mc != null && mc.player != null && mc.level != null) {
+            try {
+                var player = mc.player;
+                var level = mc.level;
+                int pcx = net.minecraft.core.SectionPos.blockToSectionCoord(player.getBlockX());
+                int pcz = net.minecraft.core.SectionPos.blockToSectionCoord(player.getBlockZ());
+                var cache = ((io.github.limuqy.mc.hassium.mixin.ClientLevelAccessor) level)
+                        .hassium$getChunkSource();
+                for (int dx = -1; dx <= 1; dx++) {
+                    for (int dz = -1; dz <= 1; dz++) {
+                        int cx = pcx + dx;
+                        int cz = pcz + dz;
+                        var chunk = cache.getChunk(cx, cz, false);
+                        if (chunk == null) {
+                            continue;
+                        }
+                        sampled++;
+                        long nonAir = countNonAir(chunk);
+                        if (nonAir > 0) {
+                            withNonAir++;
+                        }
+                        if (minNonAir == 0L || nonAir < minNonAir) {
+                            minNonAir = nonAir;
+                        }
+                        if (nonAir > maxNonAir) {
+                            maxNonAir = nonAir;
+                        }
+                        if (dx == 0 && dz == 0) {
+                            playerChunkNonAir = nonAir;
+                        }
+                    }
+                }
+                var foot = level.getBlockState(player.blockPosition().below());
+                var footId = net.minecraft.core.registries.BuiltInRegistries.BLOCK
+                        .getKey(foot.getBlock());
+                footBlock = footId == null ? null : footId.toString();
+            } catch (Throwable t) {
+                LOGGER.debug("HassiumSmokeTest: contentCheck failed", t);
+            }
+        }
+        return new ContentCheck(sampled, withNonAir, minNonAir, maxNonAir, playerChunkNonAir, footBlock);
+    }
+
+    /** 全柱非空气计数（16×16×(minY..maxY)；玩家邻域采样，每 dump 一次可接受）。 */
+    private static long countNonAir(net.minecraft.world.level.chunk.LevelChunk chunk) {
+        long n = 0L;
+        int minY = chunk.getMinBuildHeight();
+        int maxY = chunk.getMaxBuildHeight();
+        int baseX = chunk.getPos().getMinBlockX();
+        int baseZ = chunk.getPos().getMinBlockZ();
+        net.minecraft.core.BlockPos.MutableBlockPos pos = new net.minecraft.core.BlockPos.MutableBlockPos();
+        for (int x = 0; x < 16; x++) {
+            for (int z = 0; z < 16; z++) {
+                for (int y = minY; y < maxY; y++) {
+                    pos.set(baseX + x, y, baseZ + z);
+                    if (!chunk.getBlockState(pos).isAir()) {
+                        n++;
+                    }
+                }
+            }
+        }
+        return n;
+    }
+
 
     /**
      * counters：真实字段来源——
@@ -233,6 +328,7 @@ public final class SmokeProbeWriter {
         long overworldRegions = -1L;
         long netherRegions = -1L;
         long endRegions = -1L;
+        java.util.LinkedHashMap<String, Long> dimCounts = new java.util.LinkedHashMap<>();
         try {
             Path gameDir = ClientChunkPipeline.getInstance().getGameDir();
             String serverId = ClientChunkPipeline.getInstance().getServerId();
@@ -249,6 +345,38 @@ public final class SmokeProbeWriter {
                 overworldRegions = countRegionFiles(world.resolve("region"));
                 netherRegions = countRegionFiles(world.resolve("DIM-1").resolve("region"));
                 endRegions = countRegionFiles(world.resolve("DIM1").resolve("region"));
+                dimCounts.put("overworld", overworldRegions);
+                dimCounts.put("nether", netherRegions);
+                dimCounts.put("end", endRegions);
+                // 自定义维：影子 storageDimensions（已装配）优先；无影子时扫 cacheable
+                try {
+                    var shadow = io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry
+                            .getInstance().get();
+                    java.util.Collection<String> extra = shadow != null
+                            ? shadow.storageDimensions()
+                            : io.github.limuqy.mc.hassium.utils.DimensionKey.cacheableDimensions();
+                    for (String dim : extra) {
+                        if (dim == null
+                                || dim.equals(io.github.limuqy.mc.hassium.utils.DimensionKey.OVERWORLD)
+                                || dim.equals(io.github.limuqy.mc.hassium.utils.DimensionKey.NETHER)
+                                || dim.equals(io.github.limuqy.mc.hassium.utils.DimensionKey.END)) {
+                            continue;
+                        }
+                        // vanilla 布局：dimensions/<ns>/<path>/region（与 regionDir 同源）
+                        Path dir;
+                        int colon = dim.indexOf(':');
+                        if (colon > 0) {
+                            dir = world.resolve("dimensions")
+                                    .resolve(dim.substring(0, colon))
+                                    .resolve(dim.substring(colon + 1))
+                                    .resolve("region");
+                        } else {
+                            dir = world.resolve("dimensions").resolve(dim).resolve("region");
+                        }
+                        dimCounts.put(dim, countRegionFiles(dir));
+                    }
+                } catch (Throwable ignored) {
+                }
             }
         } catch (Throwable ignored) {
             // 保持默认值（false/0/null/-1）
@@ -258,10 +386,21 @@ public final class SmokeProbeWriter {
         field(sb, "regionFileCount", regionFileCount);
         sb.append("    \"cacheDir\": ").append(cacheDir == null ? "null" : jsonString(cacheDir)).append(",\n");
         sb.append("    \"dimensions\": {\n");
-        sb.append("      \"overworld\": {\"regionFileCount\": ").append(overworldRegions).append("},\n");
-        sb.append("      \"nether\": {\"regionFileCount\": ").append(netherRegions).append("},\n");
-        sb.append("      \"end\": {\"regionFileCount\": ").append(endRegions).append("}\n");
-        sb.append("    }\n");
+        boolean first = true;
+        for (var e : dimCounts.entrySet()) {
+            if (!first) {
+                sb.append(",\n");
+            }
+            first = false;
+            sb.append("      ").append(jsonString(e.getKey()))
+                    .append(": {\"regionFileCount\": ").append(e.getValue()).append('}');
+        }
+        if (first) {
+            sb.append("      \"overworld\": {\"regionFileCount\": ").append(overworldRegions).append("},\n");
+            sb.append("      \"nether\": {\"regionFileCount\": ").append(netherRegions).append("},\n");
+            sb.append("      \"end\": {\"regionFileCount\": ").append(endRegions).append('}');
+        }
+        sb.append("\n    }\n");
         sb.append("  },\n");
     }
     private static void appendChunkTrace(StringBuilder sb, String dimension) {
@@ -394,6 +533,17 @@ public final class SmokeProbeWriter {
     /** 对象末位数值字段（无尾逗号）。 */
     private static void lastField(StringBuilder sb, String name, long value) {
         sb.append("    \"").append(name).append("\": ").append(value).append('\n');
+    }
+
+    /** 对象末位字符串字段（null 写 JSON null）。 */
+    private static void lastField(StringBuilder sb, String name, String value) {
+        sb.append("    \"").append(name).append("\": ");
+        if (value == null) {
+            sb.append("null");
+        } else {
+            sb.append(jsonString(value));
+        }
+        sb.append('\n');
     }
 
     /** 纳秒累计量按毫秒定点输出（6 位），避免科学计数法进 JSON。 */

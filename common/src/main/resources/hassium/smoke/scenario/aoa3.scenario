@@ -1,0 +1,30 @@
+# aoa3 场景：自定义维度跨轮缓存冒烟（需双端 run/*/mods 放入 AoA3-1.21.1 jar）。
+# 链路：join 主世界 → 切 aoa3:abyss → dump R1（首访，网络落地；gate 默认开跑 validateStats）
+#       → disconnect → reconnect → 再切 abyss → dump R2（gate=false，观察缓存；不挡 PASS）
+# exit rounds=1：PASS 只看 R1 validateStats + 各轮 assertProbe（与 dimension.scenario 同口径）。
+# contentCheck 为场景显式断言（abyss 有地形，非空合理）；全局 validateStats 不强制非空
+# ——空岛/空置域/末地虚空全空气柱合法，不得进通用门禁。
+join label=WAIT_JOIN_1 since=start timeoutMs=${joinTimeoutMs}
+wait ms=${round1WaitMs}
+dimension to=aoa3:abyss
+wait ms=45000
+dump label=AOA_R1 round=1
+assertProbe label=A1_JOINED key=joined op=eq value=true
+assertProbe label=A1_DIM key=dimension op=eq value=aoa3:abyss
+assertProbe label=A1_APPLIED key=stats.clientAppliedChunkCount op=gt value=16
+assertProbe label=A1_CONTENT key=contentCheck.chunksWithNonAir op=gt value=0
+assertProbe label=A1_FOOT key=contentCheck.playerChunkNonAir op=gt value=64
+disconnect
+reconnect delayMs=${reconnectDelayMs}
+join label=WAIT_JOIN_2 since=disconnect timeoutMs=${joinTimeoutMs}
+wait ms=${round2WaitMs}
+dimension to=aoa3:abyss
+wait ms=25000
+dump label=AOA_R2 round=2 gate=false
+assertProbe label=A2_JOINED key=joined op=eq value=true
+assertProbe label=A2_DIM key=dimension op=eq value=aoa3:abyss
+assertProbe label=A2_APPLIED key=stats.clientAppliedChunkCount op=gt value=16
+assertProbe label=A2_CONTENT key=contentCheck.chunksWithNonAir op=gt value=0
+assertProbe label=A2_FOOT key=contentCheck.playerChunkNonAir op=gt value=64
+assertProbe label=A2_CACHED key=stats.cacheHitFullChunkCount op=gt value=0
+exit rounds=1

@@ -752,6 +752,16 @@ public final class ScenarioEngine {
                 long n = SmokeProbeWriter.currentLoadedChunkCount(mc);
                 yield n < 0L ? 0L : n;
             }
+            case "contentCheck.sampledChunks" ->
+                    SmokeProbeWriter.sampleContentCheck(mc).sampledChunks();
+            case "contentCheck.chunksWithNonAir" ->
+                    SmokeProbeWriter.sampleContentCheck(mc).chunksWithNonAir();
+            case "contentCheck.playerChunkNonAir" -> {
+                long n = SmokeProbeWriter.sampleContentCheck(mc).playerChunkNonAir();
+                yield n < 0L ? 0L : n;
+            }
+            case "contentCheck.maxNonAir" ->
+                    SmokeProbeWriter.sampleContentCheck(mc).maxNonAir();
             case "chunkTrace.shadowInjected" -> (long) trace.shadowInjected().size();
             case "chunkTrace.clientApplied" -> (long) trace.clientApplied().size();
             case "chunkTrace.meshCompiled" -> (long) trace.meshCompiled().size();
@@ -926,6 +936,14 @@ public final class ScenarioEngine {
                     MARKER_FAIL, roundLabel, applied);
             return false;
         }
+        // contentCheck 仅观测：空岛 / 空置域破基岩 / 末地虚空等合法全空气柱，
+        // 不得作为全局硬门禁。需要非空地形的场景在 .scenario 里显式 assertProbe。
+        var content = io.github.limuqy.mc.hassium.client.SmokeProbeWriter
+                .sampleContentCheck(Minecraft.getInstance());
+        LOGGER.info("HassiumSmokeTest: contentCheck {} sampled={} withNonAir={} "
+                        + "playerChunkNonAir={} foot={}",
+                roundLabel, content.sampledChunks(), content.chunksWithNonAir(),
+                content.playerChunkNonAir(), content.footBlock());
 
         // G1：classic ROUND2 超视渲染（影子双窗本地源）必须至少装载一柱
         if ("ROUND2".equals(roundLabel) && m.getOvdLoadedCount() <= 0) {

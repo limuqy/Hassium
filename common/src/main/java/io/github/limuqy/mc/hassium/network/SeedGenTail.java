@@ -90,6 +90,43 @@ public final class SeedGenTail {
         return enabled && level != null ? level.getSeed() : 0L;
     }
 
+    /** 维度 id 字符串（{@code namespace:path}；location/identifier 两版本封装）。 */
+    public static String dimensionId(ServerLevel level) {
+        if (level == null) {
+            return null;
+        }
+        return level.dimension()
+#if MC_VER < MC_1_21_11
+                .location()
+#else
+                .identifier()
+#endif
+                .toString();
+    }
+
+    /**
+     * 收集服务端当前全部维度 id（play_init 下发；客户端用本地 registry resolve
+     * LevelStem 装配自定义维度）。null 服务端返回空表。
+     */
+    public static java.util.List<String> collectDimensionIds(
+            net.minecraft.server.MinecraftServer server) {
+        if (server == null) {
+            return java.util.List.of();
+        }
+        java.util.LinkedHashSet<String> ids = new java.util.LinkedHashSet<>();
+        for (ServerLevel level : server.getAllLevels()) {
+            String id = dimensionId(level);
+            if (id != null && !id.isEmpty()) {
+                ids.add(id);
+                if (ids.size() >= io.github.limuqy.mc.hassium.network.handshake.LoginHandshake
+                        .PlayInitPayload.MAX_DIMENSION_IDS) {
+                    break;
+                }
+            }
+        }
+        return java.util.List.copyOf(ids);
+    }
+
     /**
      * 追加 SeedGen 尾部（服务端调用；enabled = 服务端配置开关）。
      * enabled=false 时写 seed=0 且不附 LevelStem，避免关本地生成仍把种子发给客户端。

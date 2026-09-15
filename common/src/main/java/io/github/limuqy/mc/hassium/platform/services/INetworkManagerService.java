@@ -61,9 +61,11 @@ public interface INetworkManagerService {
      * @param worldSeed      主世界种子；seedGenEnabled=false 时为 0
      * @param stemNbt        LevelStem NBT（可空）
      * @param seedGenEnabled 服务端 SeedGen 开关
+     * @param dimensionIds   服务端维度 id 列表（客户端本地 resolve LevelStem 装配自定义维度）
      */
     default void sendPlayInit(ServerPlayer player, int negotiatedCaps, long worldSeed,
-                              byte[] stemNbt, boolean seedGenEnabled) {
+                              byte[] stemNbt, boolean seedGenEnabled,
+                              java.util.List<String> dimensionIds) {
     }
 
     /**

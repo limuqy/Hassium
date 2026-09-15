@@ -159,15 +159,27 @@ public final class SeedGenLevelCompat {
             access = storage.validateAndCreateAccess("world");
             long tAccessNs = System.nanoTime();
 #if MC_VER < MC_1_21_1
-            repo = new PackRepository(new ServerPacksSource());
+            repo = new PackRepository(io.github.limuqy.mc.hassium.platform.Services.PLATFORM
+                    .serverPackSources(new ServerPacksSource()));
 #else
-            repo = new PackRepository(new ServerPacksSource(
-                    new DirectoryValidator(ignored -> false)));
+            repo = new PackRepository(io.github.limuqy.mc.hassium.platform.Services.PLATFORM
+                    .serverPackSources(new ServerPacksSource(
+                            new DirectoryValidator(ignored -> false))));
 #endif
+            // 挂上加载器 mod 数据包（NeoForge ResourcePackLoader 等）：自定义维度
+            // LevelStem 在 mod jar 的 data/<ns>/dimension/*.json，不挂则 LEVEL_STEM 查不到。
+            try {
+                io.github.limuqy.mc.hassium.platform.Services.PLATFORM
+                        .contributeServerDataPacks(repo);
+            } catch (Throwable t) {
+                Constants.LOG.debug("Hassium: contributeServerDataPacks skipped", t);
+            }
             repo.reload();
             long tRepoNs = System.nanoTime();
 
             List<String> packIds = new ArrayList<>(repo.getAvailableIds());
+            Constants.LOG.info("Hassium: Shadow packs available={} selected will enable all available",
+                    packIds);
             WorldDataConfiguration dataConfig = new WorldDataConfiguration(
                     new DataPackConfig(packIds, List.of()), FeatureFlags.REGISTRY.allFlags());
             LevelSettings settings = new LevelSettings("HassiumSeedGen", GameType.CREATIVE, false,
@@ -188,38 +200,28 @@ public final class SeedGenLevelCompat {
 #endif
 
             WorldOptions worldOptions = new WorldOptions(seed, true, false);
-            stem = Util.<WorldStem>blockUntilDone(
-                            executor -> WorldLoader.load(
-                                    initConfig,
-                                    dataLoadContext -> {
-                                        Registry<LevelStem> stemRegistry =
-                                                new MappedRegistry<>(Registries.LEVEL_STEM, Lifecycle.stable()).freeze();
-                                        WorldDimensions.Complete complete = buildWorldDimensions(
-                                                dataLoadContext, stemRegistry);
-                                        PrimaryLevelData worldData = new PrimaryLevelData(
-                                                settings, worldOptions, complete.specialWorldProperty(), complete.lifecycle());
-                                        worldData.setInitialized(true);
-                                        return new WorldLoader.DataLoadOutput<>(
-                                                worldData, complete.dimensionsRegistryAccess());
-                                    },
-                                    WorldStem::new,
-                                    Util.backgroundExecutor(),
-                                    executor)
-            )
-            .get(120, TimeUnit.SECONDS);
+            stem = loadWorldStemWithRetry(initConfig, settings, worldOptions, 2);
         long tStemNs = System.nanoTime();
         ShadowSeedServer server = ShadowSeedServer.create(
                 Thread.currentThread(), access, repo, stem, seed, worldRoot);
         server.initServer();
+        // 装配成功的维度进缓存白名单（三主维度 + 本地 resolve 的自定义维度）
+        for (net.minecraft.server.level.ServerLevel lvl : server.getAllLevels()) {
+            String dim = ShadowSeedServer.dimensionId(lvl);
+            if (dim != null) {
+                io.github.limuqy.mc.hassium.utils.DimensionKey.markCacheable(dim);
+            }
+        }
         DebugLogger.info(DebugLogger.LogType.ASYNC,
-                "[SHADOW-DIAG] assembleShadowServer: worldRoot={}ms storage+access={}ms packRepo={}ms worldStem(WorldLoader)={}ms initServer={}ms total={}ms (seed={})",
+                "[SHADOW-DIAG] assembleShadowServer: worldRoot={}ms storage+access={}ms packRepo={}ms worldStem(WorldLoader)={}ms initServer={}ms total={}ms (seed={}, dims={})",
                 (tResolveNs - t0Ns) / 1_000_000L,
                 (tAccessNs - tResolveNs) / 1_000_000L,
                 (tRepoNs - tAccessNs) / 1_000_000L,
                 (tStemNs - tRepoNs) / 1_000_000L,
                 (System.nanoTime() - tStemNs) / 1_000_000L,
                 (System.nanoTime() - t0Ns) / 1_000_000L,
-                seed);
+                seed,
+                server.storageDimensions());
         return server;
 
         } catch (Exception e) {
@@ -240,14 +242,21 @@ public final class SeedGenLevelCompat {
     }
 
     /**
-     * 装配世界维度：优先消费服务端握手下发的 LevelStem NBT（自定义 worldgen 服务器
-     * 本地生成与服务器一致——dimension type / generator settings 同源）；未下发或
-     * 解码失败（自定义 datapack 客户端缺失）回落原版 NORMAL preset（旧行为）。
-     * 残余地形不一致由 SeedGen 生成后 chunkHash 校验兜底（不匹配 → 回退全量）。
+     * 装配世界维度：优先消费服务端握手下发的主世界 LevelStem NBT；未下发或
+     * 解码失败回落 NORMAL preset，并**硬关 SeedGen**（仅缓存，避免缺生成器 mod 时
+     * 静默用错误地形本地生成）。三主维度之外，按 play_init 维度清单从客户端本地
+     * worldgen registry resolve LevelStem 装配自定义维度（TF/AoA 等客户端必装场景）。
+     * 残余地形不一致由 chunkHash 校验兜底（不匹配 → 回退全量）。
      */
     private static WorldDimensions.Complete buildWorldDimensions(
             WorldLoader.DataLoadContext dataLoadContext,
             Registry<LevelStem> stemRegistry) {
+        LevelStem overworldStem = resolveOverworldStem(dataLoadContext);
+        return threeDimensions(dataLoadContext, overworldStem).bake(stemRegistry);
+    }
+
+    /** 解析主世界 stem：服务端 NBT 优先；失败回落 NORMAL 并硬关 SeedGen。 */
+    private static LevelStem resolveOverworldStem(WorldLoader.DataLoadContext dataLoadContext) {
         byte[] stemNbt = io.github.limuqy.mc.hassium.network.ClientChunkPipeline
                 .getInstance().getServerLevelStemNbt();
         if (stemNbt != null && stemNbt.length > 0) {
@@ -267,17 +276,93 @@ public final class SeedGenLevelCompat {
                     if (decoded.isPresent()) {
                         Constants.LOG.info("Hassium: Shadow server consuming server LevelStem "
                                 + "(custom worldgen overworld + vanilla nether/end)");
-                        return threeDimensions(dataLoadContext, decoded.get()).bake(stemRegistry);
+                        return decoded.get();
                     }
                 }
+                disableSeedGenIfEnabled(
+                        "overworld LevelStem NBT present but decode empty (client missing generator mod?)");
             } catch (Throwable t) {
                 Constants.LOG.warn("Hassium: LevelStem decode failed, fallback to NORMAL preset", t);
+                disableSeedGenIfEnabled(
+                        "overworld LevelStem decode failed (client missing generator mod?)");
             }
         }
         WorldDimensions presetDims = normalPresetDimensions(dataLoadContext);
-        LevelStem overworld = presetDims.get(LevelStem.OVERWORLD)
+        return presetDims.get(LevelStem.OVERWORLD)
                 .orElseThrow(() -> new IllegalStateException("NORMAL preset missing overworld stem"));
-        return threeDimensions(dataLoadContext, overworld).bake(stemRegistry);
+    }
+
+    /**
+     * WorldLoader 装配（CME 重试）：挂上 mod 数据包后，AoA 等在
+     * {@code Blocks.rebuildCache} / tag 更新时偶发 ConcurrentModificationException。
+     * 重试仍走同一 pack 配置，不改变语义。与 SeedGen 正确性无关——缓存也走同一条装配链。
+     */
+    private static WorldStem loadWorldStemWithRetry(WorldLoader.InitConfig initConfig,
+                                                    LevelSettings settings,
+                                                    WorldOptions worldOptions,
+                                                    int retries) throws IOException {
+        Throwable last = null;
+        for (int attempt = 0; attempt <= retries; attempt++) {
+            try {
+                return Util.<WorldStem>blockUntilDone(
+                                executor -> WorldLoader.load(
+                                        initConfig,
+                                        dataLoadContext -> {
+                                            Registry<LevelStem> stemRegistry =
+                                                    new MappedRegistry<>(Registries.LEVEL_STEM, Lifecycle.stable()).freeze();
+                                            WorldDimensions.Complete complete = buildWorldDimensions(
+                                                    dataLoadContext, stemRegistry);
+                                            PrimaryLevelData worldData = new PrimaryLevelData(
+                                                    settings, worldOptions, complete.specialWorldProperty(), complete.lifecycle());
+                                            worldData.setInitialized(true);
+                                            return new WorldLoader.DataLoadOutput<>(
+                                                    worldData, complete.dimensionsRegistryAccess());
+                                        },
+                                        WorldStem::new,
+                                        Util.backgroundExecutor(),
+                                        executor)
+                        )
+                        .get(120, TimeUnit.SECONDS);
+            } catch (Exception e) {
+                last = e;
+                if (!isConcurrentModification(e) || attempt == retries) {
+                    break;
+                }
+                Constants.LOG.warn("Hassium: WorldLoader ConcurrentModification (attempt {}/{}), retrying",
+                        attempt + 1, retries + 1);
+                try {
+                    Thread.sleep(250L);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                    throw new IOException("Interrupted while retrying WorldLoader", ie);
+                }
+            }
+        }
+        if (last instanceof IOException ioe) {
+            throw ioe;
+        }
+        throw new IOException("WorldLoader failed", last);
+    }
+
+    private static boolean isConcurrentModification(Throwable t) {
+        for (Throwable c = t; c != null; c = c.getCause()) {
+            if (c instanceof java.util.ConcurrentModificationException) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /** SeedGen 已协商开启时硬关（仍可缓存）；未开启则无事。 */
+    private static void disableSeedGenIfEnabled(String reason) {
+        try {
+            io.github.limuqy.mc.hassium.network.ClientChunkPipeline pipeline =
+                    io.github.limuqy.mc.hassium.network.ClientChunkPipeline.getInstance();
+            if (pipeline.isServerSeedGenEnabled() && !pipeline.isSeedGenHardDisabled()) {
+                pipeline.disableSeedGen(reason);
+            }
+        } catch (Throwable ignored) {
+        }
     }
 
     /** NORMAL preset 的 WorldDimensions（两版本 registry/lookup 形态差异封装）。 */
@@ -295,13 +380,12 @@ public final class SeedGenLevelCompat {
     }
 
     /**
-     * 装配三维度（overworld/nether/end）：overworld stem 由调用方给定（服务端握手
-     * 下发的自定义 worldgen stem 或 NORMAL preset 主世界 stem），nether/end 取
-     * NORMAL preset 原版 stem——下界/末地无天光（dimensionType.hasSkyLight=false），
-     * 光照管线按 hasSkyLight 分支，无需额外适配。
+     * 装配维度：三主维度 + play_init 清单中本地可 resolve 的自定义维度。
+     * overworld stem 由调用方给定；nether/end 取 NORMAL preset。
+     * 自定义维度：客户端本地 worldgen registry lookup LevelStem（新增维度 mod
+     * 客户端必装）；lookup 失败则跳过（该维继续原版透传）。
      * <p>
-     * createLevels 按维度 registry 建 level（overworld + registry 其余维度各一个
-     * ServerLevel），generateChunk/injectChunk/bloom/落盘全部按
+     * createLevels 按维度 registry 建 level；generateChunk/inject/bloom/落盘全部按
      * {@code ShadowSeedServer.level(dimension)} 路由到对应 level。
      */
     private static WorldDimensions threeDimensions(
@@ -312,19 +396,109 @@ public final class SeedGenLevelCompat {
                 .orElseThrow(() -> new IllegalStateException("NORMAL preset missing nether stem"));
         LevelStem endStem = presetDims.get(LevelStem.END)
                 .orElseThrow(() -> new IllegalStateException("NORMAL preset missing end stem"));
+        java.util.LinkedHashMap<ResourceKey<LevelStem>, LevelStem> extra =
+                resolveCustomDimensionStems(dataLoadContext);
 #if MC_VER < MC_1_21_1
         MappedRegistry<LevelStem> dims = new MappedRegistry<>(Registries.LEVEL_STEM, Lifecycle.stable());
         dims.register(LevelStem.OVERWORLD, overworldStem, Lifecycle.stable());
         dims.register(LevelStem.NETHER, netherStem, Lifecycle.stable());
         dims.register(LevelStem.END, endStem, Lifecycle.stable());
+        for (java.util.Map.Entry<ResourceKey<LevelStem>, LevelStem> e : extra.entrySet()) {
+            dims.register(e.getKey(), e.getValue(), Lifecycle.stable());
+        }
         return new WorldDimensions(dims.freeze());
 #else
         java.util.Map<ResourceKey<LevelStem>, LevelStem> stems = new java.util.LinkedHashMap<>();
         stems.put(LevelStem.OVERWORLD, overworldStem);
         stems.put(LevelStem.NETHER, netherStem);
         stems.put(LevelStem.END, endStem);
+        stems.putAll(extra);
         return new WorldDimensions(java.util.Map.copyOf(stems));
 #endif
+    }
+
+    /**
+     * 按 play_init 维度清单从本地 worldgen registry resolve 自定义维度 LevelStem。
+     * 三主维度跳过（已在 threeDimensions 装配）；lookup 失败仅记日志不装配。
+     */
+    private static java.util.LinkedHashMap<ResourceKey<LevelStem>, LevelStem>
+            resolveCustomDimensionStems(WorldLoader.DataLoadContext dataLoadContext) {
+        java.util.LinkedHashMap<ResourceKey<LevelStem>, LevelStem> extra = new java.util.LinkedHashMap<>();
+        java.util.List<String> serverDims;
+        try {
+            serverDims = io.github.limuqy.mc.hassium.network.ClientChunkPipeline
+                    .getInstance().getServerDimensionIds();
+        } catch (Throwable t) {
+            return extra;
+        }
+        if (serverDims == null || serverDims.isEmpty()) {
+            return extra;
+        }
+        Registry<LevelStem> localStems;
+        try {
+            // LEVEL_STEM 在 datapackDimensions 层（非 datapackWorldgen）——1.20.1–1.21.11 同构。
+#if MC_VER < MC_1_21_2
+            localStems = dataLoadContext.datapackDimensions().registryOrThrow(Registries.LEVEL_STEM);
+#else
+            localStems = (Registry<LevelStem>) dataLoadContext.datapackDimensions()
+                    .lookupOrThrow(Registries.LEVEL_STEM);
+#endif
+        } catch (Throwable t) {
+            Constants.LOG.warn("Hassium: Local LEVEL_STEM registry unavailable; skip custom dims", t);
+            return extra;
+        }
+        for (String dimId : serverDims) {
+            if (dimId == null || dimId.isEmpty()
+                    || io.github.limuqy.mc.hassium.utils.DimensionKey.OVERWORLD.equals(dimId)
+                    || io.github.limuqy.mc.hassium.utils.DimensionKey.NETHER.equals(dimId)
+                    || io.github.limuqy.mc.hassium.utils.DimensionKey.END.equals(dimId)) {
+                continue;
+            }
+            LevelStem stem = lookupLocalStem(localStems, dimId);
+            if (stem != null) {
+                ResourceKey<LevelStem> key = ResourceKey.create(Registries.LEVEL_STEM,
+                        io.github.limuqy.mc.hassium.compat.ResourceLocationCompat.create(dimId));
+                extra.put(key, stem);
+                Constants.LOG.info("Hassium: Assembling custom dimension {} into shadow server", dimId);
+            } else {
+                // 诊断：列出本地 LEVEL_STEM 键，便于判断是路径/命名空间还是 codec 问题
+                StringBuilder keys = new StringBuilder();
+                int n = 0;
+                try {
+                    for (var e : localStems.entrySet()) {
+                        if (n++ >= 32) {
+                            keys.append(",...");
+                            break;
+                        }
+                        if (keys.length() > 0) {
+                            keys.append(", ");
+                        }
+                        keys.append(e.getKey().location());
+                    }
+                } catch (Throwable ignored) {
+                }
+                Constants.LOG.info("Hassium: Custom dimension {} not in local registry (client missing mod?); "
+                        + "pass-through only. localLevelStems=[{}]", dimId, keys);
+            }
+        }
+        return extra;
+    }
+
+    /** 本地 LEVEL_STEM registry 取值（两版本 Optional/裸值形态；未命中返回 null）。 */
+    private static LevelStem lookupLocalStem(Registry<LevelStem> localStems, String dimId) {
+        try {
+            ResourceKey<LevelStem> key = ResourceKey.create(Registries.LEVEL_STEM,
+                    io.github.limuqy.mc.hassium.compat.ResourceLocationCompat.create(dimId));
+#if MC_VER < MC_1_21_2
+            return localStems.get(key);
+#else
+            return localStems.get(key)
+                    .map(net.minecraft.core.Holder.Reference::value)
+                    .orElse(null);
+#endif
+        } catch (Throwable t) {
+            return null;
+        }
     }
 
     /**

@@ -1,0 +1,24 @@
+# eternal_starlight 场景：自定义维度缓存冒烟（NeoForge）。
+# 维度 id：eternal_starlight:starlight。
+# 不强制 contentCheck 非空：ES 传送后可能落在 void 层（foot=void_air、3×3 采样为空属合法）。
+# 死锁回归点：dimensionOfCache 必须覆盖自定义维，否则 NeoForge 流体邻柱 getChunk 自锁（es3）。
+join label=WAIT_JOIN_1 since=start timeoutMs=${joinTimeoutMs}
+wait ms=${round1WaitMs}
+dimension to=eternal_starlight:starlight
+wait ms=45000
+dump label=ES_R1 round=1
+assertProbe label=E1_JOINED key=joined op=eq value=true
+assertProbe label=E1_DIM key=dimension op=eq value=eternal_starlight:starlight
+assertProbe label=E1_APPLIED key=stats.clientAppliedChunkCount op=gt value=16
+assertProbe label=E1_LOADED key=clientCache.loadedChunks op=gt value=16
+disconnect
+reconnect delayMs=${reconnectDelayMs}
+join label=WAIT_JOIN_2 since=disconnect timeoutMs=${joinTimeoutMs}
+wait ms=${round2WaitMs}
+dimension to=eternal_starlight:starlight
+wait ms=25000
+dump label=ES_R2 round=2 gate=false
+assertProbe label=E2_JOINED key=joined op=eq value=true
+assertProbe label=E2_DIM key=dimension op=eq value=eternal_starlight:starlight
+assertProbe label=E2_APPLIED key=stats.clientAppliedChunkCount op=gt value=16
+exit rounds=1

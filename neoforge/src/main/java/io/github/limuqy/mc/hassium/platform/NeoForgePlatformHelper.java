@@ -46,4 +46,32 @@ public class NeoForgePlatformHelper implements IPlatformHelper {
         return FMLLoader.getCurrent().getDist().isClient();
 #endif
     }
+
+    /**
+     * 把 NeoForge mod 数据包挂进影子 PackRepository（与原版 Server 同源逻辑：
+     * {@code ResourcePackLoader.populatePackRepository}）。
+     */
+    @Override
+    public void contributeServerDataPacks(
+            net.minecraft.server.packs.repository.PackRepository repository) {
+        try {
+            net.neoforged.neoforge.resource.ResourcePackLoader.populatePackRepository(
+                    repository, net.minecraft.server.packs.PackType.SERVER_DATA, true);
+        } catch (Throwable t) {
+            // 加载器未就绪 / 单测环境：影子仍可装配三主维度
+        }
+    }
+
+    /**
+     * 影子 stub 连接按「已协商全部 payload」配置（NeoForge GameTest 同款）。
+     * 否则 placeNewPlayer 期间 TF/AoA 等发包会 checkPacket 抛 UOE。
+     */
+    @Override
+    public void prepareShadowStubConnection(net.minecraft.network.Connection connection) {
+        try {
+            net.neoforged.neoforge.network.registration.NetworkRegistry
+                    .configureMockConnection(connection);
+        } catch (Throwable ignored) {
+        }
+    }
 }

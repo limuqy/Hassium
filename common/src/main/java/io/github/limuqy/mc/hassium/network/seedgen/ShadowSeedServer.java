@@ -1130,6 +1130,10 @@ public class ShadowSeedServer extends MinecraftServer {
      * 影子上下文：ChunkCache 实例 → 维度 id。未装配/未匹配返回 null（调用方保持现状不拦截）。
      * 首次解析后缓存；解析只依赖 {@link #level(String)}（装配后只读）与
      * {@code ServerLevel.getChunkSource()}（final 字段读），跨线程安全。
+     * <p>
+     * 必须覆盖全部已装配维度：此前只扫三维，自定义维（AoA/ES 等）返回 null →
+     * MixinServerChunkCache 防死锁桥不生效 → setBlockState→NeoForge 流体邻柱
+     * getChunk managedBlock 自锁（es3 hang 实证）。
      */
     public String dimensionOfCache(ServerChunkCache cache) {
         if (cache == null) {
@@ -1139,7 +1143,12 @@ public class ShadowSeedServer extends MinecraftServer {
         if (known != null) {
             return known;
         }
-        for (String dim : new String[] { DimensionKey.OVERWORLD, DimensionKey.NETHER, DimensionKey.END }) {
+        java.util.Set<String> dims = storageDimensions();
+        if (dims.isEmpty()) {
+            dims = java.util.Set.of(
+                    DimensionKey.OVERWORLD, DimensionKey.NETHER, DimensionKey.END);
+        }
+        for (String dim : dims) {
             ServerLevel lvl = level(dim);
             if (lvl != null && lvl.getChunkSource() == cache) {
                 cacheDimensions.put(cache, dim);
@@ -1156,6 +1165,12 @@ public class ShadowSeedServer extends MinecraftServer {
     public io.github.limuqy.mc.hassium.storage.ShadowStorageManager storage(String dimension) {
         java.util.concurrent.ConcurrentHashMap<String, io.github.limuqy.mc.hassium.storage.ShadowStorageManager> map = storages;
         return map == null ? null : map.get(dimension);
+    }
+
+    /** 已装配维度 id 集合（淘汰扫描等动态消费；未初始化返回空集）。 */
+    public java.util.Set<String> storageDimensions() {
+        java.util.concurrent.ConcurrentHashMap<String, io.github.limuqy.mc.hassium.storage.ShadowStorageManager> map = storages;
+        return map == null ? java.util.Set.of() : java.util.Collections.unmodifiableSet(map.keySet());
     }
 
     /**

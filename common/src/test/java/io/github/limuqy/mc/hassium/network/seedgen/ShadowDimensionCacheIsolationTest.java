@@ -75,4 +75,20 @@ class ShadowDimensionCacheIsolationTest {
         assertEquals(0, ShadowCacheEviction.accessCountOf(DimensionKey.NETHER, pos));
         assertEquals(1, ShadowCacheEviction.accessCountOf(DimensionKey.OVERWORLD, pos));
     }
+
+    @Test
+    @DisplayName("维度清单重建判定：仅当出现未装配的自定义维才重建")
+    void shouldRebuildForDimensions_onlyWhenCustomMissing() {
+        var three = java.util.Set.of(
+                DimensionKey.OVERWORLD, DimensionKey.NETHER, DimensionKey.END);
+        assertFalse(ShadowServerRegistry.shouldRebuildForDimensions(
+                java.util.List.of(DimensionKey.OVERWORLD, DimensionKey.NETHER), three));
+        assertFalse(ShadowServerRegistry.shouldRebuildForDimensions(java.util.List.of(), three));
+        assertFalse(ShadowServerRegistry.shouldRebuildForDimensions(null, three));
+        assertTrue(ShadowServerRegistry.shouldRebuildForDimensions(
+                java.util.List.of(DimensionKey.OVERWORLD, "aoa3:abyss"), three));
+        assertFalse(ShadowServerRegistry.shouldRebuildForDimensions(
+                java.util.List.of("aoa3:abyss"),
+                java.util.Set.of(DimensionKey.OVERWORLD, "aoa3:abyss")));
+    }
 }

@@ -35,11 +35,6 @@ import net.minecraft.world.level.ChunkPos;
  */
 public final class ShadowCacheEviction {
 
-    private static final String[] DIMENSIONS = {
-            DimensionKey.OVERWORLD,
-            DimensionKey.NETHER,
-            DimensionKey.END
-    };
     private static final AtomicBoolean cleanupRunning = new AtomicBoolean(false);
     private static int tickCounter = 0;
 
@@ -170,7 +165,12 @@ public final class ShadowCacheEviction {
     private static long scanRegionFiles(ShadowSeedServer server,
                                         List<ShadowRegionHeat.RegionFileStat> out) {
         long total = 0L;
-        for (String dimension : DIMENSIONS) {
+        // 动态维度：影子端已装配的全部维度（含本地 resolve 的自定义维度）
+        java.util.Collection<String> dimensions = server.storageDimensions();
+        if (dimensions.isEmpty()) {
+            dimensions = DimensionKey.cacheableDimensions();
+        }
+        for (String dimension : dimensions) {
             Set<Long> live = liveRegionKeys(server, dimension);
             total += ShadowRegionHeat.collectRegionFiles(
                     server.regionDir(dimension), dimension, live, out);

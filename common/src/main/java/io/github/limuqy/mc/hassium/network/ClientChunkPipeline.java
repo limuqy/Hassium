@@ -4,6 +4,7 @@ import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.utils.DimensionKey;
 
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -45,6 +46,10 @@ public final class ClientChunkPipeline {
     private volatile byte[] serverLevelStemNbt = null;
     private volatile boolean serverSeedGenEnabled = false;
     private volatile boolean serverSeedAvailable = false;
+    /** 服务端维度 id 清单（play_init 下发；客户端本地 resolve LevelStem 装配）。 */
+    private volatile List<String> serverDimensionIds = List.of();
+    /** 主世界 LevelStem 解码失败等硬关 SeedGen（仅缓存；不本地生成）。 */
+    private volatile boolean seedGenHardDisabled = false;
     // === 影子端状态（非网络向功能总开关） ===
     /** 服务端已装 Hassium MOD（能力握手响应到达；setServerSeedInfo 调用点 = 三加载器握手解码）。 */
     private volatile boolean hassiumHandshakeDone = false;
@@ -122,19 +127,33 @@ public final class ClientChunkPipeline {
         serverLevelStemNbt = null;
         serverSeedGenEnabled = false;
         serverSeedAvailable = false; // review-fix: 断连重置漏清脏标志，防先连 Hassium+SeedGen 服再连非 SeedGen 服时消费方读到旧值（review §2.1）
+        serverDimensionIds = List.of();
+        seedGenHardDisabled = false;
         hassiumHandshakeDone = false;
         shadowServerReady = false;
         shadowServerFailed = false;
+        DimensionKey.resetCacheable();
     }
 
     /**
      * 握手 S2C 下发 SeedGen 信息后调用（客户端）。
      */
     public void setServerSeedInfo(long seed, byte[] levelStemNbt, boolean enabled) {
+        setServerSeedInfo(seed, levelStemNbt, enabled, List.of());
+    }
+
+    /**
+     * 握手 S2C 下发 SeedGen 信息 + 服务端维度清单后调用（客户端）。
+     * 维度清单用于影子端装配：客户端本地 registry 能 resolve 的自定义维度进缓存/SeedGen。
+     */
+    public void setServerSeedInfo(long seed, byte[] levelStemNbt, boolean enabled,
+                                  List<String> dimensionIds) {
         this.serverSeed = seed;
         this.serverLevelStemNbt = levelStemNbt;
         this.serverSeedGenEnabled = enabled;
         this.serverSeedAvailable = enabled && levelStemNbt != null && levelStemNbt.length > 0;
+        this.serverDimensionIds = dimensionIds != null ? List.copyOf(dimensionIds) : List.of();
+        this.seedGenHardDisabled = false;
         this.hassiumHandshakeDone = true; // 握手响应到达 = 服务端已装 Hassium MOD
         if (enabled && !this.serverSeedAvailable) {
             Constants.LOG.warn("Hassium: SeedGen enabled but LevelStem missing; local worldgen gated off");
@@ -149,6 +168,22 @@ public final class ClientChunkPipeline {
             // 永不重进 seed 等待，必须在此主动判定）。
             io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry.getInstance()
                     .onServerSeedArrived(seed);
+            // 维度清单到达：投机影子常早于 play_init（seedGen 关时 seed=0 不触发 seed 重建），
+            // 自定义维未装配则关停重建，使缓存/SeedGen 覆盖 TF/AoA 等维度。
+            io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry.getInstance()
+                    .onServerDimensionIdsArrived(this.serverDimensionIds);
+        } catch (Throwable ignored) {
+        }
+        // 握手完成后按当前影子 storage 再刷一次 cacheable（覆盖 park 复用、
+        // 或本方法内刚完成的重建——resetStorage 已把集合复位为三维）。
+        try {
+            var shadow = io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry
+                    .getInstance().get();
+            if (shadow != null) {
+                for (String dim : shadow.storageDimensions()) {
+                    DimensionKey.markCacheable(dim);
+                }
+            }
         } catch (Throwable ignored) {
         }
         if (enabled) {
@@ -216,7 +251,26 @@ public final class ClientChunkPipeline {
         return serverSeedGenEnabled;
     }
     public boolean isServerSeedAvailable() {
-        return serverSeedAvailable;
+        return serverSeedAvailable && !seedGenHardDisabled;
+    }
+
+    /** 服务端维度 id 清单（play_init 下发；未握手为空表）。 */
+    public List<String> getServerDimensionIds() {
+        return serverDimensionIds;
+    }
+
+    /**
+     * 硬关 SeedGen（仍可缓存）：主世界 LevelStem 解码失败等场景，
+     * 避免客户端缺生成器 mod 时静默用错误 preset 本地生成。
+     */
+    public void disableSeedGen(String reason) {
+        this.seedGenHardDisabled = true;
+        this.serverSeedAvailable = false;
+        Constants.LOG.warn("Hassium: SeedGen disabled (cache-only): {}", reason);
+    }
+
+    public boolean isSeedGenHardDisabled() {
+        return seedGenHardDisabled;
     }
 
     /**

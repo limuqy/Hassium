@@ -45,6 +45,13 @@ public final class ShadowPlayerCompat {
         accessor.hassium$setShadowChannel(embedded);
         accessor.hassium$setShadowAddress(
                 new InetSocketAddress(java.net.InetAddress.getLoopbackAddress(), 0));
+        // NeoForge：stub 需「已协商全部 payload」，否则 placeNewPlayer 期间
+        // TF sync_quests / AoA player_data_sync 等 checkPacket 抛 UOE → tracking 失败。
+        try {
+            io.github.limuqy.mc.hassium.platform.Services.PLATFORM
+                    .prepareShadowStubConnection(connection);
+        } catch (Throwable ignored) {
+        }
         return connection;
     }
 

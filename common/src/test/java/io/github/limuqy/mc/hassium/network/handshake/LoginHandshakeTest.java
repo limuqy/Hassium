@@ -40,6 +40,36 @@ class LoginHandshakeTest {
         assertEquals(original.worldSeed(), decoded.worldSeed());
         assertTrue(java.util.Arrays.equals(stem, decoded.stemNbt()));
         assertTrue(decoded.seedGenEnabled());
+        assertTrue(decoded.dimensionIds().isEmpty());
+    }
+
+    @Test
+    void playInitPayloadRoundTripsWithDimensionIds() {
+        byte[] stem = "stem".getBytes(StandardCharsets.UTF_8);
+        var dims = java.util.List.of(
+                "minecraft:overworld", "twilightforest:twilight_forest", "aoa3:abyss");
+        LoginHandshake.PlayInitPayload original =
+                new LoginHandshake.PlayInitPayload(0b111, 99L, stem, true, dims);
+        LoginHandshake.PlayInitPayload decoded = encodeDecode(original);
+        assertEquals(dims, decoded.dimensionIds());
+        assertTrue(decoded.seedGenEnabled());
+    }
+
+    @Test
+    void playInitPayloadDecodeToleratesMissingDimensionList() {
+        // 旧服务端不带维度清单段（append-only）：缺失按空表处理
+        FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+        try {
+            buf.writeVarInt(0b1);
+            buf.writeLong(7L);
+            buf.writeVarInt(0);
+            buf.writeBoolean(true);
+            LoginHandshake.PlayInitPayload decoded = LoginHandshake.PlayInitPayload.decode(buf);
+            assertTrue(decoded.seedGenEnabled());
+            assertTrue(decoded.dimensionIds().isEmpty());
+        } finally {
+            buf.release();
+        }
     }
 
     @Test

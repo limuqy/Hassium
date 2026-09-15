@@ -237,6 +237,30 @@ public final class ShadowServerRegistry {
         return clientSeedGenEnabled && arrivedSeed != 0L && assembledSeed != arrivedSeed;
     }
 
+    /**
+     * 重建判定：握手维度清单含本地可装配的自定义维，而当前影子实例尚未装配该维
+     * （投机创建早于 play_init，seedGen 关闭时 seed 恒 0 不会走 seed 重建）。
+     */
+    static boolean shouldRebuildForDimensions(
+            java.util.Collection<String> arrivedIds,
+            java.util.Collection<String> assembledDims) {
+        if (arrivedIds == null || arrivedIds.isEmpty() || assembledDims == null) {
+            return false;
+        }
+        for (String id : arrivedIds) {
+            if (id == null || id.isEmpty()
+                    || io.github.limuqy.mc.hassium.utils.DimensionKey.OVERWORLD.equals(id)
+                    || io.github.limuqy.mc.hassium.utils.DimensionKey.NETHER.equals(id)
+                    || io.github.limuqy.mc.hassium.utils.DimensionKey.END.equals(id)) {
+                continue;
+            }
+            if (!assembledDims.contains(id)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** 重建重试上界：创建进行中最多等 ~4s（20 × 200ms），超时放弃本会话重建。 */
     static final int SEED_REBUILD_MAX_RETRIES = 20;
     static final long SEED_REBUILD_RETRY_MS = 200L;
@@ -257,6 +281,32 @@ public final class ShadowServerRegistry {
         if (!shouldRebuildForSeed(assembledSeed, arrivedSeed, enabled)) {
             return;
         }
+        scheduleRebuild("real seed " + arrivedSeed + " (assembled seed=" + assembledSeed + ")",
+                () -> shouldRebuildForSeed(assembledSeed, arrivedSeed, enabled));
+    }
+
+    /**
+     * 握手维度清单到达（{@code ClientChunkPipeline.setServerSeedInfo} 调用）：
+     * 投机影子常早于 play_init 装配（seedGen 关闭时 seed 恒 0，不走 seed 重建），
+     * 自定义维度未进 WorldDimensions → 该维只能原版透传。清单含未装配自定义维时
+     * 关停重建，使缓存/SeedGen 能覆盖 TF/AoA 等维度。
+     */
+    public void onServerDimensionIdsArrived(java.util.List<String> dimensionIds) {
+        ShadowSeedServer current = server;
+        if (current == null || !shouldRebuildForDimensions(dimensionIds, current.storageDimensions())) {
+            return;
+        }
+        java.util.Set<String> assembled = current.storageDimensions();
+        Constants.LOG.info("Hassium: Shadow rebuild for custom dimensions (assembled={}, arrived={})",
+                assembled, dimensionIds);
+        scheduleRebuild("custom dimensions " + dimensionIds,
+                () -> {
+                    ShadowSeedServer s = server;
+                    return s != null && shouldRebuildForDimensions(dimensionIds, s.storageDimensions());
+                });
+    }
+
+    private void scheduleRebuild(String reason, java.util.function.BooleanSupplier stillNeeded) {
         Runnable rebuild = () -> {
             for (int i = 0; i < SEED_REBUILD_MAX_RETRIES; i++) {
                 if (!creating) {
@@ -269,11 +319,10 @@ public final class ShadowServerRegistry {
                     return;
                 }
             }
-            if (creating || !shouldRebuildForSeed(assembledSeed, arrivedSeed, enabled)) {
+            if (creating || !stillNeeded.getAsBoolean()) {
                 return; // 创建中超时放弃 / 已被其他线程重建
             }
-            Constants.LOG.info("Hassium: Shadow rebuild for real seed {} (assembled seed={})",
-                    arrivedSeed, assembledSeed);
+            Constants.LOG.info("Hassium: Shadow rebuild for {}", reason);
             shutdown();
             getOrCreate();
         };
@@ -313,6 +362,11 @@ public final class ShadowServerRegistry {
             // 会话级降级随重进清除：R1 单柱失败/误置 failed 会让 R2 OVD publish 恒 false
             // （test1 实证 ovdLoaded=0），park 复用不得继承上一会话的 failed。
             ClientChunkPipeline.getInstance().setShadowServerFailed(false);
+            // resetStorage 会 resetCacheable()；park 实例仍持有自定义维 storage，
+            // 必须重新 markCacheable，否则 R2 该维退回原版透传、缓存全 miss。
+            for (String dim : s.storageDimensions()) {
+                io.github.limuqy.mc.hassium.utils.DimensionKey.markCacheable(dim);
+            }
             ShadowLightCompute.onShadowServerReady();
             DebugLogger.info(DebugLogger.LogType.ASYNC,
                     "[SHADOW] Reusing parked shadow server (serverId={})", boundServerId);
