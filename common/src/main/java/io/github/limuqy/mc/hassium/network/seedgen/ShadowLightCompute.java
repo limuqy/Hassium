@@ -145,10 +145,14 @@ public final class ShadowLightCompute {
     private static final int EDGE_S = 8;
     /**
      * 算光提交瞬间四邻缺失位图（复合键 → 方向位）。影子端 lightChunk 不等 9 柱，
-     * 缺邻按基岩挡光会形成屋檐/空穴稳定残差；邻到后仅对置位方向做接缝 SKY 补光。
-     * 邻到自愈或接缝预读无差时清位；断连/取消清空。
+     * 缺邻按基岩挡光会形成屋檐/空穴稳定残差。邻到后对暗侧接缝格
+     * {@code checkBlock} 走原版 decrease→increase 拉光（{@link #requeueSeamPull}），
+     * <b>不清层、不整柱重算</b>——清层重算只播本源，会毁掉邻柱已灌入的光。
+     * 邻到自愈后清位；断连/取消清空。
      */
     private static final ConcurrentHashMap<Long, Integer> edgeMissingBits = new ConcurrentHashMap<>();
+    /** 单次接缝再灌 checkBlock 上限（一整面 256 格；多 section 取 2 面防风暴）。 */
+    private static final int SEAM_PULL_MAX_CELLS = 512;
 
     /**
      * 单 chunk 光照更新掩码：绝对 sectionY 收集。用 TreeSet 而非 BitSet——绝对
@@ -2028,7 +2032,7 @@ public final class ShadowLightCompute {
      * 算光提交瞬间记录四邻「不可用」方向。不可用 = 未注入，或已注入但
      * {@code !isLightCorrect}（有方块无 DataLayer 时 getChunkForLighting 读到空层，
      * 等价基岩挡光——只判 null 会漏掉「邻柱已到、光未算完」的常见竞态）。
-     * LIGHT_ONLY 也会覆盖写：邻到并算完后重算能清掉已到位方向。
+     * 邻到后由接缝再灌（{@link #requeueSeamPull}）消费；不走清层重算。
      */
     private static void recordEdgeMissingAtLightStart(ShadowSeedServer server, String dimension,
                                                       long key) {
@@ -2084,9 +2088,9 @@ public final class ShadowLightCompute {
     }
 
     /**
-     * 本柱（B）光完成：对「算光时缺本邻」的已注入邻柱（A）做接缝 SKY 补光。
-     * 仅当接缝面存在 B&gt;A 的光差时提交 LIGHT_ONLY；预读相等则清位跳过
-     * （邻柱 lightChunk 可能已把光灌回来，不再重复算）。
+     * 本柱（B）光完成：对「算光时缺本邻」的已注入且已亮邻柱（A）做接缝再灌。
+     * 对 A 暗侧格 {@code checkBlock}，由原版 decrease→increase 把 B 面光拉进 A；
+     * 不清层、不整柱重算（对齐 vanilla「后到邻柱 lightChunk 双向传播」）。
      */
     private static void tryRelightNeighborSeams(ShadowSeedServer server, String dimension,
                                                 ChunkPos bPos) {
@@ -2122,33 +2126,27 @@ public final class ShadowLightCompute {
             edgeMissingBits.remove(aKey);
             return;
         }
-        LevelLightEngine engine = level.getLightEngine();
-        BitSet skyMask = seamSkyMismatchMask(engine, bPos, aPos, axis, aFace, bFace);
-        boolean probeTarget = ShadowLightProbe.isProbeTarget(aPos);
-        if (skyMask.isEmpty()) {
-            clearEdgeMissingBit(aKey, aMissingBit);
-            if (probeTarget) {
-                ShadowLightProbe.onSeamRelight(aPos, bPos, aMissingBit, false, null);
-            }
+        // A 尚在算光：保留方向位，由 A 的 finishLight → trySelfSeamHeal 消费。
+        if (!aChunk.isLightCorrect()) {
             return;
         }
-        LightWork work = new LightWork(skyMask, new BitSet(), new BitSet(), new BitSet());
-        pendingLightUpdates.merge(aKey, work, LightWork::merged);
+        boolean probeTarget = ShadowLightProbe.isProbeTarget(aPos);
+        int pulled = requeueSeamPull(server, level, aPos, bPos, axis, aFace, bFace);
         clearEdgeMissingBit(aKey, aMissingBit);
         if (probeTarget) {
-            ShadowLightProbe.onSeamRelight(aPos, bPos, aMissingBit, true, skyMask);
+            ShadowLightProbe.onSeamRelight(aPos, bPos, aMissingBit, pulled > 0, null);
         }
-        DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
-                "[SHADOW_SEAM] Relight ({}, {}) from ({}, {}) missingBit={} mask={}",
-                aPos.x, aPos.z, bPos.x, bPos.z, aMissingBit, skyMask);
-        pump();
+        if (pulled > 0) {
+            DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+                    "[SHADOW_SEAM] Pull ({}, {}) from ({}, {}) missingBit={} cells={}",
+                    aPos.x, aPos.z, bPos.x, bPos.z, aMissingBit, pulled);
+        }
     }
 
     /**
-     * 本柱（A）光完成且提交时曾缺邻：对「已 lightCorrect」的四邻做接缝预读。
-     * 邻柱面 &gt; 本柱面则并一次 LIGHT_ONLY。方向位由 collectSelfSeamMismatch 内
-     * clearEdgeMissingBit 精确清除（检查过且无差/已提交补光）；「邻柱尚未注入」
-     * 的方向位保留在 edgeMissingBits，等邻柱算光完成后由 trySeamRelight 消费。
+     * 本柱（A）光完成且提交时曾缺邻：对「已 lightCorrect」的邻柱做接缝再灌。
+     * 方向位由 requeue 后 clearEdgeMissingBit 精确清除；「邻柱尚未注入/未亮」
+     * 的方向位保留，等邻柱算光完成后由 trySeamRelight 消费。
      */
     private static void trySelfSeamHeal(ShadowSeedServer server, String dimension, ChunkPos aPos) {
         if (server == null || dimension == null || aPos == null) {
@@ -2158,33 +2156,22 @@ public final class ShadowLightCompute {
         if (level == null) {
             return;
         }
-        LevelLightEngine engine = level.getLightEngine();
-        BitSet skyMask = new BitSet();
         long aKey = DimensionKey.key(dimension, aPos.x, aPos.z);
-        // 西邻 (x-1)：A 西缘 0 vs 邻东缘 15
-        collectSelfSeamMismatch(server, dimension, engine, aPos, aKey,
-                aPos.x - 1, aPos.z, 'x', 0, 15, EDGE_W, skyMask);
-        collectSelfSeamMismatch(server, dimension, engine, aPos, aKey,
-                aPos.x + 1, aPos.z, 'x', 15, 0, EDGE_E, skyMask);
-        collectSelfSeamMismatch(server, dimension, engine, aPos, aKey,
-                aPos.x, aPos.z - 1, 'z', 0, 15, EDGE_N, skyMask);
-        collectSelfSeamMismatch(server, dimension, engine, aPos, aKey,
-                aPos.x, aPos.z + 1, 'z', 15, 0, EDGE_S, skyMask);
-        if (skyMask.isEmpty()) {
-            return;
-        }
-        LightWork work = new LightWork(skyMask, new BitSet(), new BitSet(), new BitSet());
-        pendingLightUpdates.merge(aKey, work, LightWork::merged);
-        DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
-                "[SHADOW_SEAM] SelfHeal ({}, {}) mask={}", aPos.x, aPos.z, skyMask);
-        ShadowLightProbe.onSeamRelight(aPos, aPos, 0, true, skyMask);
-        pump();
+        collectSelfSeamPull(server, dimension, level, aPos, aKey,
+                aPos.x - 1, aPos.z, 'x', 0, 15, EDGE_W);
+        collectSelfSeamPull(server, dimension, level, aPos, aKey,
+                aPos.x + 1, aPos.z, 'x', 15, 0, EDGE_E);
+        collectSelfSeamPull(server, dimension, level, aPos, aKey,
+                aPos.x, aPos.z - 1, 'z', 0, 15, EDGE_N);
+        collectSelfSeamPull(server, dimension, level, aPos, aKey,
+                aPos.x, aPos.z + 1, 'z', 15, 0, EDGE_S);
     }
 
-    private static void collectSelfSeamMismatch(ShadowSeedServer server, String dimension,
-                                                LevelLightEngine engine, ChunkPos aPos, long aKey,
-                                                int nX, int nZ, char axis, int aFace, int nFace,
-                                                int missingBit, BitSet skyMask) {
+    private static void collectSelfSeamPull(ShadowSeedServer server, String dimension,
+                                            net.minecraft.server.level.ServerLevel level,
+                                            ChunkPos aPos, long aKey,
+                                            int nX, int nZ, char axis, int aFace, int nFace,
+                                            int missingBit) {
         LevelChunk neighbor = server.injectedChunk(dimension, nX, nZ);
         if (neighbor == null || !neighbor.isLightCorrect()) {
             return;
@@ -2193,10 +2180,84 @@ public final class ShadowLightCompute {
         if (bits == null || (bits & missingBit) == 0) {
             return;
         }
-        BitSet partial = seamSkyMismatchMask(engine, new ChunkPos(nX, nZ), aPos,
-                axis, aFace, nFace);
-        skyMask.or(partial);
+        ChunkPos nPos = new ChunkPos(nX, nZ);
+        int pulled = requeueSeamPull(server, level, aPos, nPos, axis, aFace, nFace);
         clearEdgeMissingBit(aKey, missingBit);
+        if (pulled > 0) {
+            DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+                    "[SHADOW_SEAM] SelfPull ({}, {}) from ({}, {}) missingBit={} cells={}",
+                    aPos.x, aPos.z, nX, nZ, missingBit, pulled);
+            ShadowLightProbe.onSeamRelight(aPos, nPos, missingBit, true, null);
+        }
+    }
+
+    /**
+     * 接缝再灌：对暗柱 A 面上「亮邻 B 比 A 多出超过一步衰减」的格
+     * {@code checkBlock}，走原版 PULL_LIGHT_IN / decrease→increase 把 B 的光拉进 A。
+     * <p>
+     * 阈值 {@code bLight > aLight + 1}：光每步至少衰减 1（{@code max(1, lightBlock)}），
+     * 自然传播后边界应为 {@code aLight = bLight - 1}；用严格 {@code >} 会把正常梯度
+     * 误判成缺光，触发无意义的再灌风暴。
+     *
+     * @return 实际 checkBlock 的格数
+     */
+    private static int requeueSeamPull(ShadowSeedServer server,
+                                       net.minecraft.server.level.ServerLevel level,
+                                       ChunkPos aPos, ChunkPos bPos,
+                                       char axis, int aFace, int bFace) {
+        if (level == null || aPos == null || bPos == null) {
+            return 0;
+        }
+        LevelLightEngine engine = level.getLightEngine();
+        if (engine == null) {
+            return 0;
+        }
+        int minLight = engine.getMinLightSection();
+        int lightCount = engine.getLightSectionCount();
+        int baseAX = SectionPos.sectionToBlockCoord(aPos.x);
+        int baseAZ = SectionPos.sectionToBlockCoord(aPos.z);
+        int pulled = 0;
+        synchronized (LIGHT_ENGINE_MUTEX) {
+            for (int bit = 0; bit < lightCount && pulled < SEAM_PULL_MAX_CELLS; bit++) {
+                int sectionY = minLight + bit;
+                int baseY = SectionPos.sectionToBlockCoord(sectionY);
+                for (int o = 0; o < 16 && pulled < SEAM_PULL_MAX_CELLS; o++) {
+                    for (int ly = 0; ly < 16 && pulled < SEAM_PULL_MAX_CELLS; ly++) {
+                        int aLight;
+                        int bLight;
+                        if (axis == 'x') {
+                            aLight = readSkyLight(engine, aPos.x, sectionY, aPos.z, aFace, ly, o);
+                            bLight = readSkyLight(engine, bPos.x, sectionY, bPos.z, bFace, ly, o);
+                        } else {
+                            aLight = readSkyLight(engine, aPos.x, sectionY, aPos.z, o, ly, aFace);
+                            bLight = readSkyLight(engine, bPos.x, sectionY, bPos.z, o, ly, bFace);
+                        }
+                        if (!seamCellNeedsPull(aLight, bLight)) {
+                            continue;
+                        }
+                        int blockX = axis == 'x' ? baseAX + aFace : baseAX + o;
+                        int blockZ = axis == 'x' ? baseAZ + o : baseAZ + aFace;
+                        engine.checkBlock(new net.minecraft.core.BlockPos(blockX, baseY + ly, blockZ));
+                        pulled++;
+                    }
+                }
+            }
+        }
+        if (pulled > 0 && engine instanceof net.minecraft.server.level.ThreadedLevelLightEngine threaded) {
+            try {
+                threaded.tryScheduleUpdate();
+            } catch (Throwable ignored) {
+                // 外部引擎/关停竞态：由后续 pump/超时兜底
+            }
+        }
+        return pulled;
+    }
+
+    /**
+     * 接缝格是否真亏欠。允许一步衰减：自然传播后 {@code aLight == bLight - 1} 合法。
+     */
+    static boolean seamCellNeedsPull(int aLight, int bLight) {
+        return bLight > aLight + 1;
     }
 
     private static void clearEdgeMissingBit(long key, int bit) {
@@ -2204,46 +2265,6 @@ public final class ShadowLightCompute {
             int cleared = value & ~bit;
             return cleared == 0 ? null : Integer.valueOf(cleared);
         });
-    }
-
-    /**
-     * 接缝面 sky 光预读：任一格 B&gt;A 则该 section 需补光。
-     * null 层按 0（与引擎缺层语义一致）。不读方块透明度——不透光面误触发一次
-     * LIGHT_ONLY 可接受，远小于整柱重算。
-     */
-    private static BitSet seamSkyMismatchMask(LevelLightEngine engine, ChunkPos bPos, ChunkPos aPos,
-                                              char axis, int aFace, int bFace) {
-        BitSet skyMask = new BitSet();
-        if (engine == null) {
-            return skyMask;
-        }
-        int minLight = engine.getMinLightSection();
-        int lightCount = engine.getLightSectionCount();
-        for (int bit = 0; bit < lightCount; bit++) {
-            int sectionY = minLight + bit;
-            boolean mismatch = false;
-            for (int o = 0; o < 16 && !mismatch; o++) {
-                for (int ly = 0; ly < 16; ly++) {
-                    int aLight;
-                    int bLight;
-                    if (axis == 'x') {
-                        aLight = readSkyLight(engine, aPos.x, sectionY, aPos.z, aFace, ly, o);
-                        bLight = readSkyLight(engine, bPos.x, sectionY, bPos.z, bFace, ly, o);
-                    } else {
-                        aLight = readSkyLight(engine, aPos.x, sectionY, aPos.z, o, ly, aFace);
-                        bLight = readSkyLight(engine, bPos.x, sectionY, bPos.z, o, ly, bFace);
-                    }
-                    if (bLight > aLight) {
-                        mismatch = true;
-                        break;
-                    }
-                }
-            }
-            if (mismatch) {
-                skyMask.set(bit);
-            }
-        }
-        return skyMask;
     }
 
     private static int readSkyLight(LevelLightEngine engine, int chunkX, int sectionY,

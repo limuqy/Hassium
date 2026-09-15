@@ -71,8 +71,8 @@ public final class ShadowLightProbe {
     }
 
     /**
-     * 邻到接缝补光决策（edgeMissing 路径）。submitted=false 表示接缝预读无 B&gt;A 差、
-     * 仅清位；true 表示已把 sky 掩码并入 pendingLightUpdates。
+     * 邻到接缝再灌决策（edgeMissing 路径）。submitted=false 表示无真亏欠格、仅清位；
+     * true 表示已对暗侧格 checkBlock 拉光（不清层重算）。
      */
     static void onSeamRelight(ChunkPos target, ChunkPos source, int missingBit,
                               boolean submitted, BitSet skyMask) {

@@ -1,0 +1,12 @@
+# lightdiag：接缝再灌 + 屋檐探针（-13,3）验证用 classic 两轮场景
+join label=WAIT_JOIN_1 since=start timeoutMs=${joinTimeoutMs}
+fly seconds=${moveSeconds} tag=MOVE_
+wait ms=${round1WaitMs}
+dump label=ROUND1 round=1
+disconnect
+reconnect delayMs=${reconnectDelayMs}
+join label=WAIT_JOIN_2 since=disconnect timeoutMs=${joinTimeoutMs}
+fly seconds=${moveSeconds} tag=MOVE_
+wait ms=${round2WaitMs}
+dump label=ROUND2 round=2
+exit

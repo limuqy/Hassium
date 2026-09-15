@@ -45,6 +45,21 @@ class ShadowLightComputeTimingRegressionTest {
         assertFalse(ShadowLightCompute.lightChunkHasExistingLight(false));
     }
 
+    @Test
+    @DisplayName("接缝再灌阈值：允许一步衰减，真亏欠才 checkBlock")
+    void seamCellNeedsPullAllowsOneStepAttenuation() {
+        assertFalse(ShadowLightCompute.seamCellNeedsPull(10, 11),
+                "自然传播边界 a=b-1 合法，不得误判缺光");
+        assertFalse(ShadowLightCompute.seamCellNeedsPull(15, 15),
+                "同亮无需再灌");
+        assertTrue(ShadowLightCompute.seamCellNeedsPull(0, 11),
+                "屋檐/洞口暗侧：B 远亮于 A，必须拉光");
+        assertTrue(ShadowLightCompute.seamCellNeedsPull(3, 5),
+                "历史残差 E=3 vs 真值 5：超过一步衰减，应触发");
+        assertFalse(ShadowLightCompute.seamCellNeedsPull(11, 10),
+                "A 更亮时不倒灌");
+    }
+
 
     @Test
     @DisplayName("磁盘命中续算：只看 isLightCorrect（NBT isLightOn），不另管脏表")
