@@ -53,7 +53,7 @@ MC_1_21_11
 
 | 段 | 锚点（必编 / 必测） | 段内其余版本 | 进入本段后的关键变化 |
 |----|---------------------|--------------|----------------------|
-| A | **1.20.1** | — | 基准：旧网络 + 全部旧 API（Java 17） |
+| A | **1.20.1** | — | 基准：login query 握手 + 全部旧 API（Java 17） |
 | D | **1.21.1** | — | 现代基线：StreamCodec、`DisconnectionDetails`；RL 构造私有化；`GameProtocols.*_TEMPLATE`（Java 21） |
 | E | **1.21.2** | 1.21.3, 1.21.4 | `SerializableChunkData`、`lookupOrThrow` |
 | F | **1.21.5** | — | CompoundTag API；ProtocolInfo Unbound 拆分；chunk heightmaps 线格式；**客户端缓存不跨 MC 版本兼容**（见文末附录） |

@@ -37,7 +37,7 @@ Hassium 覆盖 Minecraft **1.20.1 / 1.21.1–1.21.11**，按 **7 个版本段 ×
 
 | 段 | 锚点 | 段内其余版本 | 关键变化（摘要） |
 | --- | --- | --- | --- |
-| A | **1.20.1** | — | 基准：旧网络 + 全部旧 API |
+| A | **1.20.1** | — | 基准：login query 握手 + 全部旧 API |
 | D | **1.21.1** | — | 现代基线：StreamCodec、`DisconnectionDetails`；RL 构造私有化 |
 | E | **1.21.2** | 1.21.3, 1.21.4 | `SerializableChunkData`、`lookupOrThrow` |
 | F | **1.21.5** | — | CompoundTag API；ProtocolInfo Unbound 拆分；客户端缓存**不跨 MC 大版本兼容** |

@@ -528,7 +528,7 @@ public final class FabricTomlConfigIO {
     }
 
     private static void writeMasterCore(CommentedConfig cfg, HassiumConfig.MasterCoreConfig n) {
-        set(cfg, "master.enabled", n.enabled(), "是否启用主控核心网络通道", ConfigScope.SERVER);
+        set(cfg, "master.enabled", n.enabled(), "是否启用服务端网络通道（压缩/聚合/区块推送/实体优化）", ConfigScope.SERVER);
         set(cfg, "master.enabledOnLan", n.enabledOnLan(),
                 "局域网主机是否对远程玩家启用 Hassium 网络面（本机 memory 恒原版；storage 仍仅专用服）",
                 ConfigScope.SERVER);

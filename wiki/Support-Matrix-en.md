@@ -37,7 +37,7 @@ Each segment is represented by one anchor that participates in compile and self-
 
 | Segment | Anchor | Other versions in segment | Key change (summary) |
 | --- | --- | --- | --- |
-| A | **1.20.1** | — | Baseline: legacy networking + all legacy APIs |
+| A | **1.20.1** | — | Baseline: login-query handshake + all legacy APIs |
 | D | **1.21.1** | — | Modern baseline: StreamCodec, `DisconnectionDetails`; RL constructor privatized |
 | E | **1.21.2** | 1.21.3, 1.21.4 | `SerializableChunkData`, `lookupOrThrow` |
 | F | **1.21.5** | — | CompoundTag API; ProtocolInfo Unbound split; client cache **not cross-MC-version compatible** |

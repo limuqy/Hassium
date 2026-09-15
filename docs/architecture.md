@@ -286,7 +286,7 @@ Sector 2+:    [length(4)][type=126][magic 0x48][hash(8)][ZSTD 压缩数据]
 | `chunk.minCleanupBatchSize` | 100 | 每轮最多淘汰的 region 文件数 |
 | `chunk.seedGenEnabled` | **false** | 是否启用 SeedGen（本地生成 pristine 区块；需双端同版本，默认关）。服务端开启时会下发世界种子 |
 | `chunk.lightStrip` | true | 是否启用光照剥离 |
-| `master.enabled` | true | 是否启用主控核心网络通道 |
+| `master.enabled` | true | 是否启用服务端网络通道（压缩/聚合/区块推送/实体优化） |
 | `master.compressionLevel` | 3 | 自有通道 ZSTD 压缩等级 |
 | `master.maxChunksPerTick` | **5** | 每玩家每 tick 区块下发上限：Pull FULL/DELTA 完成 + 原版通道整柱发送（满 tick ≈ 本值×20/s） |
 | `master.enablePacketAggregation` / `aggregationMaxWaitTimeMs` / `aggregationMaxSize` | `true` / `50ms` / `256KB` | 是否启用包聚合 / 冲刷兜底（ms）/ 聚合最大大小 |

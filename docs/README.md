@@ -10,11 +10,11 @@
 | [architecture.md](architecture.md) | 架构总览：直连拓扑、模块架构、客户端数据流（原版对齐交付）、存储格式、配置、命令 | 当前 |
 | [chunk-cache.md](chunk-cache.md) | 区块缓存推送（ShadowPull 统一 Compare+Pull）、磁盘 NBT（§11）、导出（§12） | 当前 |
 | [client-chunk-light-flow.md](client-chunk-light-flow.md) | 客户端收包 → apply → 光照落地全链路 | 当前 |
+| [client-chunk-flow-handover.md](client-chunk-flow-handover.md) | 客户端区块数据流对齐（统一 Compare+Pull / 权威边沿 §9）交接与演进记录 | 进行中 |
 | [chunk-load-optimization.md](chunk-load-optimization.md) | 进服/重连加载路径、c/d 速率锚点与优化阶段（**历史锚点**，方法论仍有效） | 当前（历史语境） |
 | [version-segments.md](version-segments.md) | 多版本七段适配真相源 | 当前 |
 | [mod-compat.md](mod-compat.md) | 多 Mod 兼容边界与配置逃生 | 当前 |
-| [runtime-smoke-test.md](runtime-smoke-test.md) | 运行时冒烟：L0–L3 分层覆盖、PROBE JSON、场景引擎、门禁与会话判定 | 当前 |
-| [ai-functional-test.md](ai-functional-test.md) | AI 辅助游戏内功能测试（minecraft-mod-mcp，L3 人工专项） | 当前 |
+| [runtime-smoke-test.md](runtime-smoke-test.md) | 运行时冒烟：L0–L2 自动分层、PROBE JSON、场景引擎、门禁与会话判定 | 当前 |
 | [config-audit.md](config-audit.md) | 配置项审计（52 键 + 退役键族清单；说明列 = ConfigSchema） | 当前 |
 | [network-core-followups.md](network-core-followups.md) | 网络核心收尾核销（**已归档**：直连拓扑下仅存档参考） | 归档参考 |
 | [curseforge-description.md](curseforge-description.md) | CurseForge 发布描述草稿 | 当前 |
@@ -33,6 +33,7 @@
 | 文档 | 主题 | 状态 |
 |------|------|------|
 | [archive/RELEASE-1.0.0.md](archive/RELEASE-1.0.0.md) | 1.0.0 发布说明 | 归档 |
+| [archive/ai-functional-test.md](archive/ai-functional-test.md) | AI 辅助游戏内功能测试（minecraft-mod-mcp，L3 已退役，dev 未接线） | 归档 |
 | [archive/code-review-2026-09-13.md](archive/code-review-2026-09-13.md) | 全库代码审查快照（只读） | 归档 |
 | [archive/code-review-deferred.md](archive/code-review-deferred.md) | code-review 延后项清单（2.0.X 分级） | 归档 |
 | [archive/classic-matrix-smoke-report-2026-08-28.md](archive/classic-matrix-smoke-report-2026-08-28.md) | classic 矩阵冒烟报告（2026-08-28） | 归档 |

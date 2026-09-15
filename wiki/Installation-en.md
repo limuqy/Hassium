@@ -22,7 +22,7 @@ Download the JAR matching the Minecraft version and loader from [GitHub Releases
 
 | Side | Configuration files |
 | --- | --- |
-| Client | `config/hassium/hassium-client.toml` |
+| Physical client | `config/hassium/hassium-client.toml` (client behavior) + `config/hassium/hassium-server.toml` (integrated / open-to-LAN; the in-game UI only shows client keys) |
 | Dedicated server | `config/hassium/hassium-server.toml` |
 
 ## Required dependencies

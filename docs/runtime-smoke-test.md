@@ -4,14 +4,13 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 
 ## 覆盖分层
 
-冒烟覆盖按成本与范围分四层：
+冒烟覆盖按成本与范围分三层（L3 minecraft-mod-mcp 人工专项已退役，见 [`archive/ai-functional-test.md`](archive/ai-functional-test.md)）：
 
 | 层 | 载体 | 范围 | 说明 |
 |----|------|------|------|
 | **L0** | `common:test` | 随单元测试跑 | JUnit 代码级冒烟，无 MC 实例。代表：`LoginHandshakeTest`（登录期握手编解码/协商）、`ShadowPull*Test`（统一 Compare+Pull 协议族）、`SectionDeltaProtocolTest` |
 | **L1** | classic 场景 | 全矩阵（12 版 × fabric/neoforge，按 `builds_for` 过滤；1.20.1 无 neoforge 自动 SKIP） | 两轮连服 VD 切换（VD=20 → 断开 → VD=10），核心缓存 / 分段增量 / 光照 / 聚合通道全链路验证 |
 | **L2** | 场景目录 | 锚点集：1.20.1 fabric+forge、1.21.1 neoforge、1.21.11 neoforge | 数据驱动场景（seedgen / dimension），只在锚点版本×加载器组合上跑，控制总时长 |
-| **L3** | 人工专项 | 按需 | AI 辅助游戏内功能测试（minecraft-mod-mcp 桥），不进自动 PASS 门禁，见 [`ai-functional-test.md`](ai-functional-test.md) |
 
 ## 概述
 

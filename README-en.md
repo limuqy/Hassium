@@ -98,7 +98,7 @@ Files: `config/hassium/hassium-client.toml`, `config/hassium/hassium-server.toml
 | `chunk.lightStrip` | `true` | Enable light stripping |
 | `storage.enabled` | `false` | Enable save compression (default off; chunk cache unaffected) |
 | `storage.zstdLevel` | `3` | Storage ZSTD compression level |
-| `master.enabled` | `true` | Enable master-core network channel |
+| `master.enabled` | `true` | Enable server network channel (compression/aggregation/chunk push/entity optimization) |
 | `master.enabledOnLan` | `false` | Enable Hassium network features for remote LAN players on an Open-to-LAN host (handshake/aggregation/push/lightStrip). Default off; host local memory connection stays vanilla; storage remains dedicated-only |
 | `master.maxChunksPerTick` | `5` | Per-player per-tick chunk send cap: Pull FULL/DELTA completions + vanilla whole-chunk path (≈ value×20/s at full tick) |
 | `master.enablePacketAggregation` | `true` | Enable packet aggregation |
@@ -208,7 +208,7 @@ Installation, full configuration, commands, features, compatibility, and trouble
 | [`docs/version-segments.md`](docs/version-segments.md) | Multi-version segments |
 | [`docs/mod-compat.md`](docs/mod-compat.md) | Multi-mod compatibility & config escapes |
 | [`docs/config-audit.md`](docs/config-audit.md) | Config key audit |
-| [`docs/runtime-smoke-test.md`](docs/runtime-smoke-test.md) | Runtime smoke tests (L0–L3, PROBE, scenario engine) |
+| [`docs/runtime-smoke-test.md`](docs/runtime-smoke-test.md) | Runtime smoke tests (L0–L2, PROBE, scenario engine) |
 
 ---
 

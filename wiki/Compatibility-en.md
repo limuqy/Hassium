@@ -15,7 +15,7 @@ Overview of Hassium's compatibility with common optimization mods, plus configur
 | **Bobby / similar client-side beyond-view caches** | ❌ **Incompatible** | Hassium's shadow server manages caching and redelivery itself; do not co-install |
 | **Immersive Portals** | ❌ **Incompatible** | |
 | **Similar compression / protocol replacements (Netty Zlib swaps)** | ⚠️ Conditional | Hassium's channel compression never touches the vanilla compression layer; conflicts remain if the other mod replaces the vanilla pipeline — pick one |
-| **Starlight** | — **N/A** | Merged into vanilla lighting |
+| **Starlight / ScalableLux** | ✅ **Actively compatible** | Same-bloodline lighting engines (ScalableLux provides `starlight`; mutually exclusive with Starlight); 4 shadow control-plane points adapted. Escape: `chunk.enabled = false` |
 | **Aggregation breaking third-party packets** | ⚠️ Disable aggregation or blacklist | `master.enablePacketAggregation = false` or `master.compressionBlacklist` (third-party IDs; Hassium control-plane is always hard-coded excluded) |
 | **Anti-x-ray (rewrites outgoing chunk packets)** | ✅ Intended compatible | Miss path reuses already-built packet bytes; implementations that rewrite only on `Connection.send` after Hassium's cancel may bypass |
 | **Distant Horizons / Voxy** | ✅ Intended compatible | Independent LOD channels; same aggregation escape if needed |
@@ -36,6 +36,12 @@ Overview of Hassium's compatibility with common optimization mods, plus configur
 | Hassium on both sides but different MC versions (bridged by Via) | ❌ Not promised (capability negotiation assumes same versions; cross-version untested) |
 
 > Channel compression applies only to players who completed the Hassium handshake; un-handshaked players (incl. Via-translated targets) use the vanilla path — no framing conflicts.
+
+---
+
+## Starlight / ScalableLux
+
+Both engines share the same bloodline (ScalableLux `provides: ["starlight"]`; mutually exclusive) and fully replace `LevelLightEngine`. Output lighting uses the public API and is naturally compatible; four control-plane points (clear-light, `lightChunk`, `lightTasks` watermark, sky sources) are degraded via `ForeignLightEngine`. Vanilla Starlight was merged into MC itself on newer versions; **ScalableLux is the current external engine**. Details: [`docs/mod-compat.md`](https://github.com/limuqy/Hassium/blob/master/docs/mod-compat.md) §7b.
 
 ---
 

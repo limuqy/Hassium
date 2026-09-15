@@ -56,9 +56,9 @@ public final class ConfigSchema {
     public static final ConfigKey<Integer> STORAGE_ZSTD_LEVEL = integer("storage.zstdLevel", ConfigScope.SERVER, Domain.STORAGE, 3, 1, 22,
             "存储 ZSTD 压缩等级", "Storage ZSTD compression level");
 
-    // === 主控核心（master.*；SERVER 17 键）===
+    // === 服务端传输面（master.*；SERVER 17 键）===
     public static final ConfigKey<Boolean> MASTER_ENABLED = bool("master.enabled", ConfigScope.SERVER, Domain.MASTER_CORE, true,
-            "是否启用主控核心网络通道", "Enable master-core network channel");
+            "是否启用服务端网络通道（压缩/聚合/区块推送/实体优化）", "Enable server network channel (compression/aggregation/chunk push/entity optimization)");
     public static final ConfigKey<Boolean> MASTER_ENABLED_ON_LAN = bool("master.enabledOnLan", ConfigScope.SERVER, Domain.MASTER_CORE, false,
             "局域网主机是否对远程玩家启用 Hassium 网络面（握手/聚合/推送/lightStrip 等）。默认关；本机 memory 连接始终原版；storage 仍仅专用服",
             "Enable Hassium network features for remote LAN players on an Open-to-LAN host (handshake/aggregation/push/lightStrip). Default off; host local memory connection stays vanilla; storage remains dedicated-only");
@@ -121,7 +121,7 @@ public final class ConfigSchema {
     public static final ConfigKey<Boolean> COMPAT_AUTO_DOWNGRADE = bool("compat.autoDowngradeOnError", ConfigScope.SERVER, Domain.COMPAT, true,
             "出错时是否自动降级", "Auto-downgrade on error");
 
-    // === 调试（debug.*；CLIENT 8 键：元数据/缓存/光照验算为客户端专属）===
+    // === 调试（debug.*；CLIENT 10 键：元数据/缓存/光照验算/网络指标为客户端专属）===
     public static final ConfigKey<Boolean> CLIENT_DEBUG_METADATA = bool("debug.metadataLogging", ConfigScope.CLIENT, Domain.DEBUG, false,
             "元数据调试日志", "Metadata debug logging");
     public static final ConfigKey<Boolean> CLIENT_DEBUG_DISPATCHER = bool("debug.dispatcherLogging", ConfigScope.CLIENT, Domain.DEBUG, false,
@@ -143,7 +143,7 @@ public final class ConfigSchema {
     public static final ConfigKey<Boolean> CLIENT_DEBUG_NETWORK_METRICS_AUTO_RESET = bool("debug.networkMetricsAutoReset", ConfigScope.CLIENT, Domain.DEBUG, true,
             "登出服务器时自动重置网络指标", "Auto-reset network metrics when leaving a server");
 
-    // === 调试（debug.*；SERVER 6 键：数据面为服务端专属；不含元数据/缓存/光照验算）===
+    // === 调试（debug.*；SERVER 5 键：不含元数据/缓存/光照验算/网络指标）===
     public static final ConfigKey<Boolean> SERVER_DEBUG_DISPATCHER = bool("debug.dispatcherLogging", ConfigScope.SERVER, Domain.DEBUG, false,
             "主线程调度调试日志", "Main-thread dispatcher debug logging");
     public static final ConfigKey<Boolean> SERVER_DEBUG_ASYNC = bool("debug.asyncLogging", ConfigScope.SERVER, Domain.DEBUG, false,

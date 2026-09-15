@@ -22,7 +22,7 @@
 
 | 端 | 配置文件 |
 | --- | --- |
-| 客户端 | `config/hassium/hassium-client.toml` |
+| 物理客户端 | `config/hassium/hassium-client.toml`（客户端行为）+ `config/hassium/hassium-server.toml`（集成服/局域网；配置 UI 只显示客户端键） |
 | 专用服务器 | `config/hassium/hassium-server.toml` |
 
 ## 前置依赖

@@ -1,10 +1,12 @@
 # AI 辅助功能测试（minecraft-mod-mcp）
 
+> **🗄 已退役（2026-09-16）**：L3 minecraft-mod-mcp 人工专项文档退役归档。dev `runClient` 从未挂载 companion mod，工具链未接入自动门禁；现行冒烟以 L0–L2 为准（[`../runtime-smoke-test.md`](../runtime-smoke-test.md)）。保留本文仅作历史操作手册存档。
+
 面向 AI 代理的游戏内功能测试操作手册：经 MCP（Model Context Protocol）stdio 桥驱动一个**正在运行的真实 Minecraft 客户端**，做截图、读 F3 调试数据、点击 UI、执行命令等人工专项验证。
 
 ## 定位
 
-- **覆盖分层中的 L3 人工专项**：与自动冒烟（L0–L2，见 [`runtime-smoke-test.md`](runtime-smoke-test.md)）互补，处理自动化脚本不适合覆盖的主观/交互类验证——UI 布局、渲染观感、实体行为、操作手感等。
+- **覆盖分层中的 L3 人工专项**：与自动冒烟（L0–L2，见 [`runtime-smoke-test.md`](../runtime-smoke-test.md)）互补，处理自动化脚本不适合覆盖的主观/交互类验证——UI 布局、渲染观感、实体行为、操作手感等。
 - **不进自动 PASS 门禁**：本工具链的产出是观察记录与结论，不产出退出码 / result JSON，不会被 `runtime-smoke-test*.ps1` 的任何门禁消费。PASS 判定永远只来自 L0–L2 自动链路。
 - **按需使用**：适合排查「冒烟 FAIL 但日志看不出原因」「新特性需要人眼确认」的场景。
 
@@ -70,6 +72,6 @@ MCP 服务端以 stdio 方式启动，配置在 `.cursor/mcp.json`：
 
 ## 与自动冒烟的协作建议
 
-1. 自动冒烟 FAIL → 先按 [`runtime-smoke-test.md`](runtime-smoke-test.md) 失败诊断清单走日志/probe 分析；
+1. 自动冒烟 FAIL → 先按 [`runtime-smoke-test.md`](../runtime-smoke-test.md) 失败诊断清单走日志/probe 分析；
 2. 日志无法定位时，用本工具链手动复现同一场景（同版本同加载器起服，`open_chat` + `execute_command` 重放关键命令，`debug_fields` / `screenshot` 取证）；
 3. 结论回写 issue/handoff，必要时沉淀为新的 `.scenario` 场景或门禁（升级到 L1/L2 自动化）。

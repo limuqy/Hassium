@@ -59,7 +59,7 @@ In-game editors:
 
 | Key | Default | Description |
 | --- | --- | --- |
-| `master.enabled` | `true` | Enable master-core network channel |
+| `master.enabled` | `true` | Enable server network channel (compression/aggregation/chunk push/entity optimization) |
 | `master.enabledOnLan` | `false` | Enable Hassium network features for remote LAN players on an Open-to-LAN host (handshake/aggregation/push/lightStrip). Default off; host local memory connection stays vanilla; storage remains dedicated-only |
 | `master.compressionLevel` | `3` | Private-channel ZSTD level |
 | `master.enablePacketAggregation` | `true` | Enable packet aggregation |

@@ -15,7 +15,7 @@ Hassium 与常见优化 mod 的兼容性概览与配置逃生口。每条结论�
 | **Bobby / 同类客户端视距外缓存** | ❌ **不兼容** | Hassium 影子端自行管理缓存与重交付；同装会冲突 |
 | **Immersive Portals** | ❌ **不兼容** | |
 | **同类压缩 / 协议替换（改 Netty Zlib 等）** | ⚠️ 有条件 | Hassium 通道压缩不触碰原版压缩层；但同类 mod 若替换原版压缩管线仍有冲突面，建议二选一 |
-| **Starlight** | — **不考虑** | 已并入原版光照 |
+| **Starlight / ScalableLux** | ✅ **主动兼容** | 同源光照引擎（ScalableLux `provides: starlight`，与 Starlight 互斥）；影子端 4 处控制面已适配。逃生：`chunk.enabled = false` |
 | **包聚合导致第三方包异常** | ⚠️ 关聚合或加黑名单 | `master.enablePacketAggregation = false` 或 `master.compressionBlacklist`（第三方包 ID；Hassium 控制面已硬编码排除） |
 | **反透视（改即将发送的区块包）** | ✅ 希望兼容 | miss 路径复用已构建包字节；若只在 `Connection.send` 上改写且发生在 Hassium 取消之后可能旁路 |
 | **Distant Horizons / Voxy** | ✅ 希望兼容 | 独立 LOD 通道；聚合误伤同上处理 |
@@ -36,6 +36,12 @@ Hassium 与常见优化 mod 的兼容性概览与配置逃生口。每条结论�
 | 双端都装 Hassium 但 MC 版本不同（靠 Via 桥） | ❌ 不承诺（Hassium 能力协商假设双端同版本；跨版本场景未验证） |
 
 > 通道压缩仅对完成 Hassium 握手的玩家生效，未握手（含 Via 翻译目标）玩家走原版路径，无帧假设冲突。
+
+---
+
+## Starlight / ScalableLux
+
+两者同源（ScalableLux `provides: ["starlight"]`，互斥），整体替换 `LevelLightEngine`。出光走公开入口天然兼容；清光 / `lightChunk` / `lightTasks` 水位 / 天天空源 4 处控制面由 `ForeignLightEngine` 降级适配。Starlight 本体在新 MC 版本已并入原版，**ScalableLux 仍是现行外部引擎**。细节见仓库 [`docs/mod-compat.md`](https://github.com/limuqy/Hassium/blob/master/docs/mod-compat.md) §7b。
 
 ---
 

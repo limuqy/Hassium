@@ -98,7 +98,7 @@ Forge 支持 1.20.1 / 1.21.1 / 1.21.3–1.21.10（1.21.2 上游无 Forge userdev
 | `chunk.lightStrip` | `true` | 是否启用光照剥离 |
 | `storage.enabled` | `false` | 是否启用存档压缩（默认关；区块核心缓存独立不受影响） |
 | `storage.zstdLevel` | `3` | 存储 ZSTD 压缩等级 |
-| `master.enabled` | `true` | 是否启用主控核心网络通道 |
+| `master.enabled` | `true` | 是否启用服务端网络通道（压缩/聚合/区块推送/实体优化） |
 | `master.enabledOnLan` | `false` | 局域网主机是否对远程玩家启用 Hassium 网络面（握手/聚合/推送/lightStrip 等）。默认关；本机 memory 连接始终原版；storage 仍仅专用服 |
 | `master.maxChunksPerTick` | `5` | 每玩家每 tick 区块下发上限：Pull FULL/DELTA 完成 + 原版通道整柱发送（满 tick ≈ 本值×20/s） |
 | `master.enablePacketAggregation` | `true` | 是否启用包聚合 |
@@ -208,7 +208,7 @@ flowchart LR
 | [`docs/version-segments.md`](docs/version-segments.md) | 多版本七段适配真相源 |
 | [`docs/mod-compat.md`](docs/mod-compat.md) | 多 Mod 兼容边界与配置逃生 |
 | [`docs/config-audit.md`](docs/config-audit.md) | 配置项审计 |
-| [`docs/runtime-smoke-test.md`](docs/runtime-smoke-test.md) | 运行时冒烟（L0–L3、PROBE、场景引擎） |
+| [`docs/runtime-smoke-test.md`](docs/runtime-smoke-test.md) | 运行时冒烟（L0–L2、PROBE、场景引擎） |
 
 ---
 

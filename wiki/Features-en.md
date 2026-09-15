@@ -65,9 +65,9 @@ Hassium pairs a client and server mod to optimize Minecraft along **efficient co
 ### World save
 
 - **Goal**: avoid re-downloading full chunks when revisiting an area
-- **How**: the server computes a chunk fingerprint before pushing; the client compares against the local cache — on hit it applies locally, skipping the full download
+- **How**: the client is **fully passive** and only receives official chunk+light packets; comparison happens on the shadow side. The server declares an authoritative content hash on push: a matching local hash means **zero-request local delivery**; mismatch/unknown falls back to unified ShadowPull (UNCHANGED reuse / DELTA only changed sections / FULL when missing)
 - **Config**: `chunk.enabled` (default `true`)
-- **Details**: visited chunks are saved to the local cache directory; section delta, world export, and heat eviction all reuse the same cache (below)
+- **Details**: visited chunks are saved by the shadow side under `hassium_cache/<serverId>/world`; section delta, world export, and heat eviction all reuse the same cache (below)
 
 ---
 
@@ -81,15 +81,16 @@ Hassium pairs a client and server mod to optimize Minecraft along **efficient co
 
 ### Section delta
 
-- **Goal**: avoid whole-chunk retransmits on stale cache (MISMATCH)
+- **Goal**: avoid whole-chunk retransmits when the local baseline is stale
 - **How**: the shadow side reports section hashes and plane syndromes; the server sends changed blocks only (`BLOCKS`) for sparse edits, whole sections (`FULL`) when cheaper, whole chunk when changed sections ≥75%. Failures/timeouts fall back to full chunks
 - **Config**: `chunk.sectionDeltaEnabled` (default `true`; requires `chunk.enabled`)
 
 | Compare result | Delta off | Delta on (default) |
 | --- | --- | --- |
-| HIT | cache queue | cache queue |
-| MISS | full request | full request |
-| MISMATCH | full request | changed blocks / whole section (fallback to full) |
+| Authority hash hit | Local delivery (zero-request) | Local delivery (zero-request) |
+| UNCHANGED | Materialize locally | Materialize locally |
+| No baseline / FULL | Full fetch | Full fetch |
+| DELTA (stale baseline) | Full fetch | Changed blocks / whole section (fallback to full) |
 
 ---
 

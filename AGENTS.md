@@ -183,14 +183,15 @@ Mod 客户端 ←──唯一 vanilla TCP（登录期握手 + Play 期自定义 
 
 ## 运行时冒烟
 
-分层、门禁与场景见 [`docs/runtime-smoke-test.md`](docs/runtime-smoke-test.md)。L3 游戏内操作见 [`docs/ai-functional-test.md`](docs/ai-functional-test.md)。
+分层、门禁与场景见 [`docs/runtime-smoke-test.md`](docs/runtime-smoke-test.md)。
 
 | 层 | 载体 | 说明 |
 |----|------|------|
 | L0 | `common:test` | 无 MC 实例（如登录期握手编解码/协商单测） |
 | L1 | classic 场景 | 全矩阵（12 版 × fabric/neoforge，按 versionProperties `builds_for` 过滤；1.20.1 无 neoforge 自动 SKIP） |
 | L2 | 场景目录 | 锚点集：seedgen / dimension（migrate 场景已退役为 log-and-skip） |
-| L3 | minecraft-mod-mcp | 人工专项，不进自动 PASS 门禁 |
+
+L3（minecraft-mod-mcp 人工专项）已退役，见 [`docs/archive/ai-functional-test.md`](docs/archive/ai-functional-test.md)。
 
 冒烟只有 `.ps1`（依赖 Windows 网络/进程 cmdlet），没有 bash 版。
 
@@ -230,8 +231,7 @@ Manifold / 七段 / `#if MC_VER` / `PacketId` / `Identifier` 改代码时自动�
 - [`docs/chunk-load-optimization.md`](docs/chunk-load-optimization.md) — 进服/重连加载路径与速率锚点
 - [`docs/version-segments.md`](docs/version-segments.md) — 七段适配真相源
 - [`docs/mod-compat.md`](docs/mod-compat.md) — 多 Mod 兼容
-- [`docs/runtime-smoke-test.md`](docs/runtime-smoke-test.md) — 运行时冒烟（L0–L3、PROBE、场景引擎）
-- [`docs/ai-functional-test.md`](docs/ai-functional-test.md) — AI 游戏内功能测试（minecraft-mod-mcp）
+- [`docs/runtime-smoke-test.md`](docs/runtime-smoke-test.md) — 运行时冒烟（L0–L2、PROBE、场景引擎）
 - [`docs/config-audit.md`](docs/config-audit.md) — 配置项审计
 - [`docs/network-core-followups.md`](docs/network-core-followups.md) — 网络核心收尾核销（**已归档**：直连拓扑下仅存档参考）
 - [`docs/client-chunk-flow-handover.md`](docs/client-chunk-flow-handover.md) — **进行中**：客户端区块数据流对齐 §6 统一 Compare+Pull 的交接（过渡链路清单 / 开发计划 / 清理清单）
