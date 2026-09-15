@@ -108,6 +108,14 @@ public class ShadowSeedServer extends MinecraftServer {
             injectedChunks = new java.util.concurrent.ConcurrentHashMap<>();
 
     /**
+     * 空气空壳占位柱集合（{@link DimensionKey} 复合键）：权威范围外邻柱的光照齐套占位。
+     * 占位柱 = 全空气 LevelChunk，天光透过（地表正确，洞穴边缘偏亮）。
+     * 不进客户端交付集、不进磁盘缓存、不参与 chunkHash；真实数据到达时由
+     * {@link #injectChunk} 替换并从本集合移除。
+     */
+    private final java.util.Set<Long> placeholderChunks = java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /**
      * ChunkCache 实例 → 维度 id（懒解析后缓存；仅影子上下文使用）。
      * <p>
      * F17 根因修复：{@code MixinServerChunkCache} 的两座桥（getChunk / getChunkForLighting）
@@ -1101,6 +1109,45 @@ public class ShadowSeedServer extends MinecraftServer {
     /** 指定维度注入区块表取用（打包/保存；未注入返回 null）。 */
     public net.minecraft.world.level.chunk.LevelChunk injectedChunk(String dimension, int x, int z) {
         return injectedChunks.get(DimensionKey.key(dimension, x, z));
+    }
+
+    /** 该柱是否为空气空壳占位（权威范围外邻柱的光照齐套占位）。 */
+    public boolean isPlaceholder(String dimension, int x, int z) {
+        return placeholderChunks.contains(DimensionKey.key(dimension, x, z));
+    }
+
+    /**
+     * 注入空气空壳占位柱：全空气 LevelChunk，供光照齐套门控在权威范围外邻柱上「立即就绪」。
+     * <p>
+     * 语义：天光从上方灌入、水平透过（等价原版 {@code NEG_INF} 哨兵）——地表屋檐正确，
+     * 洞穴边缘偏亮（原版视距边缘同样不准，可接受）。不写 hash、不写快照、不进交付集；
+     * 真实数据到达时 {@link #injectChunk} REPLACE 覆盖并从占位集合移除。
+     * <p>
+     * 幂等：已有非占位柱时 no-op；已有占位柱时 no-op（不重复创建）。
+     */
+    public boolean injectPlaceholder(String dimension, int x, int z) {
+        long key = DimensionKey.key(dimension, x, z);
+        if (injectedChunks.containsKey(key)) {
+            return true; // 已有柱（真实或占位）：齐套条件已满足
+        }
+        ServerLevel level = level(dimension);
+        if (level == null) {
+            return false;
+        }
+        ChunkPos pos = new ChunkPos(x, z);
+        LevelChunk placeholder = new LevelChunk(level, pos);
+        // 空壳 = 全空气 section，无需 replaceWithPacketData；heightmap 由引擎按需重建
+        LevelChunk previous = injectedChunks.putIfAbsent(key, placeholder);
+        if (previous != null) {
+            return true; // 竞态：另一线程先注入
+        }
+        placeholderChunks.add(key);
+        // 占位柱标 lightCorrect=true：全空气 = 开天空，天光从上方灌入、水平透过，
+        // 对齐原版 NEG_INF 哨兵语义。邻柱算光读到的是「开天空」而非空层基岩。
+        placeholder.setLightCorrect(true);
+        DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+                "[SHADOW_PLACEHOLDER] Injected air placeholder ({}, {}) dim={}", x, z, dimension);
+        return true;
     }
 
     /**

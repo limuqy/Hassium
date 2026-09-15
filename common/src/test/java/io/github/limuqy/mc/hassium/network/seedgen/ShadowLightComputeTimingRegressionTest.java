@@ -46,18 +46,29 @@ class ShadowLightComputeTimingRegressionTest {
     }
 
     @Test
-    @DisplayName("接缝再灌阈值：允许一步衰减，真亏欠才 checkBlock")
-    void seamCellNeedsPullAllowsOneStepAttenuation() {
-        assertFalse(ShadowLightCompute.seamCellNeedsPull(10, 11),
-                "自然传播边界 a=b-1 合法，不得误判缺光");
-        assertFalse(ShadowLightCompute.seamCellNeedsPull(15, 15),
-                "同亮无需再灌");
-        assertTrue(ShadowLightCompute.seamCellNeedsPull(0, 11),
-                "屋檐/洞口暗侧：B 远亮于 A，必须拉光");
-        assertTrue(ShadowLightCompute.seamCellNeedsPull(3, 5),
-                "历史残差 E=3 vs 真值 5：超过一步衰减，应触发");
-        assertFalse(ShadowLightCompute.seamCellNeedsPull(11, 10),
-                "A 更亮时不倒灌");
+    @DisplayName("齐套门控：enqueue 后 pendingCount 增加，cancel 后减少")
+    void neighborhoodGateEnqueueCancel() {
+        ChunkPos pos = new ChunkPos(5, 5);
+        LightNeighborhoodGate.enqueue(
+                DimensionKey.key(DimensionKey.OVERWORLD, 5, 5),
+                DimensionKey.OVERWORLD, pos, new Object());
+        assertEquals(1, LightNeighborhoodGate.pendingCount());
+        LightNeighborhoodGate.cancel(DimensionKey.key(DimensionKey.OVERWORLD, 5, 5));
+        assertEquals(0, LightNeighborhoodGate.pendingCount());
+    }
+
+    @Test
+    @DisplayName("齐套门控：clear 清空全部待齐套")
+    void neighborhoodGateClear() {
+        LightNeighborhoodGate.enqueue(
+                DimensionKey.key(DimensionKey.OVERWORLD, 1, 1),
+                DimensionKey.OVERWORLD, new ChunkPos(1, 1), new Object());
+        LightNeighborhoodGate.enqueue(
+                DimensionKey.key(DimensionKey.OVERWORLD, 2, 2),
+                DimensionKey.OVERWORLD, new ChunkPos(2, 2), new Object());
+        assertEquals(2, LightNeighborhoodGate.pendingCount());
+        LightNeighborhoodGate.clear();
+        assertEquals(0, LightNeighborhoodGate.pendingCount());
     }
 
 

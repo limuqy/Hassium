@@ -99,6 +99,15 @@ public final class ChunkAuthorityClient {
         return at == null ? -1L : at;
     }
 
+    /**
+     * 该柱是否在服务端权威集合内（曾被 {@code chunk_authority_s2c} 声明覆盖）。
+     * <p>
+     * 光照齐套门控用：权威内邻柱等真实数据；权威外邻柱不等，直接空气占位。
+     */
+    public static boolean isAuthoritative(String dimension, int chunkX, int chunkZ) {
+        return declaredAtMs(dimension, chunkX, chunkZ) >= 0L;
+    }
+
     /** 收到权威边沿载荷：仅处理当前客户端维度。 */
     public static void handle(ChunkAuthorityS2CPacket packet) {
         if (packet == null || !ShadowLightCompute.isEnabled()) {

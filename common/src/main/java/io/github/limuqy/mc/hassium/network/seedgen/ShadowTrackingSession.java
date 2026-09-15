@@ -552,6 +552,10 @@ public final class ShadowTrackingSession {
             if (shadow.injectedChunk(currentDimension, pos.x, pos.z) == null) {
                 continue;
             }
+            // 空气空壳占位柱不得 redeliver：它是光照齐套的临时占位，不是真实数据。
+            if (shadow.isPlaceholder(currentDimension, pos.x, pos.z)) {
+                continue;
+            }
             if (!inVanillaVisibleShape(pos.x, pos.z) && !inOvdWindow(pos.x, pos.z)) {
                 continue;
             }
@@ -835,7 +839,9 @@ public final class ShadowTrackingSession {
                 }
                 continue;
             }
-            if (shadow.injectedChunk(sel.dimension(), sel.x(), sel.z()) != null) {
+            // 空气空壳占位柱不算已物化：继续走拉取路径获取真实数据。
+            if (shadow.injectedChunk(sel.dimension(), sel.x(), sel.z()) != null
+                    && !shadow.isPlaceholder(sel.dimension(), sel.x(), sel.z())) {
                 continue; // 已物化（注入/本地生成），无需 pull
             }
             ChunkPos pos = new ChunkPos(sel.x(), sel.z());
@@ -924,7 +930,10 @@ public final class ShadowTrackingSession {
                 if (!ChunkShapeCompat.contains(center.x, center.z, radius, x, z)) {
                     continue;
                 }
-                if (shadow.injectedChunk(currentDimension, x, z) != null) {
+                // 空气空壳占位柱不算已注入：它是光照齐套的临时占位，
+                // 必须继续走拉取路径获取真实数据，否则视距内出现空洞。
+                if (shadow.injectedChunk(currentDimension, x, z) != null
+                        && !shadow.isPlaceholder(currentDimension, x, z)) {
                     if (waitingOnly) {
                         continue; // 已注入柱不参与优先槽；redeliver/在途清理留给 normal pass
                     }
@@ -937,10 +946,6 @@ public final class ShadowTrackingSession {
                         redeliverQueue.add(injectedPos);
                     }
                     continue;
-                }
-                if (waitingOnly
-                        && !ShadowLightCompute.hasLightWaitingNeighbors(currentDimension, x, z)) {
-                    continue; // 优先槽只收被缺邻柱等待的柱
                 }
                 ChunkPos pos = new ChunkPos(x, z);
                 boolean hasBaseline = ShadowLightCompute.hasLocalPullBaseline(currentDimension, pos);
@@ -1003,7 +1008,9 @@ public final class ShadowTrackingSession {
         int sent = 0;
         while (sent < maxPerPump && !bootGridCells.isEmpty()) {
             ChunkPos pos = bootGridCells.pollFirst();
-            if (shadow.injectedChunk(currentDimension, pos.x, pos.z) != null) {
+            // 空气空壳占位柱不算已注入：继续走拉取路径获取真实数据。
+            if (shadow.injectedChunk(currentDimension, pos.x, pos.z) != null
+                    && !shadow.isPlaceholder(currentDimension, pos.x, pos.z)) {
                 continue;
             }
             boolean hasBaseline = ShadowLightCompute.hasLocalPullBaseline(currentDimension, pos);
@@ -1090,7 +1097,9 @@ public final class ShadowTrackingSession {
             return;
         }
         ChunkPos pos = new ChunkPos(sel.x(), sel.z());
-        if (shadow.injectedChunk(sel.dimension(), pos.x, pos.z) != null) {
+        // 空气空壳占位柱不算已物化：继续走磁盘加载路径。
+        if (shadow.injectedChunk(sel.dimension(), pos.x, pos.z) != null
+                && !shadow.isPlaceholder(sel.dimension(), pos.x, pos.z)) {
             return; // 已物化，tracking 边沿会交付
         }
         net.minecraft.world.level.chunk.LevelChunk chunk = shadow.loadFromDisk(sel.dimension(), pos);
@@ -1266,7 +1275,8 @@ public final class ShadowTrackingSession {
         if (shadow == null || dimension == null || pos == null || chunk == null) {
             return;
         }
-        boolean alreadyMaterialized = shadow.injectedChunk(dimension, pos.x, pos.z) != null;
+        boolean alreadyMaterialized = shadow.injectedChunk(dimension, pos.x, pos.z) != null
+                && !shadow.isPlaceholder(dimension, pos.x, pos.z);
         // 磁盘命中柱的 hash 在 scheduleChunkLoad 读盘时由 MixinRegionFile 回填；
         // 生成柱无 hash → dirty（saveAll 落盘）。1.20.1 无 getPersistedStatus，按 hash 判别。
         boolean diskHit = io.github.limuqy.mc.hassium.storage.ShadowStorageHashes
