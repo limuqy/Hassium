@@ -16,7 +16,7 @@ Hassium 与常见优化 mod 的兼容性概览与配置逃生口。每条结论�
 | **Immersive Portals** | ❌ **不兼容** | |
 | **同类压缩 / 协议替换（改 Netty Zlib 等）** | ⚠️ 有条件 | Hassium 通道压缩不触碰原版压缩层；但同类 mod 若替换原版压缩管线仍有冲突面，建议二选一 |
 | **Starlight** | — **不考虑** | 已并入原版光照 |
-| **包聚合导致第三方包异常** | ⚠️ 关聚合或加黑名单 | `master.enablePacketAggregation = false` 或 `master.compressionBlacklist` |
+| **包聚合导致第三方包异常** | ⚠️ 关聚合或加黑名单 | `master.enablePacketAggregation = false` 或 `master.compressionBlacklist`（第三方包 ID；Hassium 控制面已硬编码排除） |
 | **反透视（改即将发送的区块包）** | ✅ 希望兼容 | miss 路径复用已构建包字节；若只在 `Connection.send` 上改写且发生在 Hassium 取消之后可能旁路 |
 | **Distant Horizons / Voxy** | ✅ 希望兼容 | 独立 LOD 通道；聚合误伤同上处理 |
 | **ViaVersion** | ⚠️ 有条件 | 见下表 |

@@ -1,6 +1,5 @@
 package io.github.limuqy.mc.hassium.config;
 
-import io.github.limuqy.mc.hassium.network.HassiumPacketIds;
 import io.github.limuqy.mc.hassium.network.entity.EntityUpdateTiering;
 
 import java.util.List;
@@ -146,14 +145,15 @@ public record HassiumConfig(
             compressionBlacklist = Set.copyOf(compressionBlacklist);
         }
 
-        // 127.0.0.1 仅供本地开发；公网部署必须配置客户端实际可达的地址。
-        public static final Set<String> DEFAULT_COMPRESSION_BLACKLIST = Set.of(
-                HassiumPacketIds.DICTIONARY_SYNC_S2C,
-                HassiumPacketIds.INDEX_SYNC_S2C,
-                HassiumPacketIds.LIGHT_DELTA_S2C,
-                HassiumPacketIds.MAIN_CHANNEL,
-                HassiumPacketIds.AGGREGATION_S2C
-        );
+        /**
+         * 用户可配置的压缩/聚合黑名单默认值。
+         * <p>
+         * 默认为空：Hassium 控制面 / 独立压缩通道（main、dictionary_sync、index_sync、
+         * light_delta、aggregation、play_init、shadow_pull 等）由
+         * {@code PacketCompressionBlacklist.HARDCODED_BLACKLIST} 永久排除，与本列表无关。
+         * 本列表仅用于第三方包 ID 的逃生排除。
+         */
+        public static final Set<String> DEFAULT_COMPRESSION_BLACKLIST = Set.of();
 
         public static final MasterCoreConfig DEFAULT = new MasterCoreConfig(
                 true,              // enabled（专用服网络通道总开关）

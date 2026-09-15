@@ -36,7 +36,7 @@ A: Conditionally. Hassium's channel compression never touches the vanilla compre
 
 ### Q: A third-party mod's packets break inside Hassium aggregation?
 
-A: Escape hatches: (1) `master.enablePacketAggregation = false`, or (2) add that packet ID to `master.compressionBlacklist`.
+A: Escape hatches: (1) `master.enablePacketAggregation = false`, or (2) add that **third-party** packet ID to `master.compressionBlacklist` (Hassium control-plane is always hard-coded excluded; this list is for third-party only). If the packet is a Hassium `hassium:*` ID, check that both sides run matching versions — do not put it on the blacklist.
 
 ### Q: Which ports does a public deployment need?
 

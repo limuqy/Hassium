@@ -48,7 +48,7 @@ Current network-related keys (full table in [Configuration](Configuration-en)):
 | `chunk.enabled` | `true` | Client chunk-core master switch (gate for Pull mode / shadow server / cache) |
 | `master.enablePacketAggregation` | `true` | Packet aggregation |
 | `master.aggregationMaxWaitTimeMs` | `50` | Aggregation max wait (ms; ACK timeout 5s auto-downgrades to direct send) |
-| `master.compressionBlacklist` | control-plane keys | Compression / aggregation blacklist |
+| `master.compressionBlacklist` | `[]` | Third-party packet compression / aggregation exclusion (Hassium control-plane is always hard-coded excluded) |
 
 Public deployments only need to open the game port (vanilla TCP); there are no gateway / UDP ports.
 

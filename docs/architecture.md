@@ -290,7 +290,7 @@ Sector 2+:    [length(4)][type=126][magic 0x48][hash(8)][ZSTD 压缩数据]
 | `master.compressionLevel` | 3 | 自有通道 ZSTD 压缩等级（速度优先） |
 | `master.maxChunksPerTick` | **5** | 每玩家每 tick 完成的 Pull FULL/DELTA 上限（主线程 hash/比较；encode/ZSTD 在推送池；满 tick ≈ 100/s） |
 | `master.enablePacketAggregation` / `aggregationMaxWaitTimeMs` / `aggregationMaxSize` | `true` / `50ms` / `256KB` | 包聚合（服务端拦截 + 客户端反聚合；tick 尾异步冲刷 + maxWait 兜底；ACK 超时 5s 自动降级） |
-| `master.compressionBlacklist` | 控制面键集 | 压缩/聚合黑名单（控制面不进聚合缓冲） |
+| `master.compressionBlacklist` | `[]` | 第三方包压缩/聚合排除（默认空）。Hassium 控制面由 `PacketCompressionBlacklist` 硬编码永久排除，改本列表不影响它们 |
 | `compat.requireClientMod` | false | 无模组客户端可连（true 时登录期握手失败即踢出，替代超时等待） |
 | `compat.autoDowngradeOnError` | true | 出错时自动降级 |
 | `debug.*` | 多为 `false` | 调试分类日志，见 §10（`debug.networkMetricsAutoReset` 默认 `true`） |

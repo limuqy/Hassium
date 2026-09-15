@@ -50,7 +50,7 @@ Enable one category at a time; hot paths are quiet by default and enabling every
 | refmap WARNs at client startup | Normal in Loom dev environments | Ignore; release jars do not reproduce |
 | Kicked from the server | `compat.requireClientMod = true` and the client lacks the mod | Install Hassium on the client; or set server `requireClientMod = false` |
 | Saves unreadable | type 126 left behind after uninstalling/downgrading | Reinstall the Hassium build matching the save |
-| Aggregation breaks third-party packets | Aggregation interference | Disable `master.enablePacketAggregation` or add `master.compressionBlacklist` |
+| Aggregation breaks third-party packets | Aggregation interference | Disable `master.enablePacketAggregation` or add the **third-party** packet ID to `master.compressionBlacklist` (Hassium control-plane is always hard-coded excluded) |
 | Heavy re-downloads after reconnect | Shadow save out of sync with the server / cache dir broken | Check the matching `hassium_cache` dir and disk space; some MISSes on the first load are normal — persistent re-downloads: delete that server's cache dir and rejoin (below) |
 
 ---

@@ -36,7 +36,7 @@ A: 有条件。Hassium 通道压缩不触碰原版压缩层（管线级全局包
 
 ### Q: 第三方 mod 的包被 Hassium 聚合后报错？
 
-A: 逃生：(1) `master.enablePacketAggregation = false`，或 (2) 把该包 ID 加进 `master.compressionBlacklist`。
+A: 逃生：(1) `master.enablePacketAggregation = false`，或 (2) 把该**第三方**包 ID 加进 `master.compressionBlacklist`（Hassium 控制面已硬编码排除，本列表只用于第三方）。若是 Hassium 自有 `hassium:*` 包，请检查双端版本是否匹配，不要往黑名单塞。
 
 ### Q: 公网部署需要放行哪些端口？
 

@@ -73,7 +73,8 @@ public final class ConfigSchema {
             "聚合最大大小", "Aggregation max size (bytes)");
     public static final ConfigKey<List<String>> MASTER_COMPRESSION_BLACKLIST = stringList("master.compressionBlacklist", ConfigScope.SERVER, Domain.MASTER_CORE,
             () -> new ArrayList<>(HassiumConfig.MasterCoreConfig.DEFAULT_COMPRESSION_BLACKLIST),
-            "压缩/聚合黑名单", "Compression / aggregation blacklist");
+            "第三方包 ID 的压缩/聚合排除列表（默认空）。Hassium 控制面与独立压缩通道已硬编码排除，改本列表不影响它们",
+            "Third-party packet IDs excluded from compression / aggregation (default empty). Hassium control-plane and private channels are always hard-coded excluded; editing this list does not affect them");
     public static final ConfigKey<Integer> MASTER_MAX_CHUNKS_PER_TICK = integer("master.maxChunksPerTick", ConfigScope.SERVER, Domain.MASTER_CORE, 5, 1, 256,
             "每玩家每 tick 完成的 Pull 裁决上限（FULL/DELTA；满 tick ≈ 本值×20/s）",
             "Per-player per-tick Pull completion cap for FULL/DELTA (≈ value×20/s at full tick)");

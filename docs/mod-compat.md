@@ -12,7 +12,7 @@
 | Immersive Portals | **不兼容** |
 | 同类压缩 / 协议替换（改 Netty Zlib 等） | **不兼容**；Hassium 通道压缩虽不触碰 vanilla 压缩层，但同类 mod 若替换原版压缩管线仍有冲突面 |
 | Starlight / ScalableLux | **主动兼容**（见 §7b）：光照引擎被整体替换，影子端 4 处控制面已适配 |
-| 包聚合导致第三方包异常 | 关 `master.enablePacketAggregation`，或把包 ID 加入 `master.compressionBlacklist` |
+| 包聚合导致第三方包异常 | 关 `master.enablePacketAggregation`，或把**第三方**包 ID 加入 `master.compressionBlacklist`（Hassium 控制面已硬编码排除，与本列表无关） |
 | 反透视（改 chunk 发包内容） | **希望兼容**（miss 路径复用已构建包字节，见 §3） |
 | Distant Horizons / Voxy | **希望兼容**（独立 LOD 通道；见 §4） |
 | Sodium / Iris / Lithium / FerriteCore 等热门优化 | **冒烟通过**（Fabric 1.20.1，见 §6 / §10） |
@@ -44,7 +44,7 @@ Hassium 主要改动：
 - DH 2.3+、Voxy 服务端伴生 mod 使用**独立 LOD / 自定义通道**，一般不依赖原版全量区块包，与 Hassium 区块链路正交。
 - 风险：包聚合可能拖延其控制/数据通道。处理方式：
   - `master.enablePacketAggregation = false`，或
-  - 将通道 ID 加入 `master.compressionBlacklist`（示例前缀，以实际包 ID 为准：`distant_horizons:`、伴生 mod 的 `namespace:`）。
+  - 将**第三方**通道 ID 加入 `master.compressionBlacklist`（示例前缀，以实际包 ID 为准：`distant_horizons:`、伴生 mod 的 `namespace:`；Hassium 控制面已硬编码排除，与本列表无关）。
 - LOD 若经 `RegionFile.getChunkDataInputStream` 读盘：type 126 可由 Hassium Mixin 解压。若工具**裸解析 `.mca`** 且不认 126，会失败——属存档格式约束。
 
 ## 5. ViaFabric / 跨版本客户端
@@ -181,7 +181,7 @@ ScalableLux 另引入 FlowSched 多线程算光，批处理多柱时收益更明
 | `storage.enabled` | 关存档 type 126 |
 | `master.enabled` | 关服务端网络通道 / 推送 |
 | `master.enablePacketAggregation` | 关包聚合 |
-| `master.compressionBlacklist` | 排除指定包 ID（第三方通道） |
+| `master.compressionBlacklist` | 排除指定**第三方**包 ID（Hassium 控制面已硬编码排除） |
 | `chunk.enabled` | 关区块核心（影子端/缓存/Pull 模式；服务端不剥光，光照随包自带） |
 | `chunk.sectionDeltaEnabled` | 关分段增量（过期改走全量） |
 | `compat.requireClientMod` | 是否强制客户端装模组 |

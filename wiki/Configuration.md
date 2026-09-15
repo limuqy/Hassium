@@ -64,7 +64,7 @@ Hassium 启动时在 `config/hassium/` 自动生成两份 TOML：
 | `master.enablePacketAggregation` | `true` | 包聚合；第三方通道被拦截异常时关掉 |
 | `master.aggregationMaxWaitTimeMs` | `50` | 冲刷兜底（ms；tick 尾冲刷为主，超过该时长未冲刷则强制冲一次；ACK 超时 5s 自动降级直发） |
 | `master.aggregationMaxSize` | `262144` | 聚合最大大小（字节） |
-| `master.compressionBlacklist` | 控制面键集 | 包 ID 列表，命中的包不进压缩/聚合（默认含控制面：字典 / 索引 / 光增量 / 聚合自身等） |
+| `master.compressionBlacklist` | `[]` | 第三方包 ID 列表，命中的包不进压缩/聚合。**Hassium 控制面**（字典 / 索引 / 光增量 / 聚合自身 / main 等）已硬编码永久排除，写不写本列表都不影响 |
 | `master.maxChunksPerTick` | `5` | 每玩家每 tick 完成的 Pull FULL/DELTA 上限（发送速率 = 本值 × tick 节奏，满 tick ≈ 5×20 = 100/s；UNCHANGED 另额 32；掉刻自然降速保护主线程） |
 
 ### 存储（`storage.*`）

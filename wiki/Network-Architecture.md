@@ -48,7 +48,7 @@
 | `chunk.enabled` | `true` | 客户端区块核心总开关（Pull 模式 / 影子端 / 缓存的门） |
 | `master.enablePacketAggregation` | `true` | 包聚合 |
 | `master.aggregationMaxWaitTimeMs` | `50` | 聚合最大等待（ms；ACK 超时 5s 自动降级直发） |
-| `master.compressionBlacklist` | 控制面键集 | 压缩 / 聚合黑名单 |
+| `master.compressionBlacklist` | `[]` | 第三方包压缩 / 聚合排除（Hassium 控制面已硬编码排除） |
 
 公网部署只需放行游戏端口（vanilla TCP）；无网关 / UDP 端口。
 

@@ -16,7 +16,7 @@ Overview of Hassium's compatibility with common optimization mods, plus configur
 | **Immersive Portals** | ❌ **Incompatible** | |
 | **Similar compression / protocol replacements (Netty Zlib swaps)** | ⚠️ Conditional | Hassium's channel compression never touches the vanilla compression layer; conflicts remain if the other mod replaces the vanilla pipeline — pick one |
 | **Starlight** | — **N/A** | Merged into vanilla lighting |
-| **Aggregation breaking third-party packets** | ⚠️ Disable aggregation or blacklist | `master.enablePacketAggregation = false` or `master.compressionBlacklist` |
+| **Aggregation breaking third-party packets** | ⚠️ Disable aggregation or blacklist | `master.enablePacketAggregation = false` or `master.compressionBlacklist` (third-party IDs; Hassium control-plane is always hard-coded excluded) |
 | **Anti-x-ray (rewrites outgoing chunk packets)** | ✅ Intended compatible | Miss path reuses already-built packet bytes; implementations that rewrite only on `Connection.send` after Hassium's cancel may bypass |
 | **Distant Horizons / Voxy** | ✅ Intended compatible | Independent LOD channels; same aggregation escape if needed |
 | **ViaVersion** | ⚠️ Conditional | See table below |

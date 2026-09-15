@@ -50,7 +50,7 @@
 | 客户端启动报 refmap WARN | Loom 开发环境常态 | 忽略；正式 jar 不复现 |
 | 服务端连接被踢 | `compat.requireClientMod = true` 且客户端未装 | 客户端装 Hassium；或服务端 `requireClientMod = false` |
 | 存档读不出来 | 卸载/降级 Hassium 后残留 type 126 | 重新安装与存档兼容的 Hassium 版本 |
-| 聚合把第三方包搞坏 | 包聚合误伤 | 关 `master.enablePacketAggregation` 或加 `master.compressionBlacklist` |
+| 聚合把第三方包搞坏 | 包聚合误伤 | 关 `master.enablePacketAggregation`，或把**第三方**包 ID 加进 `master.compressionBlacklist`（Hassium 控制面已硬编码排除） |
 | 重连后大量区块重下 | 影子端存档与服务端不一致 / 缓存目录异常 | 检查 `hassium_cache` 对应目录与磁盘空间；重连后首次加载出现部分 MISS 属正常，持续重下则删除该服务器缓存目录重进（见下） |
 
 ---

@@ -103,7 +103,7 @@ Forge 支持 1.20.1 / 1.21.1 / 1.21.3–1.21.10（1.21.2 上游无 Forge userdev
 | `master.aggregationMaxWaitTimeMs` | `50` | 聚合最大等待（ms；ACK 超时 5s 自动降级直发） |
 | `master.aggregationMaxSize` | `262144` | 聚合最大大小（字节） |
 | `master.compressionLevel` | `3` | 自有通道 ZSTD 压缩等级 |
-| `master.compressionBlacklist` | 控制面键集 | 压缩/聚合黑名单（控制面不进聚合缓冲） |
+| `master.compressionBlacklist` | `[]` | 第三方包压缩/聚合排除（默认空；Hassium 控制面已硬编码排除） |
 | `compat.requireClientMod` | `false` | 无模组客户端可连（true 时登录期握手失败即踢出） |
 | `compat.autoDowngradeOnError` | `true` | 出错时自动降级 |
 | `debug.*` | 多为 `false` | 分类调试日志（默认安静；热路径走 `DebugLogger`；`networkMetricsAutoReset` 默认 `true`） |

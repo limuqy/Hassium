@@ -64,7 +64,7 @@ In-game editors:
 | `master.enablePacketAggregation` | `true` | Packet aggregation; turn off if it breaks third-party channels |
 | `master.aggregationMaxWaitTimeMs` | `50` | Flush watchdog (ms; tick-end flush is primary; force flush if none happened for this long; ACK timeout 5s auto-downgrades to direct send) |
 | `master.aggregationMaxSize` | `262144` | Aggregation max size (bytes) |
-| `master.compressionBlacklist` | control-plane keys | Packet IDs excluded from compression/aggregation (defaults cover control plane: dictionary / index / light delta / aggregation itself, etc.) |
+| `master.compressionBlacklist` | `[]` | Third-party packet IDs excluded from compression/aggregation. Hassium control-plane (dictionary / index / light delta / aggregation / main, etc.) is always hard-coded excluded — this list cannot change that |
 | `master.maxChunksPerTick` | `5` | Per-player per-tick Pull FULL/DELTA completion cap (send rate = value × tick pace, ≈ 5×20 = 100/s at full tick; UNCHANGED is a separate cap of 32; degrades naturally on laggy ticks) |
 
 ### Storage (`storage.*`)
