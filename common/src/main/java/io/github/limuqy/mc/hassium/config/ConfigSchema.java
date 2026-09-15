@@ -76,8 +76,8 @@ public final class ConfigSchema {
             "第三方包 ID 的压缩/聚合排除列表（默认空）。Hassium 控制面与独立压缩通道已硬编码排除，改本列表不影响它们",
             "Third-party packet IDs excluded from compression / aggregation (default empty). Hassium control-plane and private channels are always hard-coded excluded; editing this list does not affect them");
     public static final ConfigKey<Integer> MASTER_MAX_CHUNKS_PER_TICK = integer("master.maxChunksPerTick", ConfigScope.SERVER, Domain.MASTER_CORE, 5, 1, 256,
-            "每玩家每 tick 完成的 Pull 裁决上限（FULL/DELTA；满 tick ≈ 本值×20/s）",
-            "Per-player per-tick Pull completion cap for FULL/DELTA (≈ value×20/s at full tick)");
+            "每玩家每 tick 区块下发上限：Pull FULL/DELTA 完成 + 原版通道整柱发送（满 tick ≈ 本值×20/s）",
+            "Per-player per-tick chunk send cap: Pull FULL/DELTA completions + vanilla whole-chunk path (≈ value×20/s at full tick)");
 
     // === 实体网络优化（master.entity*；SERVER 键族；分档表统一逗号分隔，减少配置量）===
     public static final ConfigKey<Boolean> MASTER_ENTITY_TIERED_UPDATE = bool("master.entityTieredUpdateEnabled", ConfigScope.SERVER, Domain.MASTER_CORE, true,

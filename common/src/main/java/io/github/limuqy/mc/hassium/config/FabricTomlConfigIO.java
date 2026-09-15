@@ -537,7 +537,7 @@ public final class FabricTomlConfigIO {
         set(cfg, "master.aggregationMaxWaitTimeMs", (int) n.aggregationMaxWaitTimeMs(), "冲刷兜底（ms；tick 尾冲刷为主，超时未冲则强制冲）", ConfigScope.SERVER);
         set(cfg, "master.aggregationMaxSize", n.aggregationMaxSize(), "聚合最大大小（字节）", ConfigScope.SERVER);
         set(cfg, "master.compressionBlacklist", new ArrayList<>(n.compressionBlacklist()), "第三方包压缩/聚合排除（Hassium 控制面已硬编码，与本列表无关）", ConfigScope.SERVER);
-        set(cfg, "master.maxChunksPerTick", n.maxChunksPerTick(), "每玩家每 tick 完成的 Pull FULL/DELTA 上限（UNCHANGED 另额 32；满 tick ≈ 本值×20/s，仅服务端）", ConfigScope.SERVER);
+        set(cfg, "master.maxChunksPerTick", n.maxChunksPerTick(), "每玩家每 tick 区块下发上限（Pull FULL/DELTA 完成 + 原版整柱；UNCHANGED 另额 32；满 tick ≈ 本值×20/s，仅服务端）", ConfigScope.SERVER);
         set(cfg, "master.entityTieredUpdateEnabled", n.entityTieredUpdateEnabled(), "启用实体分层更新（按观察者距离四挡降频）", ConfigScope.SERVER);
         set(cfg, "master.entityTierIntervals", n.entityTierIntervals(), "实体各档更新间隔（刻），逗号分隔，按 近/中/远/边缘 顺序；挡位边界 = 有效跟踪范围的 25%/50%/75%/100%", ConfigScope.SERVER);
         set(cfg, "master.entityItemTierIntervals", n.entityItemTierIntervals(), "掉落物与经验球的四档更新间隔（刻），逗号分隔、顺序同上，默认 2,4,8,16", ConfigScope.SERVER);

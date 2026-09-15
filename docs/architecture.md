@@ -251,7 +251,7 @@ Sector 2+:    [length(4)][type=126][magic 0x48][hash(8)][ZSTD 压缩数据]
 | 通道压缩 | **仅两处，均不触碰 vanilla 压缩层**：聚合包内部字典 ZSTD（发送时 EventLoop 阈值翻折防双重压缩）+ 区块推送自有压缩。管线级全局包压缩已退役 | — |
 | 包聚合 | 服务端 vanilla 路径（`MixinConnection` 拦截）；客户端反聚合 receiver；ACK 超时 5s 降级；批次等待默认 50ms | `master.enablePacketAggregation=true` |
 | 紧凑包头 | 聚合包内 `CompactHeaderCodec`（两级 VarInt 命名空间索引，`index_sync_s2c` 同步） | 默认启用（能力位协商） |
-| 平滑推送 | 每 tick Pull 完成上限（`master.maxChunksPerTick=5` FULL/DELTA，满 tick ≈ 100/s；UNCHANGED 另额 32）；主线程 hash/比较/packet 快照，encode/ZSTD 在推送池 | 默认启用 |
+| 平滑推送 | 每 tick 区块下发上限（`master.maxChunksPerTick=5`：Pull FULL/DELTA 完成 + 原版整柱，满 tick ≈ 100/s；UNCHANGED 另额 32）；专用服全员 / LAN 远程；主线程 hash/比较/packet 快照，encode/ZSTD 在推送池 | 默认启用 |
 
 控制面（握手、index sync、chunkHash 等）在压缩黑名单，不进 PENDING 聚合缓冲；区块图控制包（`forget_level_chunk` / `set_chunk_cache_center` / `set_chunk_cache_radius`）保持直发（pull 模式域，规避顺序倒置窗口）；实体高频包（位移/旋转/motion 等）进聚合（2026-09-14 评估放开：tick 尾 + 50ms watchdog 兜底使帧 staleness 上界恒定，客户端重放路径与原版等价）；`ClientboundBundlePacket` 直发（1.21.1+ play codec 表无 bundle 条目，无法经聚合序列化）。UDP 数据面/网关帧协议/L1 迁移已随直连拓扑裁剪（历史见 [`archive/multi-channel_network_research.md`](archive/multi-channel_network_research.md)）。
 
@@ -288,7 +288,7 @@ Sector 2+:    [length(4)][type=126][magic 0x48][hash(8)][ZSTD 压缩数据]
 | `chunk.lightStrip` | true | 服务端光照剥离，必须经 Hassium 能力握手 |
 | `master.enabled` | true | 服务端网络通道总开关（登录期握手/压缩/聚合的门） |
 | `master.compressionLevel` | 3 | 自有通道 ZSTD 压缩等级（速度优先） |
-| `master.maxChunksPerTick` | **5** | 每玩家每 tick 完成的 Pull FULL/DELTA 上限（主线程 hash/比较；encode/ZSTD 在推送池；满 tick ≈ 100/s） |
+| `master.maxChunksPerTick` | **5** | 每玩家每 tick 区块下发上限：Pull FULL/DELTA 完成 + 原版通道整柱（专用服全员 / LAN 远程；1.21+ 钳 `PlayerChunkSender`，1.20.1 滴灌 `trackChunk`；满 tick ≈ 100/s） |
 | `master.enablePacketAggregation` / `aggregationMaxWaitTimeMs` / `aggregationMaxSize` | `true` / `50ms` / `256KB` | 包聚合（服务端拦截 + 客户端反聚合；tick 尾异步冲刷 + maxWait 兜底；ACK 超时 5s 自动降级） |
 | `master.compressionBlacklist` | `[]` | 第三方包压缩/聚合排除（默认空）。Hassium 控制面由 `PacketCompressionBlacklist` 硬编码永久排除，改本列表不影响它们 |
 | `compat.requireClientMod` | false | 无模组客户端可连（true 时登录期握手失败即踢出，替代超时等待） |

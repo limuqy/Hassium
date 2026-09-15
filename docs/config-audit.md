@@ -85,7 +85,7 @@
 | `master.aggregationMaxWaitTimeMs` | `50` | 冲刷兜底（ms；tick 尾冲刷为主，超过该时长未冲刷则强制冲一次；ACK 超时 5s 自动降级直发） |
 | `master.aggregationMaxSize` | `262144` | 聚合最大大小（字节；1024–8388608） |
 | `master.compressionBlacklist` | `[]` | 第三方包压缩/聚合排除（默认空）。Hassium 控制面/独立压缩通道由 `PacketCompressionBlacklist` 硬编码永久排除，改本列表不影响它们 |
-| `master.maxChunksPerTick` | `5` | 每玩家每 tick 完成的 Pull FULL/DELTA 上限（满 tick ≈ 本值×20/s；UNCHANGED 另额 32） |
+| `master.maxChunksPerTick` | `5` | 每玩家每 tick 区块下发上限：Pull FULL/DELTA 完成 + 原版整柱（专用服 / LAN 远程；满 tick ≈ 本值×20/s；UNCHANGED 另额 32） |
 | `master.entityTieredUpdateEnabled` | `true` | 实体分层更新总开关（按观察者距离分四挡降频下发实体更新） |
 | `master.entityTierIntervals` | `"3,6,10,20"` | 实体各档更新间隔（刻），逗号分隔按 **近/中/远/边缘**；挡位边界 = 有效跟踪范围的 25%/50%/75%/100%。须非降序（远档更勤会被上推到前档）；≤ 0 = 未配置 ⇒ 回落默认；元素个数必须为 4，否则整表回落默认 |
 | `master.entityItemTierIntervals` | `"2,4,8,16"` | 物品流（掉落物/经验球）各档更新间隔（刻），逗号分隔、顺序同上、容错口径同上。物品流必须单独一张表（其原版 `updateInterval=20` 是空闲节拍） |

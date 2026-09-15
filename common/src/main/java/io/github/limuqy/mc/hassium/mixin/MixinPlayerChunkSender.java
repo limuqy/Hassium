@@ -45,6 +45,7 @@ public abstract class MixinPlayerChunkSender {
 
     /**
      * 源头定额：把原版 {@code sendNextChunks} 的 batch 钳到 {@code maxChunksPerTick}。
+     * 与压缩/握手无关——专用服与 LAN 远程玩家一律限速，自有 Pull 通道与原版通道同频。
      * 影子虚拟玩家没有客户端 ACK，{@code unacknowledgedBatches} 会在首批后永久卡住；
      * 影子 {@code runMainLoop} 也不走 {@code MinecraftServer} 的 send-chunks 泵，
      * 由 {@link io.github.limuqy.mc.hassium.compat.ShadowPlayerCompat#flushVirtualPlayerChunks}
@@ -57,6 +58,8 @@ public abstract class MixinPlayerChunkSender {
             hassium$forceQuota = false;
             return;
         }
+        hassium$forceQuota = io.github.limuqy.mc.hassium.network.ServerNetworkGate
+                .shouldRateLimitChunkSend(player);
         if (!hassium$forceQuota) {
             return;
         }

@@ -163,7 +163,7 @@ public record HassiumConfig(
                 50,                // aggregationMaxWaitTimeMs（冲刷兜底）
                 256 * 1024,        // aggregationMaxSize
                 DEFAULT_COMPRESSION_BLACKLIST,
-                5,                 // maxChunksPerTick（Pull FULL/DELTA 完成配额，满 tick ≈ 100/s）
+                5,                 // maxChunksPerTick（Pull FULL/DELTA + 原版整柱，满 tick ≈ 100/s）
                 true,              // entityTieredUpdateEnabled（实体分层更新总开关）
                 EntityUpdateTiering.DEFAULT_ENTITY_INTERVALS,     // entityTierIntervals（近/中/远/边缘）
                 EntityUpdateTiering.DEFAULT_ITEM_INTERVALS,       // entityItemTierIntervals（物品流独立表）

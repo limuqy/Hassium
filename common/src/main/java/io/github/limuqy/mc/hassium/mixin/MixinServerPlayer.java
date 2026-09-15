@@ -45,7 +45,16 @@ public abstract class MixinServerPlayer extends Player {
     }
 
 #if MC_VER < MC_1_21_1
-    /** 1.20.1：把 vanilla tracking 产生的首包转为 Hassium 推送任务。 */
+    /**
+     * 1.20.1 原版滴灌缓冲：trackChunk 无 PlayerChunkSender 批配额，专用服 / LAN 远程
+     * 玩家的整柱包先入队，每 tick 按 {@code maxChunksPerTick} 近优先发出。
+     * Pull 玩家走权威边沿 + 客户端自取，不进本缓冲。
+     */
+    @org.spongepowered.asm.mixin.Unique
+    private final java.util.Map<Long, Packet<?>> hassium$pendingVanillaChunks =
+            new java.util.LinkedHashMap<>();
+
+    /** 1.20.1：Pull 抑制 / 原版滴灌入队 / 其余原样直发。 */
     @Inject(method = "trackChunk", at = @At("HEAD"), cancellable = true)
     private void hassium$onTrackChunk(ChunkPos pos, Packet<?> chunkPacket, CallbackInfo ci) {
         ServerPlayer self = (ServerPlayer) (Object) this;
@@ -60,8 +69,58 @@ public abstract class MixinServerPlayer extends Player {
                 io.github.limuqy.mc.hassium.network.ChunkAuthorityNotifier.onAuthoritativeEnter(
                         self, io.github.limuqy.mc.hassium.compat.PlayerCompat.getServerLevel(self), pos);
                 ci.cancel();
+                return;
             }
-            // 非 pull 兼容路径：放行原版 trackChunk（SeedRef 直推已退役）
+            // 非 pull 兼容路径：落入下方原版滴灌判定
+        }
+        if (chunkPacket != null
+                && io.github.limuqy.mc.hassium.network.ServerNetworkGate.shouldRateLimitChunkSend(self)) {
+            hassium$pendingVanillaChunks.put(pos.toLong(), chunkPacket);
+            ci.cancel();
+        }
+    }
+
+    /**
+     * 取消跟踪时丢弃未发出的 load，避免「先 forget 后补 load」把幽灵柱留在客户端。
+     */
+    @Inject(method = "untrackChunk", at = @At("HEAD"))
+    private void hassium$dropPendingOnUntrack(ChunkPos pos, CallbackInfo ci) {
+        hassium$pendingVanillaChunks.remove(pos.toLong());
+    }
+
+    @Inject(method = "tick", at = @At("RETURN"))
+    private void hassium$flushPendingVanillaChunks(CallbackInfo ci) {
+        if (hassium$pendingVanillaChunks.isEmpty()) {
+            return;
+        }
+        ServerPlayer self = (ServerPlayer) (Object) this;
+        if (self.hasDisconnected() || self.isRemoved()
+                || !io.github.limuqy.mc.hassium.network.ServerNetworkGate.shouldRateLimitChunkSend(self)) {
+            hassium$pendingVanillaChunks.clear();
+            return;
+        }
+        int max = io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance()
+                .getConfig().master().maxChunksPerTick();
+        if (max <= 0) {
+            max = 4;
+        }
+        ChunkPos center = self.chunkPosition();
+        java.util.List<java.util.Map.Entry<Long, Packet<?>>> live =
+                new java.util.ArrayList<>(hassium$pendingVanillaChunks.entrySet());
+        live.sort(java.util.Comparator.comparingLong(e -> {
+            ChunkPos pos = new ChunkPos(e.getKey());
+            long dx = (long) pos.x - center.x;
+            long dz = (long) pos.z - center.z;
+            return dx * dx + dz * dz;
+        }));
+        int sent = 0;
+        for (java.util.Map.Entry<Long, Packet<?>> e : live) {
+            if (sent >= max) {
+                break;
+            }
+            hassium$pendingVanillaChunks.remove(e.getKey());
+            self.connection.send(e.getValue());
+            sent++;
         }
     }
 

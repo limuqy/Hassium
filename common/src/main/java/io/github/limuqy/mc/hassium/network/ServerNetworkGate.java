@@ -80,4 +80,28 @@ public final class ServerNetworkGate {
         }
         return isMemoryConnection(io.github.limuqy.mc.hassium.compat.PlayerCompat.getConnection(player));
     }
+
+    /**
+     * 该玩家的原版整柱下发是否接受 {@code master.maxChunksPerTick} 限速。
+     * <ul>
+     *   <li>影子端：否（虚拟连接走 {@code ShadowPlayerCompat} 补泵）</li>
+     *   <li>专用服：是（含尚未握手的原版客户端；与自有 Pull 通道同频）</li>
+     *   <li>集成服已开局域网：仅远程玩家（主机 memory 连接保持原版速度）</li>
+     * </ul>
+     * 与 {@code master.enabled} / 握手状态无关：限速是服务端出口保护，
+     * 不得因 Hassium 未启用而让原版客户端打满带宽。
+     */
+    public static boolean shouldRateLimitChunkSend(net.minecraft.server.level.ServerPlayer player) {
+        if (RuntimeServerContext.isShadowServerContext()) {
+            return false;
+        }
+        if (RuntimeServerContext.isDedicatedServerContext()) {
+            return true;
+        }
+        MinecraftServer server = RuntimeServerContext.getActiveServer();
+        if (server == null || !server.isPublished()) {
+            return false;
+        }
+        return !isMemoryConnection(io.github.limuqy.mc.hassium.compat.PlayerCompat.getConnection(player));
+    }
 }

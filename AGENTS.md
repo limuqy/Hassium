@@ -149,7 +149,7 @@ fabric/ | forge/ | neoforge/
 | `storage.enabled` | **false** | 默认关；开启后改存档格式（type 126）→ 提醒备份；**运行时仅专用服生效**（`isStorageEnabled` 门控 `RuntimeServerContext`），单人/局域网保持原版格式（读兼容）；客户端影子端（hassium_cache）固定写 126，不受本开关约束 |
 | `master.enabled` | true | 专用服网络通道总开关（登录期握手/聚合的门） |
 | `master.enabledOnLan` | **false** | 集成服已开局域网时对**远程**玩家启用网络面；本机 memory 恒原版；storage 仍仅专用服 |
-| `master.maxChunksPerTick` | 5 | 每玩家每 tick 完成的 Pull FULL/DELTA 上限（满 tick ≈ 100/s；UNCHANGED 另额 32） |
+| `master.maxChunksPerTick` | 5 | 每玩家每 tick 区块下发上限：Pull FULL/DELTA 完成 + **原版通道整柱**（专用服全员 / LAN 远程；满 tick ≈ 100/s；UNCHANGED 另额 32） |
 |`master.entity*`|见文档|实体域降帧 **9 键**（分层更新总开关 1 `entityTieredUpdateEnabled`；**两张逗号分隔档位表**（近/中/远/边际，须非降序）`entityTierIntervals`=`3,6,10,20` 与物品流独立的 `entityItemTierIntervals`=`2,4,8,16`——掉落物/经验球原版 `updateInterval`=20 是空闲节拍、位置靠每 tick `hasImpulse`，共用生物表会被压平成 1 包/s 而闪现；热点分档 3 `entityDensityTierCounts`/`entityDensityTierFactors`（逗号分隔按 近/中/远/边缘，支持小数）+ `entityMaxThrottleFactor` 总上限；帧预算压力 1 `entityFrameBudgetPerPlayer`；错峰推送 1 `entitySmoothPushEnabled`——同间隔实体按 UUID 错开发送时刻，3 刻总量不变、摊平齐发尖峰），默认全开；全关 = 行为等同未接入。**vanilla 兼容、不要求客户端握手**：只改复制节拍，门控 = 主服实例 + `master.enabled`/`enabledOnLan` 总闸 + entity* 配置（压力采样覆盖全部游戏态连接）；玩家实体与 ItemFrame 类豁免；**密度按实体自己所在 chunk 统计（局部）**，**压力每观察者一份（独立反压，取最近观察者那份作用于实体）**；只改复制（下发客户端）节拍，不碰服务端实体 tick/漏斗判定。实施与设计修正记录见 [`docs/handoff/entity-network-optimization-plan.md`](docs/handoff/entity-network-optimization-plan.md) §6/§8/§9|
 | `chunk.enabled` | true | 区块核心总开关（影子端世界保存/算光/缓存/Pull 模式；关后全程原版路径） |
 | `chunk.seedGenEnabled` | **false** | 双端同版本；**服务端开启会泄露世界种子** |
