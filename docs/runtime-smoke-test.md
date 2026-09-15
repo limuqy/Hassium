@@ -10,7 +10,7 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 |----|------|------|------|
 | **L0** | `common:test` | 随单元测试跑 | JUnit 代码级冒烟，无 MC 实例。代表：`LoginHandshakeTest`（登录期握手编解码/协商）、`ShadowPull*Test`（统一 Compare+Pull 协议族）、`SectionDeltaProtocolTest` |
 | **L1** | classic 场景 | 全矩阵（12 版 × fabric/neoforge，按 `builds_for` 过滤；1.20.1 无 neoforge 自动 SKIP） | 两轮连服 VD 切换（VD=20 → 断开 → VD=10），核心缓存 / 分段增量 / 光照 / 聚合通道全链路验证 |
-| **L2** | 场景目录 | 锚点集：1.20.1 fabric+forge、1.21.1 neoforge、1.21.11 neoforge | 数据驱动场景（seedgen / dimension），只在锚点版本×加载器组合上跑，控制总时长 |
+| **L2** | 场景目录 | 锚点集：1.20.1 forge、1.21.1 neoforge、1.21.11 fabric | 数据驱动场景（seedgen / dimension），只在锚点版本×加载器组合上跑，控制总时长 |
 
 ## 概述
 
@@ -46,7 +46,7 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 # 批量多场景：classic 走全矩阵，seedgen/dimension 只在锚点集跑（固定串行）
 .\scripts\runtime-smoke-test-batch.ps1 -Phase I -Scenarios classic,seedgen,dimension
 
-# B4 / 区块核心验证：只跑 L2 锚点（1.20.1 fabric、1.21.1 neoforge、1.21.11 neoforge）
+# B4 / 区块核心验证：只跑 L2 锚点（1.20.1 forge、1.21.1 neoforge、1.21.11 fabric）
 .\scripts\runtime-smoke-test-batch.ps1 -Phase I -Scenarios seedgen,dimension
 
 # 仅指定版本×fabric
@@ -88,7 +88,7 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 | 参数 | 必填 | 默认 | 说明 |
 |------|------|------|------|
 | `-Phase` | 是 | — | `I` 或 `R` |
-| `-Scenarios` | 否 | `classic` | 场景列表（逗号分隔）。`classic` 走全矩阵（`-Versions` × `-Loaders`）；非 classic 场景只跑锚点集（硬编码：1.20.1 fabric+forge、1.21.1 neoforge、1.21.11 neoforge，再与 `-Versions`/`-Loaders`/`builds_for` 取交集）。非 classic 会话 sessionId 追加 `_<scenario>` 后缀避免 result JSON 冲突 |
+| `-Scenarios` | 否 | `classic` | 场景列表（逗号分隔）。`classic` 走全矩阵（`-Versions` × `-Loaders`）；非 classic 场景只跑锚点集（硬编码：1.20.1 forge、1.21.1 neoforge、1.21.11 fabric，再与 `-Versions`/`-Loaders`/`builds_for` 取交集）。非 classic 会话 sessionId 追加 `_<scenario>` 后缀避免 result JSON 冲突 |
 | `-Versions` | 否 | 全部 12 版 | 指定版本子集 |
 | `-Loaders` | 否 | `fabric,neoforge` | 加载器子集 |
 | `-MaxRetries` | 否 | `3` | 仅游戏打不开时重试（服务端未就绪 / 客户端没写出 ROUND1）。进过世界的业务 FAIL 不重跑 |
@@ -280,7 +280,7 @@ Starlight 与 ScalableLux **互斥**（后者 `provides: ["starlight"]`），且
     -SessionId "1.20.1_fabric_I_baseline" -Scenario modcompat
 ```
 
-**不要用 batch 脚本**：它把非 classic 场景限定在 neoforge 锚点集，而本矩阵全是 fabric jar。
+**不要用 batch 脚本**：它把非 classic 场景限定在锚点集（1.20.1 forge / 1.21.1 neoforge / 1.21.11 fabric），而本矩阵全是 fabric jar。
 
 ### PROBE 新增段（`modCompat`，只增不改）
 

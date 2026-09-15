@@ -189,9 +189,7 @@ Mod 客户端 ←──唯一 vanilla TCP（登录期握手 + Play 期自定义 
 |----|------|------|
 | L0 | `common:test` | 无 MC 实例（如登录期握手编解码/协商单测） |
 | L1 | classic 场景 | 全矩阵（12 版 × fabric/neoforge，按 versionProperties `builds_for` 过滤；1.20.1 无 neoforge 自动 SKIP） |
-| L2 | 场景目录 | 锚点集：seedgen / dimension（migrate 场景已退役为 log-and-skip） |
-
-L3（minecraft-mod-mcp 人工专项）已退役，见 [`docs/archive/ai-functional-test.md`](docs/archive/ai-functional-test.md)。
+| L2 | 场景目录 | 最简三锚点（seedgen / dimension，migrate 已退役为 log-and-skip）：**1.20.1 forge、1.21.1 neoforge、1.21.11 fabric** |
 
 冒烟只有 `.ps1`（依赖 Windows 网络/进程 cmdlet），没有 bash 版。
 
@@ -199,12 +197,18 @@ L3（minecraft-mod-mcp 人工专项）已退役，见 [`docs/archive/ai-function
 # pwsh：当前壳里直接跑
 .\scripts\runtime-smoke-test.ps1 -Ver 1.20.1 -Loader fabric -Phase I -SessionId "1.20.1_fabric_I"
 .\scripts\runtime-smoke-test.ps1 -Ver 1.20.1 -Loader fabric -Phase I -SessionId "1.20.1_fabric_I_seedgen" -Scenario seedgen
+
+# 快速冒烟（L2 三锚点：1.20.1 forge / 1.21.1 neoforge / 1.21.11 fabric）
+.\scripts\runtime-smoke-test-batch.ps1 -Phase I -Scenarios seedgen,dimension
 ```
 
 ```bash
 # Git Bash：调 pwsh 跑同一脚本（不要 -NoProfile，不要 | tail）
 pwsh -File ./scripts/runtime-smoke-test.ps1 -Ver 1.20.1 -Loader fabric -Phase I -SessionId "1.20.1_fabric_I"
 pwsh -File ./scripts/runtime-smoke-test.ps1 -Ver 1.20.1 -Loader fabric -Phase I -SessionId "1.20.1_fabric_I_seedgen" -Scenario seedgen
+
+# 快速冒烟（L2 三锚点）
+pwsh -File ./scripts/runtime-smoke-test-batch.ps1 -Phase I -Scenarios seedgen,dimension
 ```
 
 **这条 ps1 会自己结束**（起服 → 等 `Done!` → 起客户端 → 两轮 → 写 JSON → 印 `=== RESULT: PASS|FAIL ===` → 退出码 0/2/3）。典型 4–12 min，最坏约 `ServerReadyTimeoutSec`(180) + `ClientTimeoutSec`(300) + 收尾。
