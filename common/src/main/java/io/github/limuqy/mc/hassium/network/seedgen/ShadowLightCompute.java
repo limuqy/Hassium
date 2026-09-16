@@ -2787,6 +2787,27 @@ public final class ShadowLightCompute {
             if (skyMask.isEmpty() && blockMask.isEmpty()) {
                 continue; // 收集全部越界（异常高度数据）：无可发送内容
             }
+            // 只交付「不会降低客户端任何一格光」的 section（逐格 shadow ≥ client）。
+            // <p>
+            // 2026-09-16 flyrt5 定位：往返飞行后残留的黑板**全部**由 light-only 包造成，且包的
+            // {@code fullOrigin=section_delta} —— 分段增量/邻柱替换后影子引擎该柱可能只是**部分
+            // 点亮**（实测同 section {@code skyTop=0 skyMid=1}、缝边 {@code skyN=0}；整柱包对被改
+            // 的柱同样只做线掩码过滤，滤不掉「有非 0 值但整体偏暗」的半成品）。这种 section 一旦
+            // 覆盖客户端就是黑块且不会自愈：整柱包对已落地柱被抑制，客户端只会继续收中间态。
+            // 空 section / 半成品 section 不进掩码 = 客户端保留旧光（此刻旧光比影子对）；
+            // 真正变亮的变化照旧传达。
+            // <p>
+            // 代价（已知取舍）：影子比客户端**更暗**的合法变化（放方块挡住天光）不会经光桥下发，
+            // 要等整柱重投递；若把「更暗」放行，半传播态也会一起放行 → 黑块复现。
+            Minecraft mcForLight = Minecraft.getInstance();
+            net.minecraft.client.multiplayer.ClientLevel clientLevel =
+                    mcForLight == null ? null : mcForLight.level;
+            retainNoDowngrade(skyMask, engine, clientLevel, pos, LightLayer.SKY);
+            retainNoDowngrade(blockMask, engine, clientLevel, pos, LightLayer.BLOCK);
+            if (skyMask.isEmpty() && blockMask.isEmpty()) {
+                noteLightAssertSuppressed(pos);
+                continue;
+            }
             // 两阶段光照的**中间态**（phase-1 INITIALIZE_LIGHT 刚把该柱层覆盖成全 0、
             // phase-2 LIGHT 还没填回；或 phase-2 在途）：此时打包会把「还没算的空层」
             // 以 emptyYMask 下发，客户端 readSectionList 显式写 new DataLayer() = 已亮柱
@@ -2794,9 +2815,9 @@ public final class ShadowLightCompute {
             // 本帧整柱不发，客户端保留旧光；屏障完成收口 finishLight 必带真光重发。
             // <p>
             // 本判据只用这两个 map（不读引擎、不排新光任务）。**不得**再往上加引擎读或新任务：
-            // 打包时 ClientboundLightUpdatePacket 构造器本身会读引擎数据层（已上线、实测未卡死），
-            // 但 2026-09-16 的整卡死实证是「判严 isLightReusable → 多排光屏障 → lightTasks 越水位 →
-            // 主线程 injectChunk 5s 忙等」——任何抬高引擎负载的改动都会复现。
+            // 上面的线掩码过滤确实读引擎数据层（已上线、实测未卡死），但 2026-09-16 的整卡死
+            // 实证是「判严 isLightReusable → 多排光屏障 → lightTasks 越水位 → 主线程
+            // injectChunk 5s 忙等」——任何抬高引擎负载的改动都会复现。
             if (isLightMidCompute(key)) {
                 noteMidComputeWithheld(pos);
                 continue;
@@ -2808,6 +2829,63 @@ public final class ShadowLightCompute {
                         "[SHADOW_LIGHT] Build failed ({}, {})", pos.x, pos.z);
             }
         }
+    }
+
+    /**
+     * 原地收窄掩码：只保留「不会把客户端打暗」的 section。
+     * <p>
+     * 只应客户端主线程调用（读客户端光照引擎，与写区块同线程）。掩码里没有的 section 客户端
+     * 保持旧光，因此这里的判据同时承担两件事：排除空 section（vanilla 会记成 emptyYMask →
+     * 客户端显式置 0），以及排除影子侧**半成品** section（逐格比客户端暗）。
+     */
+    private static void retainNoDowngrade(BitSet mask, LevelLightEngine engine,
+                                          net.minecraft.client.multiplayer.ClientLevel clientLevel,
+                                          ChunkPos pos, LightLayer layer) {
+        if (mask.isEmpty()) {
+            return;
+        }
+        LevelLightEngine clientEngine = clientLevel == null
+                ? null
+                : clientLevel.getChunkSource().getLightEngine();
+        int minLightSection = engine.getMinLightSection();
+        int lightSectionCount = engine.getLightSectionCount();
+        for (int i = mask.nextSetBit(0); i >= 0 && i < lightSectionCount; i = mask.nextSetBit(i + 1)) {
+            SectionPos sectionPos = SectionPos.of(pos, minLightSection + i);
+            DataLayer shadow = engine.getLayerListener(layer).getDataLayerData(sectionPos);
+            DataLayer client = clientEngine == null
+                    ? null
+                    : clientEngine.getLayerListener(layer).getDataLayerData(sectionPos);
+            if (!isAssertSafe(shadow, client)) {
+                mask.clear(i);
+            }
+        }
+    }
+
+    /**
+     * 影子 section 可否断言行（逐格 {@code shadow >= client}，且至少一格非 0）。
+     * {@code client == null}（客户端没有该 section）退化为「有非 0 光即可」。
+     * 占位层 {@code new DataLayer(2048)} 取值被 {@code & 15} 归一为 0 → 判为「无光」不下发
+     * （该层的线上 payload 恰好是全 0，直接下发就是黑板）。
+     */
+    private static boolean isAssertSafe(DataLayer shadow, DataLayer client) {
+        if (shadow == null) {
+            return false;
+        }
+        boolean anyLight = false;
+        for (int y = 0; y < 16; y++) {
+            for (int z = 0; z < 16; z++) {
+                for (int x = 0; x < 16; x++) {
+                    int shadowValue = shadow.get(x, y, z) & 15;
+                    if (shadowValue < (client == null ? 0 : (client.get(x, y, z) & 15))) {
+                        return false; // 会把客户端打暗：本 section 整体不下发
+                    }
+                    if (shadowValue != 0) {
+                        anyLight = true;
+                    }
+                }
+            }
+        }
+        return anyLight;
     }
 
     /** 绝对 sectionY 集合 → 包掩码 BitSet（位 = sectionY − minLightSection；越界丢弃）。 */
