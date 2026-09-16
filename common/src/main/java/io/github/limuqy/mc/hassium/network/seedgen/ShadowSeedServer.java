@@ -449,6 +449,7 @@ public class ShadowSeedServer extends MinecraftServer {
             // 悬置柱放行：数据到位后原版加载链恢复推进（LIGHT→FULL→playerLoadedChunk 桥，
             // R2 重连比对触达的前提；holder 永卡 EMPTY 会让 tracking 静默失明）
             ShadowChunkMapCompat.completeSuspendedLoad(dimension, pos, chunk);
+            clearPlaceholder(dimension, pos, key);
             return true;
         } catch (Throwable t) {
             ShadowLightCompute.withChunkLock(pos, () -> restoreInjectedChunk(key, previous));
@@ -1296,6 +1297,23 @@ public class ShadowSeedServer extends MinecraftServer {
         });
         // 悬置柱放行（同 injectChunk）：读盘/生成柱入表即恢复原版加载链
         ShadowChunkMapCompat.completeSuspendedLoad(dimension, pos, chunk);
+        clearPlaceholder(dimension, pos, key);
+    }
+
+    /**
+     * 真实数据已就位：撤掉空气空壳占位标记。
+     * <p>
+     * 占位标记是「该柱当前内容是齐套用的临时空气壳」的判据，被下游多处（{@code publishCachedChunk}、
+     * tracking 的 drainSelections / drainRedeliver / tryServeOvdLocal / onChunkMaterialized / shape sweep）
+     * 用来判定「未物化」。不撤会让该柱**永久**被当未物化：缓存命中路径拒绝交付、
+     * tracking 反复重拉、redeliver 永久跳过——每轮都白付一次网络往返 + 一次多余算光。
+     */
+    private void clearPlaceholder(String dimension, ChunkPos pos, long key) {
+        if (placeholderChunks.remove(key)) {
+            DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+                    "[SHADOW_PLACEHOLDER] Cleared placeholder ({}, {}) dim={} on real data",
+                    pos.x, pos.z, dimension);
+        }
     }
 
     /**
@@ -1454,6 +1472,7 @@ public class ShadowSeedServer extends MinecraftServer {
         }
         long key = DimensionKey.key(dimension, pos.x, pos.z);
         injectedChunks.remove(key, chunk);
+        placeholderChunks.remove(key); // 占位柱卸载：标记随柱一起走，不得留在表里
         if (unmountIdle && mgr != null) {
             mgr.unmountIdleRegions();
         }
@@ -1798,6 +1817,7 @@ public class ShadowSeedServer extends MinecraftServer {
     public void deleteChunk(String dimension, ChunkPos pos) {
         long key = DimensionKey.key(dimension, pos.x, pos.z);
         injectedChunks.remove(key);
+        placeholderChunks.remove(key); // 磁盘清理连带撤占位标记，避免残留键挡住后续真实注入
         if (!ownShutdownInProgress
                 && !ShadowServerRegistry.getInstance().isPreviousShutdownComplete()) {
             io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.remove(dimension, pos);

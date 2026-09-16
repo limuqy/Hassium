@@ -159,6 +159,20 @@ public final class ShadowLightCompute {
      */
     private static final java.util.Set<Long> lightInitialized = ConcurrentHashMap.newKeySet();
     /**
+     * 齐套门控判据：该柱**曾经**跑完 INITIALIZE_LIGHT（空 DataLayer 已安装）。
+     * <p>
+     * 与 {@link #lightInitialized} 的区别是**单调**：后者在 {@code startLightBarrier}
+     * 起跑 LIGHT 时被 {@code remove}（它表示「native 快照待 LIGHT 消费」这一过渡态），
+     * 若拿它当门控判据，任何**已提升过**的邻柱都会永久表现为「已注入但未过
+     * INITIALIZE_LIGHT」→ 只能等 {@code NEIGHBORHOOD_TIMEOUT_MS} 超时放行。
+     * <p>
+     * 清除点 = 卸载（{@code cancelChunkWork}）/ 断连（{@code onDisconnect}）。
+     * <b>已知边界</b>：重注入（同柱新数据 REPLACE）不清除——因为 {@code initializeLightImmediately}
+     * 被 {@link #lightInitialized} 幂等挡住时不会重装 DataLayer，单清本集合会让该柱永久停在
+     * 「未过 INITIALIZE_LIGHT」并拖满超时。重注入路径的层重装需要单独设计，本次不动。
+     */
+    private static final java.util.Set<Long> lightInitPassed = ConcurrentHashMap.newKeySet();
+    /**
      * 两阶段光照：已过 INITIALIZE_LIGHT 的柱的 native ProtoChunk（LIGHT 阶段复用）。
      * key = DimensionKey 复合键。断连/卸载清除。
      */
@@ -1477,6 +1491,7 @@ public final class ShadowLightCompute {
                         } else {
                             nativeLightChunks.put(key, nativeChunk);
                             lightInitialized.add(key);
+                            lightInitPassed.add(key); // 齐套门控判据（单调，见字段注释）
                             DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
                                     "[SHADOW_LIGHT] INITIALIZE_LIGHT done ({}, {})",
                                     DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
@@ -1489,9 +1504,16 @@ public final class ShadowLightCompute {
         }
     }
 
-    /** 该柱是否已过 INITIALIZE_LIGHT（空 DataLayer 已安装）。 */
+    /** 该柱是否已过 INITIALIZE_LIGHT（{@code lightInitialized} 的过渡态判据）。 */
     static boolean isLightInitialized(long key) {
         return lightInitialized.contains(key);
+    }
+
+    /**
+     * 该柱是否**曾经**跑完 INITIALIZE_LIGHT（齐套门控判据；单调，见 {@link #lightInitPassed}）。
+     */
+    static boolean isLightInitPassed(long key) {
+        return lightInitPassed.contains(key);
     }
 
     /**
@@ -2160,6 +2182,7 @@ public final class ShadowLightCompute {
         lightUpdates.remove(key);
         shadowApplyEpochs.remove(key);
         lightInitialized.remove(key);
+        lightInitPassed.remove(key);
         nativeLightChunks.remove(key);
         LightNeighborhoodGate.cancel(key);
         discardLightMask(key);
@@ -2747,6 +2770,7 @@ public final class ShadowLightCompute {
         ready.clear();
         lightUpdates.clear();
         lightInitialized.clear();
+        lightInitPassed.clear();
         nativeLightChunks.clear();
         LightNeighborhoodGate.clear();
         requestedMisses.clear();
