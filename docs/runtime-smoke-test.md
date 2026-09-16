@@ -245,6 +245,10 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 | `dimension.scenario` | 四轮切维冒烟：主世界 → 下界 → 末地 → 回主世界（单连接不断开）；中段轮 `gate=false`；整体 PASS 只看 R1 统计 + 各轮 assertProbe | 每轮 `joined` 且 `dimension` 正确；harness 另加 post-exit 三维度磁盘门禁 |
 | `modcompat.scenario` | 单轮，与 seedgen 同形。锚点刻意 **mod 无关**，供「带外部 mod」与「不带」两组对照跑分 | `stats.clientAppliedChunkCount > 0`、`stats.clientLandedChunkCount > 0` |
 | `modcompat_strict.scenario` | 同上，追加兼容层 **强断言**（防空测），仅用于「带 mods」组 | 另加 `modCompat.c2meChunkIoReplaced == 1`、`modCompat.c2meHookHits > 0`；`type126Patched` 只作观测（影子上下文该补丁被取消短路，见 [mod-compat.md](mod-compat.md) §7.3） |
+| `flyroundtrip.scenario` | **往返飞行黑块专项**（单轮）：join → settle（`round1WaitMs`）→ `fly` 飞出去 → `tp @s ~ ~ ~ 180 0` 原地掉头 → `fly` 飞回来 → settle（`dimWaitMs`）→ dump → 断言。必须配 `-MoveSeconds > 0`（=0 时只有 settle，不构成往返）。覆盖「离开视距卸载 → 重入视距重交付（redeliver / publishCached / 两阶段光照中间态）」，这是站桩 classic 与只往外飞的移动冒烟都到不了的路径 | `counters.clientDarkRegressionChunks == 0`（口径见下）；`clientDarkLightProbeChunks` / `clientDarkLightProbeSamples` 作观测 |
+**黑块判据（`flyroundtrip` 门禁口径）**：门禁主锚 `clientDarkRegressionChunks` = 「曾亮过的柱在诊断时刻仍黑」（用户报的症状原文）。探针采样「`topY`」——列内最高方块之上第一格，该点按定义无遮挡，正确光必 >0。**判定值一律取光包落地后下一帧复检的 post-apply 采样**（`ClientChunkHandler.runProbeRecheck`，`drainReady` 帧首执行）：vanilla `handleLightUpdatePacket` 只入队、后续 client tick 才落地，即时读数是旧值，首落地柱必然先采到一次 0（曾造成 flyrt11 门禁假阳性 FAIL）。观测口径：`clientDarkLightProbeSamples`（全部即时 0 采样，含首落地瞬态）、`clientDarkLightProbeChunks`（复检后仍黑的柱数，含从未亮过的）。三个计数器由 `ClientChunkHandler` 在 `debug.lightVerify` 开启时统计，故该场景必须有 profile 打开 `debug.lightVerify`（见 `scripts/smoke/profiles/flyroundtrip.profile.properties`），否则拿到恒 0 的假 PASS。
+
+单轮场景（`seedgen` / `modcompat` / `modcompat_strict` / `flyroundtrip`）必须在 `scripts/smoke/analyzer.py` 的 `single_round_scenarios` 登记，否则 analyzer 按两轮判定 → `PROBE_MISSING` P0（harness 自己那条 `-Scenario` 白名单不参与该判定，只影响 ROUND2 统计提取）。
 
 存在 `scripts/smoke/profiles/<name>.profile.properties` 时，单会话脚本按键值对 patch 双端 hassium toml（客户端 `run/client/config/hassium/hassium-client.toml`、服务端 `run/server/config/hassium/hassium-server.toml`）。行式 `key=value`、`#` 注释；value 须为合法 TOML 字面量（字符串自带引号）。profile 文件不存在时整体 no-op。
 
@@ -532,7 +536,7 @@ build/smoke-test/
 | 客户端退出码 | `ClientExitCode == 0` | `CLIENT_EXIT_NONZERO` |
 | 登录期握手 | 服务端日志 `Hassium: play init (caps=`（`play_init_s2c` 激活，常驻输出不依赖 debug.*） | `HANDSHAKE_NOT_NEGOTIATED` |
 | 聚合激活 | 服务端日志 `Hassium: Aggregation enabled for`（PENDING→ENABLED；管线级全局包压缩退役后由聚合门替代原 ZSTD_NOT_ACTIVE） | `AGGREGATION_NOT_ACTIVE` |
-| ROUND 统计 | classic 两轮 `CLIENT_STATS ROUNDn begin/end` 齐备（seedgen 单轮只查 R1） | `ROUND_STATS_MISSING` |
+| ROUND 统计 | classic 两轮 `CLIENT_STATS ROUNDn begin/end` 齐备（单轮场景只查 R1） | `ROUND_STATS_MISSING` |
 | probe 指标 | `applied>0`、`landed>0`、`applied<=landed`、`actual<=loaded` 等一致性（`_check_probe_metrics`） | `CLIENT_CACHE_EMPTY` / `METRIC_*` |
 | trace 缺口 | expectedNotPresent / receivedNotInjected / injectedNotReady 为 P0；readyNotApplied 为 P1；appliedNotMeshed 为 INFO（mesh 异步） | `TRACE_*` |
 | 封闭空洞（仅 classic） | 包围盒洪水填充求 `clientCache.actualPresent` 里被完全围住的缺席柱，取 4-连通最大分块：**≥4 格**为 P0，1–3 格降 P1。补 `expectedNotPresent` 的盲区——后者的候选集是 `networkReceived` 本身，**从未投递**的柱结构上不可见（落位点 3x3 真空洞曾以 PASS 收场） | `TRACE_ENCLOSED_HOLE` / `TRACE_ENCLOSED_HOLE_SMALL` |

@@ -213,6 +213,114 @@ public class ClientChunkHandler {
     private static final java.util.Map<Long, Integer> APPLY_COUNT =
             new java.util.concurrent.ConcurrentHashMap<>();
 
+    /** 往返飞行黑块探针（flyroundtrip 场景断言锚）：
+     *  {@link #darkLightProbeSamples} 全部「skyTop==0」**即时**采样数（含光队列 flush 前瞬态，仅观测）；
+     *  {@link #PROBE_LAST_SKY} 每柱**复检后**（post-apply）最新采样值 → 读侧按「诊断时刻仍黑」统计；
+     *  {@link #PROBE_EVER_LIT} 曾观测到 >0 的柱（不清除）→ 用于「曾亮柱被打黑」回归口径（flyroundtrip 主锚）。 */
+    private static final java.util.concurrent.atomic.AtomicLong darkLightProbeSamples =
+            new java.util.concurrent.atomic.AtomicLong();
+    private static final java.util.Map<Long, Integer> PROBE_LAST_SKY =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.Set<Long> PROBE_EVER_LIT =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /** 待复检柱（去重）：光包探针即时读数是光队列 flush 前的旧值，只排队；下一帧 drainReady
+     *  首部 {@link #runProbeRecheck} 按 post-apply 真值采样并写判定状态。 */
+    private static final java.util.Map<Long, ChunkPos> PROBE_PENDING_RECHECK =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** 「skyTop==0」采样总数（含「首次落地瞬态」，仅诊断）。 */
+    public static long darkLightProbeSampleCount() {
+        return darkLightProbeSamples.get();
+    }
+
+    /**
+     * **诊断时刻仍黑**的柱数（每柱取最新一次**复检后**采样值；已卸载柱不计）。
+     * 观测口径（flyroundtrip 门禁主锚是 {@link #darkRegressionChunkCount}）。
+     */
+    public static long darkLightProbeChunkCount() {
+        long n = 0;
+        for (Integer sky : PROBE_LAST_SKY.values()) {
+            if (sky != null && sky == 0) {
+                n++;
+            }
+        }
+        return n;
+    }
+
+    /** 仍黑**且本会话曾亮过**的柱数（= 用户口径「已缓存区块被打黑」，flyroundtrip 门禁主锚）。 */
+    public static long darkRegressionChunkCount() {
+        long n = 0;
+        for (java.util.Map.Entry<Long, Integer> e : PROBE_LAST_SKY.entrySet()) {
+            if (e.getValue() != null && e.getValue() == 0 && PROBE_EVER_LIT.contains(e.getKey())) {
+                n++;
+            }
+        }
+        return n;
+    }
+
+    /**
+     * 客户端卸载该柱：清掉「最新采样」与待复检记录（仍黑统计不该含已不可见的柱），
+     * 但保留「曾亮」标记——回程重新落地若变黑，必须仍算回归。
+     */
+    public static void onProbeChunkUnloaded(ChunkPos pos) {
+        if (pos != null) {
+            PROBE_LAST_SKY.remove(pos.toLong());
+            PROBE_PENDING_RECHECK.remove(pos.toLong());
+        }
+    }
+
+    /** 光包探针后排队复检（去重）：判定状态（LAST_SKY / EVER_LIT 最终值）由复检写入。 */
+    static void scheduleProbeRecheck(ChunkPos pos) {
+        if (pos != null) {
+            PROBE_PENDING_RECHECK.put(pos.toLong(), pos);
+        }
+    }
+
+    /**
+     * 帧首复检（{@code ShadowLightCompute.drainReady} 调用，客户端主线程）：对上一帧排队的柱
+     * 按 **post-apply** 真值采样并写判定状态。
+     * <p>
+     * vanilla {@code handleLightUpdatePacket} 只把光入队，队列出队在后续 client tick——探针
+     * 即时读数是旧值，首落地柱必然先采到一次 0（2026-09-16 flyrt11 的 3 个假阳性全属此类，
+     * 详见 handoff §7.1）。判定状态只由本方法写入：即时读数只用于观测计数
+     * （{@link #darkLightProbeSamples}）与「曾亮」标记（读到 >0 说明此刻或此前真亮过）。
+     */
+    public static void runProbeRecheck(ClientLevel level) {
+        if (PROBE_PENDING_RECHECK.isEmpty()) {
+            return;
+        }
+        if (level == null) {
+            PROBE_PENDING_RECHECK.clear(); // 断连/切维竞态：旧维度的待复检全部作废
+            return;
+        }
+        for (java.util.Iterator<java.util.Map.Entry<Long, ChunkPos>> it =
+                PROBE_PENDING_RECHECK.entrySet().iterator(); it.hasNext(); ) {
+            ChunkPos pos = it.next().getValue();
+            it.remove();
+            if (!level.getChunkSource().hasChunk(pos.x, pos.z)) {
+                continue; // 已卸载：由 onProbeChunkUnloaded 收口，不判
+            }
+            int bx = (pos.x << 4) + 8;
+            int bz = (pos.z << 4) + 8;
+            int minY = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinBlockY(level);
+            int topY = level.getHeight(Heightmap.Types.WORLD_SURFACE, bx, bz);
+            if (topY <= minY) {
+                continue; // 取样点无效（地表未就绪 / 基岩柱）
+            }
+            String topBlock = level.getBlockState(new BlockPos(bx, topY, bz))
+                    .getBlock().getDescriptionId();
+            if (!"block.minecraft.air".equals(topBlock)) {
+                continue; // 高度图过期（topY 落在地面内）：不是黑块，是取样点错
+            }
+            int skyTop = level.getBrightness(LightLayer.SKY,
+                    new BlockPos(bx, topY + 1, bz));
+            PROBE_LAST_SKY.put(pos.toLong(), skyTop);
+            if (skyTop > 0) {
+                PROBE_EVER_LIT.add(pos.toLong());
+            }
+        }
+    }
+
     /**
      * 客户端区块应用探针（debug.chunkApplyLogging 开启时输出；关闭时零开销短路）：
      * per-pos apply 计数 + 区块光照采样（地表 sky / 高空 sky / 地下 block）+
@@ -284,6 +392,20 @@ public class ClientChunkHandler {
         int skyE = level.getBrightness(LightLayer.SKY, new BlockPos(originX + 15, midY, bz));
         int skyN = level.getBrightness(LightLayer.SKY, new BlockPos(bx, midY, originZ));
         int skyS = level.getBrightness(LightLayer.SKY, new BlockPos(bx, midY, originZ + 15));
+        // 往返飞行黑块专项计数（flyroundtrip 场景断言锚）：只在「光包落地」探针上采。
+        // 判据健全性：topY = 列内最高方块之上第一格（该列按定义无遮挡）→ 正确光必 >0，
+        // 故 skyTop==0 恒为缺陷（空光掩码 / 整柱未算光）。再加「topY 处确实是空气」的
+        // 自检：若高度图过期（topY 落在地面内）会采到 0，那不是黑块而是取样点错，必须剔除。
+        // 即时读数是光队列 flush 前的旧值（§7.1 假阳性）：这里只记观测计数与「曾亮」，
+        // 判定状态由下一帧 runProbeRecheck 的 post-apply 采样写入。
+        if (lightProbe && topY > minY && "block.minecraft.air".equals(topBlock)) {
+            if (skyTop > 0) {
+                PROBE_EVER_LIT.add(pos.toLong());
+            } else {
+                darkLightProbeSamples.incrementAndGet();
+            }
+            scheduleProbeRecheck(pos);
+        }
         if (!countAsApply) {
             DebugLogger.info(LogType.LIGHT_VERIFY,
                     "[CHUNK_PROBE] source=light pos=({},{}) apply#={} fullOrigin={} fullView={} fullApplySeq={} fullApplyAgeMs={} lightQueueDelayMs={} fullAppliedAfterLightQueued={} chunkPresent=true topY={} skyTop={} skyAir={} blockLow={} topBlock={} fixedY={} fixedBlock={} secY={} skyMid={} skyW={} skyE={} skyN={} skyS={}",

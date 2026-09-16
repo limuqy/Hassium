@@ -38,6 +38,26 @@ class SpatialCheckTest(unittest.TestCase):
             self.assertNotIn("PROBE_MISSING", codes)
             self.assertNotIn("R2_FULL_CHUNK_TRANSFER", codes)
 
+    def test_flyroundtrip_accepts_its_single_round_probe(self):
+        from scripts.smoke.analyzer import analyze_result
+        from pathlib import Path
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "logs").mkdir()
+            (root / "logs" / "s.log").write_text("HassiumSmokeTest:PASS\n")
+            probe = {
+                "stats": {"clientAppliedChunkCount": 1, "clientLandedChunkCount": 1},
+                "chunkTrace": {},
+                "clientCache": {"actualPresent": {"positions": [[0, 0]]}, "loadedChunks": 1},
+                "counters": {"clientDarkLightProbeChunks": 0, "clientDarkRegressionChunks": 0},
+            }
+            result = {"SessionId": "s", "Scenario": "flyroundtrip", "Probe": {"Round1": probe}}
+            analysis = analyze_result(result, root)
+            codes = {item["code"] for item in analysis["failures"]}
+            self.assertNotIn("PROBE_MISSING", codes)
+            self.assertNotIn("R2_FULL_CHUNK_TRANSFER", codes)
+
     def test_applied_without_resident_client_chunk_fails(self):
         from scripts.smoke.analyzer import _check_probe_metrics
 

@@ -1,0 +1,40 @@
+# flyroundtrip：往返飞行黑块专项场景（复现「从出生点飞出去再飞回来，出生点已缓存区块大片黑块」）。
+#
+# 为什么需要它：黑块只在「离开视距 → 再回来」的重交付路径上出现（redeliver / publishCached /
+# 两阶段光照中间态），站桩的 classic 与只往外飞的移动冒烟都覆盖不到；本场景把它变成可重复、
+# 可判 PASS/FAIL 的一轮会话。
+#
+# 流程：
+#   1) join 后先静止 settle（round1WaitMs）：出生点铺满 → 影子端算光 → 落盘（进入「已缓存」态）；
+#   2) fly 飞出去（moveSeconds，先爬升 2s 再平飞）：走出视距触发卸载 + reclaim（出生点柱 flush+evict）；
+#   3) 原地掉头（tp 只改 yaw，保留位置/飞行态），再 fly 飞回来：重入视距 → redeliver/publishCached
+#      重交付 → 这一段就是黑块窗口；
+#   4) 回来后再 settle（dimWaitMs），然后 dump + 断言。
+#
+# fly 是**非阻塞**原语（爬升 2s + 平飞 Ns 由 tick 泵推进，步骤立即返回），所以每段飞行后必须
+# wait ${moveWaitMs}（= Ns + 6s 余量）等它真飞完，否则下一步会覆盖掉上一段飞行（实测会退化成
+# 「原地掉头后单向飞」而不是往返）。
+#
+# 门禁：counters.clientDarkRegressionChunks op=eq value=0
+#   口径 = 「曾亮过的柱在诊断时刻仍黑」（每柱判定值取光包落地后**下一帧复检**的 post-apply 采样，
+#   已卸载柱不计）——正是用户报的「已缓存区块被打黑」。健康场次恒 0。
+#   探针即时读数在光队列 flush 前是旧值（handleLightUpdatePacket 只入队），首落地柱必然先采到
+#   一次 0，故判定必须延后一帧（ClientChunkHandler.runProbeRecheck，drainReady 帧首执行）。
+#   观测口径（不作门禁）：counters.clientDarkLightProbeSamples（全部即时 0 采样，含首落地瞬态）、
+#   counters.clientDarkLightProbeChunks（复检后仍黑的柱数，含从未亮过的）。
+#   判据出处见 ClientChunkHandler 该组计数注释。
+#
+# 用法（moveSeconds=0 时只有 settle，不构成往返）：
+#   .\scripts\runtime-smoke-test.ps1 -Ver 1.21.1 -Loader fabric -Phase I `
+#       -SessionId "1.21.1_fabric_flyrt" -Scenario flyroundtrip -MoveSeconds 15
+join label=WAIT_JOIN_1 since=start timeoutMs=${joinTimeoutMs}
+wait ms=${round1WaitMs}
+fly seconds=${moveSeconds} tag=OUT_
+wait ms=${moveWaitMs}
+command text="tp @s ~ ~ ~ ~180 ~"
+fly seconds=${moveSeconds} tag=BACK_
+wait ms=${moveWaitMs}
+wait ms=${dimWaitMs}
+dump label=ROUND1 round=1
+assertProbe key=counters.clientDarkRegressionChunks op=eq value=0
+exit rounds=1

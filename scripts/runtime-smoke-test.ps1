@@ -732,7 +732,8 @@ $clientExit = if ($clientProc.ExitCode) { $clientProc.ExitCode } else { 0 }
 # 9. 解析结果 + 提取统计
 Write-Host "[$SessionId] [8/9] 解析结果 (客户端退出码: $clientExit)..."
 # 单轮场景没有 ROUND2；不得把未运行的轮次写成 stats=false / pass=false。
-$requiresRound2 = $Scenario -notin @("seedgen", "modcompat", "modcompat_strict")
+# flyroundtrip：单轮往返飞行黑块专项（join → 飞出去 → 掉头飞回 → dump ROUND1 → assertProbe → exit rounds=1）。
+$requiresRound2 = $Scenario -notin @("seedgen", "modcompat", "modcompat_strict", "flyroundtrip")
 $clientContent = if (Test-Path $clientLog) { Get-Content $clientLog -Raw } else { "" }
 
 # F17：Gradle 会把 fork 出的游戏 JVM 的真实退出码写进自己的失败信息（在 client 的 stderr 日志里）。挂起被系统关闭时是

@@ -313,6 +313,18 @@ public final class SmokeProbeWriter {
         field(sb, "lightSegRecalc", m.getLightCacheMissCount());
         field(sb, "ovdLoaded", m.getOvdLoadedCount());
         field(sb, "ovdMiss", m.getOvdMissCount());
+        // 往返飞行黑块专项（flyroundtrip 门禁）：光包落地探针里「地表上一格 skyTop==0」。
+        // 判据健全性：topY = 列内最高方块之上第一格（该列按定义无遮挡），正确光必 >0。
+        // 判定值一律取落地后**下一帧复检**的 post-apply 采样（即时读数是光队列 flush 前旧值）。
+        //   clientDarkRegressionChunks    —— 仍黑且本会话曾亮（「已缓存区块被打黑」，门禁主锚）
+        //   clientDarkLightProbeChunks    —— 诊断时刻仍黑的柱数（观测）
+        //   clientDarkLightProbeSamples   —— 全部即时 0 采样（含首次落地瞬态，观测用）
+        field(sb, "clientDarkLightProbeSamples",
+                io.github.limuqy.mc.hassium.network.ClientChunkHandler.darkLightProbeSampleCount());
+        field(sb, "clientDarkLightProbeChunks",
+                io.github.limuqy.mc.hassium.network.ClientChunkHandler.darkLightProbeChunkCount());
+        field(sb, "clientDarkRegressionChunks",
+                io.github.limuqy.mc.hassium.network.ClientChunkHandler.darkRegressionChunkCount());
         lastField(sb, "locallyGenerated", m.getLocallyGeneratedChunkCount());
         sb.append("  },\n");
     }

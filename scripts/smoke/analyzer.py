@@ -323,7 +323,7 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
     checks["zstd_pipeline"] = "PASS" if has_agg else "FAIL"
 
     # 单轮场景（probe 只有 round1.json）：新场景必须在此登记，否则会被按两轮判定 → PROBE_MISSING。
-    single_round_scenarios = {"seedgen", "modcompat", "modcompat_strict"}
+    single_round_scenarios = {"seedgen", "modcompat", "modcompat_strict", "flyroundtrip"}
     round_numbers = (1,) if scenario in single_round_scenarios else (1, 2)
     stats_ok = {n: bool(re.search(rf"CLIENT_STATS ROUND{n} begin", log_text)
                     and re.search(rf"CLIENT_STATS ROUND{n} end", log_text)) for n in round_numbers}

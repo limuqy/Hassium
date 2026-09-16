@@ -99,7 +99,7 @@ public final class ScenarioStep {
             if (line.isEmpty()) {
                 continue;
             }
-            String[] tokens = line.split("\\s+");
+            String[] tokens = splitTokens(line).toArray(new String[0]);
             Type type = parseType(tokens[0], i + 1, raw);
             Map<String, String> params = new LinkedHashMap<>();
             for (int t = 1; t < tokens.length; t++) {
@@ -115,6 +115,40 @@ public final class ScenarioStep {
             throw new IllegalArgumentException("scenario: 没有任何步骤");
         }
         return List.copyOf(steps);
+    }
+
+    /**
+     * 按空白分词，但**引号内的空白保留**并把引号剥掉：
+     * {@code command text="tp @s ~ ~ ~ 180 0"} → {@code [command, text=tp @s ~ ~ ~ 180 0]}。
+     * 既有场景全是无引号 token，行为不变（引号只为「值里含空格」服务，如往返飞行掉头）。
+     */
+    private static java.util.List<String> splitTokens(String line) {
+        java.util.ArrayList<String> out = new java.util.ArrayList<>();
+        StringBuilder cur = new StringBuilder();
+        char quote = 0;
+        for (int i = 0; i < line.length(); i++) {
+            char c = line.charAt(i);
+            if (quote != 0) {
+                if (c == quote) {
+                    quote = 0;
+                } else {
+                    cur.append(c);
+                }
+            } else if (c == '"' || c == '\'') {
+                quote = c;
+            } else if (Character.isWhitespace(c)) {
+                if (cur.length() > 0) {
+                    out.add(cur.toString());
+                    cur.setLength(0);
+                }
+            } else {
+                cur.append(c);
+            }
+        }
+        if (cur.length() > 0) {
+            out.add(cur.toString());
+        }
+        return out;
     }
 
     private static Type parseType(String token, int lineNo, String raw) {

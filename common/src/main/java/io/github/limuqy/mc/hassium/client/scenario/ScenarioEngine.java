@@ -111,6 +111,10 @@ public final class ScenarioEngine {
         vars.put("reconnectDelayMs", Long.toString(reconnectDelayMs));
         vars.put("joinTimeoutMs", Long.toString(joinTimeoutMs));
         vars.put("moveSeconds", Long.toString(moveSeconds));
+        // fly 是**非阻塞**原语（爬升 2s + 平飞 Ns 由 tick 泵推进，步骤立即 DONE）：
+        // 紧跟其后的步骤会立刻执行并覆盖飞行。要真正飞完再走下一步，必须显式 wait 这段：
+        // moveWaitMs = 爬升 2s + 平飞 Ns + 4s 余量（flyroundtrip 等移动场景用）。
+        vars.put("moveWaitMs", Long.toString(moveSeconds * 1000L + 6_000L));
         vars.put("host", host);
 
         steps = ScenarioStep.parse(lines, vars);
@@ -717,6 +721,16 @@ public final class ScenarioEngine {
             case "counters.ovdLoaded" -> m.getOvdLoadedCount();
             case "counters.ovdMiss" -> m.getOvdMissCount();
             case "counters.locallyGenerated" -> m.getLocallyGeneratedChunkCount();
+            // 往返飞行黑块专项（flyroundtrip 门禁锚；判定值取落地后下一帧复检的 post-apply 采样）：
+            //   clientDarkRegressionChunks —— 仍黑且曾亮（「已缓存区块被打黑」，门禁主锚）
+            //   clientDarkLightProbeChunks —— 诊断时刻仍黑的柱数（观测）
+            //   clientDarkLightProbeSamples —— 全部即时 0 采样（含首次落地瞬态，观测用）
+            case "counters.clientDarkLightProbeSamples" ->
+                    io.github.limuqy.mc.hassium.network.ClientChunkHandler.darkLightProbeSampleCount();
+            case "counters.clientDarkLightProbeChunks" ->
+                    io.github.limuqy.mc.hassium.network.ClientChunkHandler.darkLightProbeChunkCount();
+            case "counters.clientDarkRegressionChunks" ->
+                    io.github.limuqy.mc.hassium.network.ClientChunkHandler.darkRegressionChunkCount();
             // stats.*（appendStats 同名）
             case "stats.vanillaBytesReceived" -> m.getVanillaBytesReceived();
             case "stats.actualBytesReceived" -> m.getActualBytesReceived();
