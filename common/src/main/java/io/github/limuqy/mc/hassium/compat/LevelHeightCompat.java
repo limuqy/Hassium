@@ -37,4 +37,9 @@ public final class LevelHeightCompat {
         return accessor.getMinY();
 #endif
     }
+
+    /** 世界最高格 Y 上界（exclusive）= 最高可放置方块 Y + 1（section Y × 16）。 */
+    public static int getMaxBlockYExclusive(LevelHeightAccessor accessor) {
+        return getMaxSectionExclusive(accessor) << 4;
+    }
 }

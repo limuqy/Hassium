@@ -46,6 +46,19 @@ class ShadowLightComputeTimingRegressionTest {
     }
 
     @Test
+    @DisplayName("P0：空 REUSE 一律改重算（不依赖客户端是否已落地）")
+    void emptyReusePackIsAlwaysSkipped() {
+        assertTrue(ShadowLightCompute.shouldSkipEmptyReuseRepush(
+                ShadowLightCompute.LightMetric.REUSE_CACHE, false));
+        assertFalse(ShadowLightCompute.shouldSkipEmptyReuseRepush(
+                ShadowLightCompute.LightMetric.REUSE_CACHE, true),
+                "引擎确有可用光时允许 REUSE");
+        assertFalse(ShadowLightCompute.shouldSkipEmptyReuseRepush(
+                ShadowLightCompute.LightMetric.RECOMPUTE, false),
+                "RECOMPUTE 路径不拦（首包要交方块）");
+    }
+
+    @Test
     @DisplayName("齐套门控：enqueue 后 pendingCount 增加，cancel 后减少")
     void neighborhoodGateEnqueueCancel() {
         ChunkPos pos = new ChunkPos(5, 5);

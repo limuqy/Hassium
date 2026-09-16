@@ -32,7 +32,10 @@ import org.spongepowered.asm.mixin.injection.ModifyVariable;
 @Mixin(LayerLightSectionStorage.class)
 public abstract class MixinLayerLightSectionStorage {
 
-    /** 只读空光层（全 0）：getStoredLevel 读路径 null 兜底。共享只读，绝不被写。 */
+    /** 只读空光层：getStoredLevel 读路径 null 兜底。共享只读，绝不被写。
+     *  参数 2048 是刻意的非 0 默认 nibble 值（{@code DataLayer(int)} 收的是默认光照值，
+     *  不是字节数）：非 0 会让传播认为该 section 已满、不再排任务，光照管线按此工作量调优；
+     *  改成 0 会让 lightTasks 积压 → 重注入路径主线程 5s 忙等（2026-09-16 实测卡死）。 */
     @Unique
     private static final DataLayer hassium$EMPTY_DATA_LAYER = new DataLayer(2048);
 

@@ -53,19 +53,29 @@ public final class ShadowVanillaLightPipeline {
             return;
         }
         String resolvedDimension = dimension == null ? currentDimension() : dimension;
-        // 已有正确光的柱：跳过 injectChunk（会清光），直接 publishCachedChunk 交付。
+        // 已有正确光的柱：跳过 injectChunk（会清光）。
         // R2 remote_pull 重注入不得重置已修正的光（否则光桥再修一遍 = 黑块窗口）。
+        // 完整层 → publishCachedChunk；仅 isLightCorrect 但层未齐 → 只补光屏障，
+        // 禁止 inject（清光）或 REUSE 空包（整柱抹光）。
         net.minecraft.world.level.chunk.LevelChunk existing =
                 server.injectedChunk(resolvedDimension, pos.x, pos.z);
         if (existing != null && existing.isLightCorrect()) {
-            if (ShadowLightCompute.publishCachedChunk(resolvedDimension, pos)) {
-                SmokeChunkTrace.recordShadowInjected(resolvedDimension, pos);
+            if (ShadowLightCompute.isLightReusable(server, pos, existing)) {
+                if (ShadowLightCompute.publishCachedChunk(resolvedDimension, pos)) {
+                    SmokeChunkTrace.recordShadowInjected(resolvedDimension, pos);
+                    if (source == ShadowChunkSource.REMOTE_FULL) {
+                        ShadowTrackingSession.getInstance().onNetworkChunkQueued(resolvedDimension, pos);
+                    }
+                    return;
+                }
+                // publishCachedChunk 失败（in-flight / 维度不匹配等）：回退正常注入路径
+            } else {
+                ShadowLightCompute.enqueueInjectedForLight(resolvedDimension, pos, origin);
                 if (source == ShadowChunkSource.REMOTE_FULL) {
                     ShadowTrackingSession.getInstance().onNetworkChunkQueued(resolvedDimension, pos);
                 }
                 return;
             }
-            // publishCachedChunk 失败（in-flight / 维度不匹配等）：回退正常注入路径
         }
         server.setPersistenceRole(resolvedDimension, pos,
                 ShadowChunkPersistenceRole.VISIBLE_FULL_LIGHT);

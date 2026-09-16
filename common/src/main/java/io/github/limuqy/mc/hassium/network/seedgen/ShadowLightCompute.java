@@ -499,6 +499,7 @@ public final class ShadowLightCompute {
         accountedIngress.clear();
         shadowApplyEpochs.clear();
         fullApplyTraces.clear();
+        lightFollowUps.clear();
         ignoredApplyRetries.clear();
     }
 
@@ -647,6 +648,35 @@ public final class ShadowLightCompute {
      */
     static boolean shouldSkipRedundantFullPush(boolean alreadyShadowApplied) {
         return alreadyShadowApplied;
+    }
+
+    /**
+     * 可复用引擎光：{@code isLightCorrect} 且引擎层已安装。
+     * {@code isLightCorrect} 可能先于异步层安装；单独用它会打出空光整柱，
+     * 把客户端已亮打回 {@code skyTop=0}（飞行黑块）。
+     */
+    static boolean isLightReusable(ShadowSeedServer server, ChunkPos pos,
+                                   net.minecraft.world.level.chunk.LevelChunk chunk) {
+        if (chunk == null || !chunk.isLightCorrect()) {
+            return false;
+        }
+        if (server == null) {
+            return true;
+        }
+        if (!server.isChunkLightComplete(pos, chunk)) {
+            return false;
+        }
+        // 空 DataLayer（INITIALIZE_LIGHT 全 0）也会通过 isChunkLightComplete；
+        // 必须再验引擎里确实有非 0 光，否则 REUSE 打出 skyTop=0 黑柱。
+        return server.hasUsableEngineLight(pos, chunk);
+    }
+
+    /**
+     * 空 REUSE 不得整柱交付（无论客户端是否已有该柱）：
+     * 卸载后 redeliver 时 epoch 已清，按「已落地」门控会漏掉，出生点回访成片黑块。
+     */
+    static boolean shouldSkipEmptyReuseRepush(LightMetric metric, boolean lightReusable) {
+        return metric == LightMetric.REUSE_CACHE && !lightReusable;
     }
 
     /**
@@ -1458,9 +1488,10 @@ public final class ShadowLightCompute {
             networkInFlight.add(key);
         }
         TraceOrigin resolvedOrigin = origin == null ? TraceOrigin.SERVER_PUSH : origin;
-        // 已有正确光的柱（缓存命中 / relight 后）：跳过门控，直接进光屏障交付。
+        // 已有完整引擎光的柱（缓存命中 / relight 后）：跳过门控，直接进光屏障交付。
         // 门控只对需要重算光的柱有意义——已亮柱走门控会白等 3s 超时。
-        if (chunk.isLightCorrect()) {
+        // isLightCorrect 单独不够：层未安装时 REUSE 会打包空光。
+        if (isLightReusable(server, pos, chunk)) {
             generated.put(key, new GenEntry(chunk, level, true, false, resolvedOrigin));
             pump();
             return;
@@ -1630,10 +1661,10 @@ public final class ShadowLightCompute {
         if (dimension == null || !DimensionKey.isCacheableDimension(dimension)) {
             return false;
         }
-        // 光照缓存命中锚点：存档/引擎光已收敛时记 REUSE_CACHE，否则 RECOMPUTE。
-        // 与内存 hash 一致复用路径（!needRelight = isLightCorrect）同源。
-        // 写死 false 会让 UNCHANGED 全命中轮光照 100% 重算。
-        boolean lightReuse = chunk.isLightCorrect();
+        // 光照缓存命中锚点：引擎光已收敛且层已安装才 REUSE，否则 RECOMPUTE。
+        // 仅 isLightCorrect 会把空层当已亮，打出 skyTop=0 整柱。
+        ShadowSeedServer reuseServer = ShadowServerRegistry.getInstance().get();
+        boolean lightReuse = isLightReusable(reuseServer, pos, chunk);
         long key = DimensionKey.key(dimension, pos.x, pos.z);
         // 同柱已有网络来源（SERVER_PUSH/REMOTE_PULL）时禁止被 cache publish 覆盖来源——
         // 否则 R1 首进全量推送会被改写成 MEMORY_CACHE 假全命中。
@@ -1783,7 +1814,7 @@ public final class ShadowLightCompute {
                                     diskHashMatches(dimension, existing, pos, remoteHash));
                         }
                     if (!hashKnown || hashMatches) {
-                            boolean needRelight = !existing.isLightCorrect();
+                            boolean needRelight = !isLightReusable(server, pos, existing);
                             if (!pending.remove(e.getKey(), pendingEntry)) {
                                 continue;
                             }
@@ -2150,9 +2181,34 @@ public final class ShadowLightCompute {
             if (task.source == LightSource.LIGHT_ONLY) {
                 LightWork work = task.token instanceof LightWork w ? w : null;
                 pushLightReady(pos, task.level, task.chunk, converged, work);
+            } else if (shouldSkipEmptyReuseRepush(task.metric,
+                    isLightReusable(server, pos, task.chunk))) {
+                // 空 REUSE 一律改重算：卸载后 epoch 已清，不能只护「已落地」。
+                DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+                        "[SHADOW_LIGHT] Skip empty-reuse pack ({}, {}): requeue RECOMPUTE",
+                        pos.x, pos.z);
+                generated.put(task.key, new GenEntry(task.chunk, task.level, false,
+                        task.renderOnly, task.traceOrigin));
+                pump();
             } else {
-                pushReady(task.key, task.chunk, task.level, converged, task.renderOnly,
-                        task.traceOrigin);
+                // lightChunk future 只保证「本批 task 跑完」，不保证 sky/block 层非空
+                // （邻柱未齐 / 占位未过引擎时 POST_UPDATE 仍 setLightCorrect=true）。
+                // 打包前必须验引擎非 0 光；否则 empty-mask 客户端显式置 0 = 黑柱。
+                boolean lightUsable = isLightReusable(server, pos, task.chunk);
+                if (!lightUsable && requeueLightFollowUp(task.key)) {
+                    DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+                            "[SHADOW_LIGHT] Empty engine light after {} ({}, {}): requeue before pack",
+                            task.metric, pos.x, pos.z);
+                    generated.put(task.key, new GenEntry(task.chunk, task.level, false,
+                            task.renderOnly, task.traceOrigin));
+                    pump();
+                } else {
+                    if (lightUsable) {
+                        lightFollowUps.remove(task.key);
+                    }
+                    pushReady(task.key, task.chunk, task.level, converged, task.renderOnly,
+                            task.traceOrigin);
+                }
             }
         } catch (Throwable t) {
             DebugLogger.warn(DebugLogger.LogType.ASYNC,
@@ -2179,6 +2235,19 @@ public final class ShadowLightCompute {
         dropQueuedLights(new ChunkPos(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key)));
     }
 
+    /** 每柱补光重算上限（防「算完仍空」死循环）。 */
+    private static final int MAX_LIGHT_FOLLOW_UPS = 2;
+    private static final ConcurrentHashMap<Long, Integer> lightFollowUps = new ConcurrentHashMap<>();
+
+    private static boolean requeueLightFollowUp(long key) {
+        int n = lightFollowUps.merge(key, 1, Integer::sum);
+        if (n > MAX_LIGHT_FOLLOW_UPS) {
+            lightFollowUps.remove(key);
+            return false;
+        }
+        return true;
+    }
+
     private static void dropQueuedLights(ChunkPos pos) {
         ready.removeIf(item -> item.lightPacket != null
                 && item.lightPacket.getX() == pos.x && item.lightPacket.getZ() == pos.z);
@@ -2193,6 +2262,7 @@ public final class ShadowLightCompute {
         inflightLight.remove(key);
         lightUpdates.remove(key);
         shadowApplyEpochs.remove(key);
+        lightFollowUps.remove(key);
         lightInitialized.remove(key);
         lightInitPassed.remove(key);
         nativeLightChunks.remove(key);
@@ -2324,6 +2394,23 @@ public final class ShadowLightCompute {
             blockMask = (BitSet) work.blockMask().clone();
             blockMask.or(work.emptyBlockMask());
         }
+        // 不得断言「空 section」（vanilla 记成 emptyYMask → 客户端显式置 0 = 黑/灭灯），
+        // 掩码一律收敛为「线上确有该层光」且「开天格全 15」的 section。
+        // 这里必须覆盖两个来源：work 声明的变化 section（{@code work.emptySkyMask()} 会把
+        // 「算空的」section 也声明进来）以及 **work == null 的全柱请求**（superseded 收口路径；
+        // 旧代码只替换 sky 一侧、blockMask 留 null → 构造器对整个 block 层逐 section 断言，
+        // 空 block section 全被显式置 0 = 洞内灭灯）。只看 seed 侧 epoch 也会漏：epoch 会在
+        // 客户端卸载时被摘掉，而回传只发 light-only 包（不进 apply 计数），客户端可能仍持有该柱。
+        if (chunk != null) {
+            skyMask = SeedGenChunkCodec.wireLightMask(level.getLightEngine(),
+                    chunk.getPos(), LightLayer.SKY);
+            blockMask = SeedGenChunkCodec.wireLightMask(level.getLightEngine(),
+                    chunk.getPos(), LightLayer.BLOCK);
+            if (skyMask.isEmpty() && blockMask.isEmpty()) {
+                noteLightAssertSuppressed(pos);
+                return;
+            }
+        }
         ClientboundLightUpdatePacket packet =
                 new ClientboundLightUpdatePacket(pos, level.getLightEngine(), skyMask, blockMask);
         offerLightReady(pos, packet);
@@ -2367,6 +2454,10 @@ public final class ShadowLightCompute {
     public static void drainReady(long deadlineNs) {
         io.github.limuqy.mc.hassium.utils.ChunkFlowTiming.noteFrame(); // T0b 诊断：每帧 apply 计数
         JoinWorldFocus.updateFromClient();
+        // 黑块判定复检（1 帧后 post-apply 真值）：光包探针即时读数是光队列 flush 前的旧值
+        //（handleLightUpdatePacket 只入队），判定状态只由复检写入（handoff §7.1 假阳性）。
+        ClientChunkHandler.runProbeRecheck(Minecraft.getInstance() == null
+                ? null : Minecraft.getInstance().level);
         ShadowSeedServer server = ShadowServerRegistry.getInstance().get();
         if (server != null && server.isLightConverged()) {
             server.confirmLightsCorrectIfConverged();
@@ -2655,6 +2746,19 @@ public final class ShadowLightCompute {
                 lightUpdates.remove(key); // 维度未装配：收集作废
                 continue;
             }
+            // 客户端已持有该柱：只在影子光照引擎**无在途工作**时回传。重算/邻柱收紧会把该柱
+            // 层先打成空层再逐步传播（实测客户端依次收到 0 → 3 → 8 …），中间态写进客户端就是
+            // 「已亮柱被打黑」，且不会自愈：整柱包对已落地柱被抑制（hasClientApplyEpoch），
+            // 客户端只会继续收后续中间态。此处不清掩码 → 收敛后的那一帧打包的就是收敛值。
+            // <p>
+            // 判据只读引擎队列是否为空（ShadowSeedServer#isLightConverged(ServerLevel)）：
+            // 不读引擎数据层（与光照 worker 并发读 fastutil 会自旋），不排新光任务
+            // （推高 lightTasks 水位 → 主线程 injectChunk 5s 忙等 → 整卡死，2026-09-16 实测）。
+            if (hasClientApplyEpoch(DimensionKey.dimensionOf(key), pos)
+                    && !server.isLightConverged(level)) {
+                noteBridgeDeferHeld(pos);
+                continue;
+            }
             LevelLightEngine engine = level.getLightEngine();
             int minLightSection = engine.getMinLightSection();
             int lightSectionCount = engine.getLightSectionCount();
@@ -2683,6 +2787,41 @@ public final class ShadowLightCompute {
             if (skyMask.isEmpty() && blockMask.isEmpty()) {
                 continue; // 收集全部越界（异常高度数据）：无可发送内容
             }
+            // 只交付「不会降低客户端任何一格光」的 section（逐格 shadow ≥ client）。
+            // <p>
+            // 2026-09-16 flyrt5 定位：往返飞行后残留的黑板**全部**由 light-only 包造成，且包的
+            // {@code fullOrigin=section_delta} —— 分段增量/邻柱替换后影子引擎该柱可能只是**部分
+            // 点亮**（实测同 section {@code skyTop=0 skyMid=1}、缝边 {@code skyN=0}；整柱包对被改
+            // 的柱同样只做线掩码过滤，滤不掉「有非 0 值但整体偏暗」的半成品）。这种 section 一旦
+            // 覆盖客户端就是黑块且不会自愈：整柱包对已落地柱被抑制，客户端只会继续收中间态。
+            // 空 section / 半成品 section 不进掩码 = 客户端保留旧光（此刻旧光比影子对）；
+            // 真正变亮的变化照旧传达。
+            // <p>
+            // 代价（已知取舍）：影子比客户端**更暗**的合法变化（放方块挡住天光）不会经光桥下发，
+            // 要等整柱重投递；若把「更暗」放行，半传播态也会一起放行 → 黑块复现。
+            Minecraft mcForLight = Minecraft.getInstance();
+            net.minecraft.client.multiplayer.ClientLevel clientLevel =
+                    mcForLight == null ? null : mcForLight.level;
+            retainNoDowngrade(skyMask, engine, clientLevel, pos, LightLayer.SKY);
+            retainNoDowngrade(blockMask, engine, clientLevel, pos, LightLayer.BLOCK);
+            if (skyMask.isEmpty() && blockMask.isEmpty()) {
+                noteLightAssertSuppressed(pos);
+                continue;
+            }
+            // 两阶段光照的**中间态**（phase-1 INITIALIZE_LIGHT 刚把该柱层覆盖成全 0、
+            // phase-2 LIGHT 还没填回；或 phase-2 在途）：此时打包会把「还没算的空层」
+            // 以 emptyYMask 下发，客户端 readSectionList 显式写 new DataLayer() = 已亮柱
+            // 被打黑（2026-09-16 飞行黑块主因：桥包是当时唯一产光路径）。
+            // 本帧整柱不发，客户端保留旧光；屏障完成收口 finishLight 必带真光重发。
+            // <p>
+            // 本判据只用这两个 map（不读引擎、不排新光任务）。**不得**再往上加引擎读或新任务：
+            // 上面的线掩码过滤确实读引擎数据层（已上线、实测未卡死），但 2026-09-16 的整卡死
+            // 实证是「判严 isLightReusable → 多排光屏障 → lightTasks 越水位 → 主线程
+            // injectChunk 5s 忙等」——任何抬高引擎负载的改动都会复现。
+            if (isLightMidCompute(key)) {
+                noteMidComputeWithheld(pos);
+                continue;
+            }
             try {
                 offerLightReady(pos, new ClientboundLightUpdatePacket(pos, engine, skyMask, blockMask));
             } catch (Throwable t) {
@@ -2690,6 +2829,63 @@ public final class ShadowLightCompute {
                         "[SHADOW_LIGHT] Build failed ({}, {})", pos.x, pos.z);
             }
         }
+    }
+
+    /**
+     * 原地收窄掩码：只保留「不会把客户端打暗」的 section。
+     * <p>
+     * 只应客户端主线程调用（读客户端光照引擎，与写区块同线程）。掩码里没有的 section 客户端
+     * 保持旧光，因此这里的判据同时承担两件事：排除空 section（vanilla 会记成 emptyYMask →
+     * 客户端显式置 0），以及排除影子侧**半成品** section（逐格比客户端暗）。
+     */
+    private static void retainNoDowngrade(BitSet mask, LevelLightEngine engine,
+                                          net.minecraft.client.multiplayer.ClientLevel clientLevel,
+                                          ChunkPos pos, LightLayer layer) {
+        if (mask.isEmpty()) {
+            return;
+        }
+        LevelLightEngine clientEngine = clientLevel == null
+                ? null
+                : clientLevel.getChunkSource().getLightEngine();
+        int minLightSection = engine.getMinLightSection();
+        int lightSectionCount = engine.getLightSectionCount();
+        for (int i = mask.nextSetBit(0); i >= 0 && i < lightSectionCount; i = mask.nextSetBit(i + 1)) {
+            SectionPos sectionPos = SectionPos.of(pos, minLightSection + i);
+            DataLayer shadow = engine.getLayerListener(layer).getDataLayerData(sectionPos);
+            DataLayer client = clientEngine == null
+                    ? null
+                    : clientEngine.getLayerListener(layer).getDataLayerData(sectionPos);
+            if (!isAssertSafe(shadow, client)) {
+                mask.clear(i);
+            }
+        }
+    }
+
+    /**
+     * 影子 section 可否断言行（逐格 {@code shadow >= client}，且至少一格非 0）。
+     * {@code client == null}（客户端没有该 section）退化为「有非 0 光即可」。
+     * 占位层 {@code new DataLayer(2048)} 取值被 {@code & 15} 归一为 0 → 判为「无光」不下发
+     * （该层的线上 payload 恰好是全 0，直接下发就是黑板）。
+     */
+    private static boolean isAssertSafe(DataLayer shadow, DataLayer client) {
+        if (shadow == null) {
+            return false;
+        }
+        boolean anyLight = false;
+        for (int y = 0; y < 16; y++) {
+            for (int z = 0; z < 16; z++) {
+                for (int x = 0; x < 16; x++) {
+                    int shadowValue = shadow.get(x, y, z) & 15;
+                    if (shadowValue < (client == null ? 0 : (client.get(x, y, z) & 15))) {
+                        return false; // 会把客户端打暗：本 section 整体不下发
+                    }
+                    if (shadowValue != 0) {
+                        anyLight = true;
+                    }
+                }
+            }
+        }
+        return anyLight;
     }
 
     /** 绝对 sectionY 集合 → 包掩码 BitSet（位 = sectionY − minLightSection；越界丢弃）。 */
@@ -2703,6 +2899,66 @@ public final class ShadowLightCompute {
             }
         }
         return bits;
+    }
+
+    /**
+     * 该柱是否处于两阶段光照的中间态：phase-1 已装空层（{@code nativeLightChunks} 持有
+     * nativeChunk，等齐套门控）或 phase-2 在途（{@code inflightLight}）。这两个窗口里引擎
+     * 层是占位（全 0），不是算出来的结果——光桥此时打包会把空层打成 emptyYMask 下发。
+     */
+    private static boolean isLightMidCompute(long key) {
+        return nativeLightChunks.containsKey(key) || inflightLight.containsKey(key);
+    }
+
+    /** 中间态扣包计数与节流日志（诊断：确认护栏是否生效）。 */
+    private static final java.util.concurrent.atomic.AtomicLong withheldMidComputeLights =
+            new java.util.concurrent.atomic.AtomicLong();
+    private static volatile long lastMidComputeWithholdLogMs;
+
+    private static void noteMidComputeWithheld(ChunkPos pos) {
+        long total = withheldMidComputeLights.incrementAndGet();
+        long now = System.currentTimeMillis();
+        if (now - lastMidComputeWithholdLogMs < 1_000L) {
+            return;
+        }
+        lastMidComputeWithholdLogMs = now;
+        DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+                "[SHADOW_LIGHT] Withheld mid-compute light update ({}, {}) total={}",
+                pos.x, pos.z, total);
+    }
+
+    /** 光桥「等引擎收敛再回传」的推迟计数与节流日志（诊断：确认护栏生效）。 */
+    private static final java.util.concurrent.atomic.AtomicLong deferredHeldLights =
+            new java.util.concurrent.atomic.AtomicLong();
+    private static volatile long lastDeferLogMs;
+
+    private static void noteBridgeDeferHeld(ChunkPos pos) {
+        long total = deferredHeldLights.incrementAndGet();
+        long now = System.currentTimeMillis();
+        if (now - lastDeferLogMs < 1_000L) {
+            return;
+        }
+        lastDeferLogMs = now;
+        DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+                "[SHADOW_LIGHT] Deferred light update for held chunk ({}, {}) total={}",
+                pos.x, pos.z, total);
+    }
+
+    /** 光桥「掩码收窄后无可下发内容」的扣包计数与节流日志（诊断：确认护栏生效）。 */
+    private static final java.util.concurrent.atomic.AtomicLong suppressedLightAssertions =
+            new java.util.concurrent.atomic.AtomicLong();
+    private static volatile long lastSuppressedAssertLogMs;
+
+    private static void noteLightAssertSuppressed(ChunkPos pos) {
+        long total = suppressedLightAssertions.incrementAndGet();
+        long now = System.currentTimeMillis();
+        if (now - lastSuppressedAssertLogMs < 1_000L) {
+            return;
+        }
+        lastSuppressedAssertLogMs = now;
+        DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+                "[SHADOW_LIGHT] Suppressed light assert (empty/partial) ({}, {}) total={}",
+                pos.x, pos.z, total);
     }
 
 
@@ -2754,6 +3010,9 @@ public final class ShadowLightCompute {
         long chunkKey = DimensionKey.key(dim, pos.x, pos.z);
         Long removedEpoch = shadowApplyEpochs.remove(chunkKey);
         fullApplyTraces.remove(chunkKey);
+        lightFollowUps.remove(chunkKey);
+        // 黑块探针：该柱已不可见，「仍黑」统计不得再包含它（「曾亮」标记保留，回程变黑要算回归）。
+        ClientChunkHandler.onProbeChunkUnloaded(pos);
         // 允许对真实服再 compare（卸载后基线可能已过期）；不挡本地 publish
         requestedMisses.remove(chunkKey);
         if (removedEpoch != null) {
@@ -2879,7 +3138,7 @@ public final class ShadowLightCompute {
     /** 光照统计口径：REUSE_CACHE = 命中点已记 shadow reuse（跳过预览）；
      *  RECOMPUTE = 光屏障完成后记 miss + 重算耗时（PENDING/GENERATED 提交隔离预览）。
      *  LIGHT_ONLY 不记柱级 miss（邻柱补光会把次数刷到数万）。 */
-    private enum LightMetric {
+    enum LightMetric {
         REUSE_CACHE,
         RECOMPUTE
     }
