@@ -449,7 +449,9 @@ public class ShadowSeedServer extends MinecraftServer {
             // 悬置柱放行：数据到位后原版加载链恢复推进（LIGHT→FULL→playerLoadedChunk 桥，
             // R2 重连比对触达的前提；holder 永卡 EMPTY 会让 tracking 静默失明）
             ShadowChunkMapCompat.completeSuspendedLoad(dimension, pos, chunk);
-            clearPlaceholder(dimension, pos, key);
+            if (clearPlaceholder(dimension, pos, key)) {
+                ShadowLightCompute.notePlaceholderReplaced(this, dimension, pos);
+            }
             return true;
         } catch (Throwable t) {
             ShadowLightCompute.withChunkLock(pos, () -> restoreInjectedChunk(key, previous));
@@ -1297,7 +1299,9 @@ public class ShadowSeedServer extends MinecraftServer {
         });
         // 悬置柱放行（同 injectChunk）：读盘/生成柱入表即恢复原版加载链
         ShadowChunkMapCompat.completeSuspendedLoad(dimension, pos, chunk);
-        clearPlaceholder(dimension, pos, key);
+        if (clearPlaceholder(dimension, pos, key)) {
+            ShadowLightCompute.notePlaceholderReplaced(this, dimension, pos);
+        }
     }
 
     /**
@@ -1307,13 +1311,29 @@ public class ShadowSeedServer extends MinecraftServer {
      * tracking 的 drainSelections / drainRedeliver / tryServeOvdLocal / onChunkMaterialized / shape sweep）
      * 用来判定「未物化」。不撤会让该柱**永久**被当未物化：缓存命中路径拒绝交付、
      * tracking 反复重拉、redeliver 永久跳过——每轮都白付一次网络往返 + 一次多余算光。
+     *
+     * @return true = 旧柱曾是占位（调用方应触发 8 邻光残差登记）
      */
-    private void clearPlaceholder(String dimension, ChunkPos pos, long key) {
+    private boolean clearPlaceholder(String dimension, ChunkPos pos, long key) {
         if (placeholderChunks.remove(key)) {
             DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
                     "[SHADOW_PLACEHOLDER] Cleared placeholder ({}, {}) dim={} on real data",
                     pos.x, pos.z, dimension);
+            return true;
         }
+        return false;
+    }
+
+    /**
+     * 占位顶替后邻柱强制重算前置：清光 + {@code isLightCorrect=false}。
+     * 引擎只加不减，邻柱曾按空气占位算出的过亮 DataLayer 不会自发回撤。
+     */
+    void forceNeighborLightReset(ChunkPos pos, LevelChunk chunk) {
+        if (chunk == null || pos == null) {
+            return;
+        }
+        clearChunkLight(pos, chunk);
+        chunk.setLightCorrect(false);
     }
 
     /**
@@ -1863,6 +1883,13 @@ public class ShadowSeedServer extends MinecraftServer {
      */
     void clearHotStateAfterPark() {
         ShadowChunkMapCompat.clearSuspendedLoads();
+        // 占位成对摘：只清标记会让 isPlaceholder 对仍驻留的空气壳变假 → publish 误交付；
+        // 空气壳对 R2 内存 hash 命中无价值，与「保留真实柱」不冲突。
+        for (Long key : java.util.List.copyOf(placeholderChunks)) {
+            injectedChunks.remove(key);
+            placeholderChunks.remove(key);
+        }
+        ShadowLightCompute.clearPendingPlaceholderNeighborRelight();
         java.util.concurrent.ConcurrentHashMap<String, io.github.limuqy.mc.hassium.storage.ShadowStorageManager> map = storages;
         if (map != null) {
             for (io.github.limuqy.mc.hassium.storage.ShadowStorageManager mgr : map.values()) {

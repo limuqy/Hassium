@@ -262,8 +262,9 @@ public final class SmokeProbeWriter {
     /** 全柱非空气计数（16×16×(minY..maxY)；玩家邻域采样，每 dump 一次可接受）。 */
     private static long countNonAir(net.minecraft.world.level.chunk.LevelChunk chunk) {
         long n = 0L;
-        int minY = chunk.getMinBuildHeight();
-        int maxY = chunk.getMaxBuildHeight();
+        // 1.21.2 起 getMinBuildHeight/getMaxBuildHeight → getMinY/getMaxY（LevelHeightCompat）
+        int minY = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinBlockY(chunk);
+        int maxY = minY + chunk.getHeight();
         int baseX = chunk.getPos().getMinBlockX();
         int baseZ = chunk.getPos().getMinBlockZ();
         net.minecraft.core.BlockPos.MutableBlockPos pos = new net.minecraft.core.BlockPos.MutableBlockPos();

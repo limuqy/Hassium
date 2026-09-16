@@ -473,7 +473,7 @@ public final class SeedGenLevelCompat {
                         if (keys.length() > 0) {
                             keys.append(", ");
                         }
-                        keys.append(e.getKey().location());
+                        keys.append(io.github.limuqy.mc.hassium.compat.LevelCompat.keyId(e.getKey()));
                     }
                 } catch (Throwable ignored) {
                 }

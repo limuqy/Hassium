@@ -203,6 +203,14 @@ public final class ShadowLightCompute {
     private static final java.util.Set<Long> accountedCacheHits = java.util.concurrent.ConcurrentHashMap.newKeySet();
     /** 光照命中/重算已记账柱（复合键）。邻柱 LIGHT_ONLY 补光会把同一片柱刷成千上万次。 */
     private static final java.util.Set<Long> accountedLights = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    /**
+     * 占位被真实数据顶替后、曾按空气算光的 8 邻（复合键）。
+     * 只登记不立刻算光：同一邻柱被多个占位顶替时按 key 去重，拍头 drain 一次。
+     * 登记时即置邻柱 {@code !isLightCorrect}——park/断连来不及 drain 时 R2 hash 命中
+     * 仍会走 needRelight，不把过亮残差带进下一程。
+     */
+    private static final java.util.Set<Long> pendingPlaceholderNeighborRelight =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     /** hash 分流计数（会话累计；断连清零）。冒烟探针用，分辨整柱 miss 是内存漂移还是盘上无槽。 */
     private static final AtomicLong hashMemoryHits = new AtomicLong();
@@ -682,6 +690,9 @@ public final class ShadowLightCompute {
     /** 现在就能开屏障的投递。 */
     private static boolean hasStartablePendingWork() {
         if (!pending.isEmpty() || !pendingDeltas.isEmpty() || !generated.isEmpty()) {
+            return true;
+        }
+        if (!pendingPlaceholderNeighborRelight.isEmpty()) {
             return true;
         }
         for (Long key : pendingLightUpdates.keySet()) {
@@ -1751,6 +1762,7 @@ public final class ShadowLightCompute {
                 List<LightTask> lightTasks = new ArrayList<>();
                 // 先扫描齐套队列：邻柱后到可能让等待中的柱齐套
                 pumpGateReady(server, lightTasks);
+                drainPlaceholderNeighborRelight(server, lightTasks);
                 for (Map.Entry<Long, PendingEntry> e : batch) {
                     // 复合键解维：pending 键携带维度，服务端查询/引擎操作全部路由到该维度。
                     String dimension = DimensionKey.dimensionOf(e.getKey());
@@ -2772,6 +2784,7 @@ public final class ShadowLightCompute {
         lightInitialized.clear();
         lightInitPassed.clear();
         nativeLightChunks.clear();
+        pendingPlaceholderNeighborRelight.clear();
         LightNeighborhoodGate.clear();
         requestedMisses.clear();
         accountedIngress.clear();
@@ -2882,6 +2895,95 @@ public final class ShadowLightCompute {
                                LightMetric metric, boolean renderOnly, TraceOrigin traceOrigin) {
         LightTask toLightTask(long key) {
             return new LightTask(key, LightSource.GATE, token, chunk, level, metric, renderOnly, traceOrigin);
+        }
+    }
+
+    /**
+     * 占位被真实数据顶替：登记 8 邻中「已注入、非占位、isLightCorrect」的柱。
+     * 不在此同步算光——拍头 {@link #drainPlaceholderNeighborRelight} 合并去重，避免爬坡期
+     * 一次占位顶替放大成 8 次同步整柱 LIGHT。
+     */
+    static void notePlaceholderReplaced(ShadowSeedServer server, String dimension, ChunkPos pos) {
+        if (server == null || dimension == null || pos == null) {
+            return;
+        }
+        int registered = 0;
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                if (dx == 0 && dz == 0) {
+                    continue;
+                }
+                int nx = pos.x + dx;
+                int nz = pos.z + dz;
+                LevelChunk neighbor = server.injectedChunk(dimension, nx, nz);
+                if (neighbor == null || server.isPlaceholder(dimension, nx, nz)) {
+                    continue;
+                }
+                if (!neighbor.isLightCorrect()) {
+                    continue; // 本就要重算（已在门控/屏障路径）
+                }
+                long nKey = DimensionKey.key(dimension, nx, nz);
+                neighbor.setLightCorrect(false);
+                io.github.limuqy.mc.hassium.storage.ShadowStorageHashes
+                        .markLightDirty(dimension, new ChunkPos(nx, nz));
+                pendingPlaceholderNeighborRelight.add(nKey);
+                registered++;
+            }
+        }
+        if (registered > 0) {
+            DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+                    "[SHADOW_PLACEHOLDER] Replaced ({}, {}) dim={} registered {} neighbors for relight",
+                    pos.x, pos.z, dimension, registered);
+            pump();
+        }
+    }
+
+    /** park：丢掉未 drain 的邻柱重算登记（邻柱已标 !isLightCorrect，R2 仍会续算）。 */
+    static void clearPendingPlaceholderNeighborRelight() {
+        pendingPlaceholderNeighborRelight.clear();
+    }
+
+    /**
+     * 拍头消化占位顶替邻柱：清光 + 同批整柱重算（不经过齐套门控——邻柱自身 3×3
+     * 已在各自路径齐套过，这里只修「按空气算出的过亮」残差）。
+     * 已有 pending/generated 的柱不重复提交；仅光屏障在途则留队下轮再试。
+     */
+    private static void drainPlaceholderNeighborRelight(ShadowSeedServer server,
+                                                        List<LightTask> lightTasks) {
+        if (server == null || pendingPlaceholderNeighborRelight.isEmpty()) {
+            return;
+        }
+        for (Long key : java.util.List.copyOf(pendingPlaceholderNeighborRelight)) {
+            if (!pendingPlaceholderNeighborRelight.remove(key)) {
+                continue;
+            }
+            if (hasQueuedBlockWork(key)) {
+                continue; // pending/generated 会走完整算光
+            }
+            if (inflightLight.containsKey(key)) {
+                pendingPlaceholderNeighborRelight.add(key); // 屏障在途：下轮再试
+                continue;
+            }
+            String dimension = DimensionKey.dimensionOf(key);
+            if (dimension == null) {
+                continue;
+            }
+            ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
+            LevelChunk neighbor = server.injectedChunk(dimension, pos.x, pos.z);
+            if (neighbor == null || server.isPlaceholder(dimension, pos.x, pos.z)) {
+                continue;
+            }
+            net.minecraft.server.level.ServerLevel level = server.level(dimension);
+            if (level == null) {
+                continue;
+            }
+            server.forceNeighborLightReset(pos, neighbor);
+            lightTasks.add(new LightTask(key, LightSource.GATE, null, neighbor, level,
+                    LightMetric.RECOMPUTE, false,
+                    traceOrigin(TraceOrigin.SHADOW_MEMORY_CACHE)));
+            DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+                    "[SHADOW_PLACEHOLDER] Neighbor relight queued ({}, {}) dim={}",
+                    pos.x, pos.z, dimension);
         }
     }
 
