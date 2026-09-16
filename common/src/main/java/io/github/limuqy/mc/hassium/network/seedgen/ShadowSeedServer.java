@@ -451,7 +451,7 @@ public class ShadowSeedServer extends MinecraftServer {
             chunk.setLightCorrect(false);
             ShadowCacheEviction.recordAccess(dimension, pos);
             if (!fresh) {
-                awaitLightTaskDrain(level);
+                drainAfterClear(level);
             }
             // 悬置柱放行：数据到位后原版加载链恢复推进（LIGHT→FULL→playerLoadedChunk 桥，
             // R2 重连比对触达的前提；holder 永卡 EMPTY 会让 tracking 静默失明）
@@ -839,6 +839,57 @@ public class ShadowSeedServer extends MinecraftServer {
             ShadowLightCompute.awaitEngineTaskDrain(lightEngine);
         } catch (Throwable ignored) {
             // 引擎不可用时跳过排水，不阻塞影子端。
+        }
+    }
+
+    /** 上次异步排水投递时刻（节流去重：间隔内不重复投递；无「任务被取消后标志位卡死」的失败模式）。 */
+    private volatile long lastAsyncDrainScheduledMs;
+
+    /** 异步排水节流间隔。 */
+    private static final long ASYNC_DRAIN_MIN_INTERVAL_MS = 500L;
+    /** 异步排水时长上限：远小于 smoke 强退窗口(2s)与执行器关机等待(3s)，保证挂不住关机序列。 */
+    private static final long ASYNC_DRAIN_TIMEOUT_MS = 500L;
+
+    /**
+     * 清光后的水位控制，但**不得在客户端主线程上同步等**。
+     * <p>
+     * 主线程调用链：{@code MixinClientPacketListener.handleLevelChunkWithLight} HEAD →
+     * {@code ShadowVanillaLightPipeline.submitVisible} → {@code injectPreLight} → 本方法；
+     * lightTasks 越过水位时每柱白等最长 {@code CONVERGENCE_WAIT_TIMEOUT_MS}=5s = 客户端整卡死
+     * （2026-09-16 判严 isLightReusable 实测）。主线程路径改为投递**节流的**短时长异步排水
+     * ——「清光后把队列压回低水位」的 sorter 防错序语义保留，只是不阻塞帧；后台调用方
+     * （consumeLoop 等）保持同步排水。无后台执行器（冷启动）/已停（断连竞态）时宁可漏一次
+     * 排水也不阻塞主线程（漏排水的后果是任务错序窗口，由后续排水收敛）。
+     */
+    private void drainAfterClear(ServerLevel level) {
+        net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
+        if (mc == null || !mc.isSameThread()) {
+            awaitLightTaskDrain(level);
+            return;
+        }
+        long now = System.currentTimeMillis();
+        if (now - lastAsyncDrainScheduledMs < ASYNC_DRAIN_MIN_INTERVAL_MS) {
+            return; // 近期已有排水：本柱的清光任务会与之合并压回水位
+        }
+        lastAsyncDrainScheduledMs = now;
+        io.github.limuqy.mc.hassium.concurrent.HassiumTaskExecutor executor =
+                io.github.limuqy.mc.hassium.concurrent.HassiumTaskExecutor.getClient();
+        if (executor == null || !executor.isRunning()) {
+            return;
+        }
+        final ThreadedLevelLightEngine lightEngine;
+        try {
+            lightEngine = (ThreadedLevelLightEngine) level.getChunkSource().getLightEngine();
+        } catch (Throwable ignored) {
+            return; // 引擎不可用：跳过本次排水
+        }
+        try {
+            // SAFE_TO_CANCEL + 500ms 上限双保险：断连清理会取消它；即便在 cancelAll 之后才
+            // 投递（无人取消），也绝无可能 park 进关机窗口（flyrt16/17 实证）。
+            executor.submit(() -> ShadowLightCompute.awaitEngineTaskDrain(lightEngine, ASYNC_DRAIN_TIMEOUT_MS),
+                    io.github.limuqy.mc.hassium.concurrent.TaskCategory.SAFE_TO_CANCEL);
+        } catch (java.util.concurrent.RejectedExecutionException ignored) {
+            // 执行器已停（断连竞态）：跳过本次排水。
         }
     }
 

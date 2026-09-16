@@ -546,6 +546,17 @@ public final class ShadowLightCompute {
      * 避免超过 vanilla sorter 的并发阈值后出现任务错序与空光层。
      */
     static void awaitEngineTaskDrain(net.minecraft.server.level.ThreadedLevelLightEngine engine) {
+        awaitEngineTaskDrain(engine, CONVERGENCE_WAIT_TIMEOUT_MS);
+    }
+
+    /**
+     * @param timeoutMs 排水时长上限。后台同步调用方沿用 5s 全额；主线程的**异步**排水
+     *                 必须用远小于关机窗口的上限（flyrt16/17 实证：cancelAll 扫描之后才
+     *                 投递的排水无人取消，park 满 5s > smoke 强退 2s / executor 等待 3s，
+     *                 挂住优雅关机 → force exit + 非零退出码）。
+     */
+    static void awaitEngineTaskDrain(net.minecraft.server.level.ThreadedLevelLightEngine engine,
+                                     long timeoutMs) {
         if (!io.github.limuqy.mc.hassium.compat.mods.ForeignLightEngine.usesLightTaskWatermark(engine)) {
             // 外部光照引擎（Starlight / ScalableLux）从不填充 lightTasks，水位控制无意义；
             // 该柱随后以 RECOMPUTE（lit=false）提交，收敛由 isLightConverged 的
@@ -555,9 +566,12 @@ public final class ShadowLightCompute {
         try {
             io.github.limuqy.mc.hassium.mixin.ThreadedLevelLightEngineAccessor acc =
                     (io.github.limuqy.mc.hassium.mixin.ThreadedLevelLightEngineAccessor) engine;
-            long deadline = System.currentTimeMillis() + CONVERGENCE_WAIT_TIMEOUT_MS;
+            long deadline = System.currentTimeMillis() + timeoutMs;
+            // 中断即退出（executor cancelAll / JVM 关闭时不得继续 park——flyrt16 实证：
+            // 关机窗口里 park 满 5s 会卡住优雅停止，逼出 force System.exit 与非零退出码）。
             while (acc.hassium$getLightTasks().size() > ENGINE_TASK_LOW_WATER
-                    && System.currentTimeMillis() < deadline) {
+                    && System.currentTimeMillis() < deadline
+                    && !Thread.currentThread().isInterrupted()) {
                 try {
                     engine.tryScheduleUpdate();
                 } catch (Throwable ignored) {
