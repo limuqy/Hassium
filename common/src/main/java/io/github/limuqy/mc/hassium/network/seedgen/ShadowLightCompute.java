@@ -499,6 +499,7 @@ public final class ShadowLightCompute {
         accountedIngress.clear();
         shadowApplyEpochs.clear();
         fullApplyTraces.clear();
+        PARKED_FULL_DELIVERIES.clear(); // 旧维度的停车交付全部作废
         lightFollowUps.clear();
         ignoredApplyRetries.clear();
     }
@@ -1586,6 +1587,12 @@ public final class ShadowLightCompute {
                                          net.minecraft.server.level.ServerLevel level,
                                          TraceOrigin origin) {
         try {
+            // 整柱交付收敛停车门（与 pushReady 同一语义，见 shouldParkFullDelivery）。
+            long publishKey = DimensionKey.key(dimension, pos.x, pos.z);
+            if (shouldParkFullDelivery(publishKey, level)) {
+                parkFullDelivery(publishKey, chunk, level, true, false, origin);
+                return;
+            }
             runBuildOnShadowMain(pos, () -> {
                 ClientboundLevelChunkWithLightPacket packet;
                 packet = withChunkLock(pos, () -> SeedGenChunkCodec.buildPacket(chunk, level));
@@ -2276,6 +2283,7 @@ public final class ShadowLightCompute {
         inflightLight.remove(key);
         lightUpdates.remove(key);
         shadowApplyEpochs.remove(key);
+        PARKED_FULL_DELIVERIES.remove(key);
         lightFollowUps.remove(key);
         lightInitialized.remove(key);
         lightInitPassed.remove(key);
@@ -2323,6 +2331,13 @@ public final class ShadowLightCompute {
                                   boolean renderOnly, TraceOrigin traceOrigin,
                                   boolean standingPreview) {
         ChunkPos pos = chunk.getPos();
+        // 收敛停车门（flyrt7 实证）：引擎仍有在途光工作时不打包整柱——重算/邻柱收紧窗口里的
+        // 半成品层会被 wire 掩码放行（「有非 0 值但整体偏暗」）当权威值下发，正是已持柱被打黑的
+        // 整柱路径。standing 首包豁免（进服加载屏不等待）。
+        if (!standingPreview && shouldParkFullDelivery(key, level)) {
+            parkFullDelivery(key, chunk, level, converged, renderOnly, traceOrigin);
+            return;
+        }
         // P1（T7）：buildPacket 读注入 chunk section 容器（extractChunkData →
         // LevelChunkSection.write → PalettedContainer.acquire）——与 hash 比对线程
         // （chunkHashOf / computeSectionHashes）同 chunk 锁互斥，消除 1.21.11
@@ -2451,6 +2466,117 @@ public final class ShadowLightCompute {
                         .hassium$getChunkSource().hasChunk(chunkX, chunkZ);
     }
 
+    // ==================== 整柱交付收敛停车（flyrt7 路径） ====================
+
+    /** 停车时长上限：引擎持续忙时超时照旧打包（= 现状行为 + ≤1s 延迟），防饿死。 */
+    private static final long FULL_DELIVERY_PARK_TIMEOUT_MS = 1_000L;
+
+    private record ParkedFullDelivery(long key,
+                                      net.minecraft.world.level.chunk.LevelChunk chunk,
+                                      net.minecraft.server.level.ServerLevel level,
+                                      boolean converged, boolean renderOnly, TraceOrigin traceOrigin,
+                                      Long applyEpochAtPark, long deadlineMs) {
+    }
+
+    /**
+     * 整柱包停车表：{@link #shouldParkFullDelivery} 为真时不打包，等引擎收敛后由
+     * {@link #flushParkedFullDeliveries}（drainReady 帧首，客户端主线程）冲刷。
+     * 键 = 复合 chunk key；重复 pushReady 以新条目替换（deadline 一并刷新）。
+     */
+    private static final ConcurrentHashMap<Long, ParkedFullDelivery> PARKED_FULL_DELIVERIES =
+            new ConcurrentHashMap<>();
+
+    /** 引擎有在途光工作时整柱包不得打包（半成品层会被当权威值下发）。 */
+    private static boolean shouldParkFullDelivery(long key,
+                                                  net.minecraft.server.level.ServerLevel level) {
+        ShadowSeedServer server = ShadowServerRegistry.getInstance().get();
+        if (server == null || level == null) {
+            return false;
+        }
+        return !server.isLightConverged(level);
+    }
+
+    private static void parkFullDelivery(long key,
+                                         net.minecraft.world.level.chunk.LevelChunk chunk,
+                                         net.minecraft.server.level.ServerLevel level,
+                                         boolean converged, boolean renderOnly,
+                                         TraceOrigin traceOrigin) {
+        PARKED_FULL_DELIVERIES.put(key, new ParkedFullDelivery(key, chunk, level, converged,
+                renderOnly, traceOrigin, shadowApplyEpochs.get(key),
+                System.currentTimeMillis() + FULL_DELIVERY_PARK_TIMEOUT_MS));
+        noteFullDeliveryParked(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
+    }
+
+    /**
+     * 帧首冲刷：收敛或超时的条目打包交付；停车期间该柱已有更新的整柱包落地
+     * （apply epoch 变化）则丢弃防倒替。仍忙且未超时的条目留在表里下一帧再看。
+     */
+    private static void flushParkedFullDeliveries(ShadowSeedServer server) {
+        if (PARKED_FULL_DELIVERIES.isEmpty()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        for (ParkedFullDelivery parked : List.copyOf(PARKED_FULL_DELIVERIES.values())) {
+            boolean convergedNow = server != null && server.isLightConverged(parked.level());
+            if (!convergedNow && now < parked.deadlineMs()) {
+                continue; // 引擎仍忙且未超时：留表待下帧
+            }
+            if (!PARKED_FULL_DELIVERIES.remove(parked.key(), parked)) {
+                continue; // 已被更新的停车/清理替换
+            }
+            if (!java.util.Objects.equals(shadowApplyEpochs.get(parked.key()),
+                    parked.applyEpochAtPark())) {
+                noteFullDeliveryStaleDropped(parked.key());
+                continue; // 停车期间已有更新的整柱包落地：本包过期，防倒替
+            }
+            if (!convergedNow) {
+                noteFullDeliveryTimedOut(parked.key());
+            }
+            ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(parked.key()),
+                    DimensionKey.chunkZOf(parked.key()));
+            runBuildOnShadowMain(pos, () -> {
+                ClientboundLevelChunkWithLightPacket packet = withChunkLock(pos,
+                        () -> SeedGenChunkCodec.buildPacket(parked.chunk(), parked.level()));
+                offerReady(parked.key(), pos, packet, parked.converged(),
+                        parked.renderOnly(), parked.traceOrigin());
+            });
+        }
+    }
+
+    /** 停车/超时冲刷/过期丢弃的观测计数与节流日志（诊断：确认门控生效与频率）。 */
+    private static final java.util.concurrent.atomic.AtomicLong parkedFullDeliveries =
+            new java.util.concurrent.atomic.AtomicLong();
+    private static final java.util.concurrent.atomic.AtomicLong timedOutFullDeliveries =
+            new java.util.concurrent.atomic.AtomicLong();
+    private static final java.util.concurrent.atomic.AtomicLong staleDroppedFullDeliveries =
+            new java.util.concurrent.atomic.AtomicLong();
+    private static volatile long lastParkLogMs;
+
+    private static void noteFullDeliveryParked(int x, int z) {
+        long total = parkedFullDeliveries.incrementAndGet();
+        long now = System.currentTimeMillis();
+        if (now - lastParkLogMs < 1_000L) {
+            return;
+        }
+        lastParkLogMs = now;
+        DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+                "[SHADOW_LIGHT] Parked full delivery for convergence ({}, {}) total={}", x, z, total);
+    }
+
+    private static void noteFullDeliveryTimedOut(long key) {
+        timedOutFullDeliveries.incrementAndGet();
+        DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+                "[SHADOW_LIGHT] Parked full delivery timed out ({}, {})",
+                DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
+    }
+
+    private static void noteFullDeliveryStaleDropped(long key) {
+        staleDroppedFullDeliveries.incrementAndGet();
+        DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+                "[SHADOW_LIGHT] Parked full delivery stale-dropped ({}, {})",
+                DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
+    }
+
     /**
      * 帧尾（MixinClientTick，渲染前）：区块按脚下切比雪夫优先，光包仍 FIFO。
      * JoinBoost 两段消费：先 chunk 再光。加载屏只 apply 脚下 3×3。
@@ -2473,6 +2599,7 @@ public final class ShadowLightCompute {
         ClientChunkHandler.runProbeRecheck(Minecraft.getInstance() == null
                 ? null : Minecraft.getInstance().level);
         ShadowSeedServer server = ShadowServerRegistry.getInstance().get();
+        flushParkedFullDeliveries(server); // 整柱收敛停车冲刷（3b）
         if (server != null && server.isLightConverged()) {
             server.confirmLightsCorrectIfConverged();
         }
