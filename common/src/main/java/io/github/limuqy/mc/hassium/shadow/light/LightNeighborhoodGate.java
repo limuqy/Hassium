@@ -2,7 +2,6 @@ package io.github.limuqy.mc.hassium.shadow.light;
 
 import io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer;
 
-import io.github.limuqy.mc.hassium.network.ChunkAuthorityClient;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import io.github.limuqy.mc.hassium.utils.DimensionKey;
 import java.util.ArrayList;
@@ -205,7 +204,6 @@ public final class LightNeighborhoodGate {
         StringBuilder neighbors = new StringBuilder(8);
         int injectedNotInit = 0;
         int notInjected = 0;
-        int notAuthoritative = 0;
         for (int dx = -1; dx <= 1; dx++) {
             for (int dz = -1; dz <= 1; dz++) {
                 if (dx == 0 && dz == 0) {
@@ -214,9 +212,6 @@ public final class LightNeighborhoodGate {
                 int nx = pos.x + dx;
                 int nz = pos.z + dz;
                 long nKey = DimensionKey.key(dimension, nx, nz);
-                if (!ChunkAuthorityClient.isAuthoritative(dimension, nx, nz)) {
-                    notAuthoritative++;
-                }
                 if (ShadowLightCompute.isLightInitPassed(nKey)) {
                     neighbors.append('.'); // 曾过 INITIALIZE_LIGHT：就绪（单调，不会被 LIGHT 起跑撤掉）
                     continue;
@@ -232,7 +227,7 @@ public final class LightNeighborhoodGate {
         }
         if ((injectedNotInit > 0 || notInjected > 0) && !timedOut) {
             logBlockedOnce(key, dimension, pos, waitedMs, neighbors,
-                    injectedNotInit, notInjected, notAuthoritative);
+                    injectedNotInit, notInjected);
             return null;
         }
         // 退役空气占位：缺邻按引擎空 section 参与传播（对齐原版），不再把全空气柱
@@ -258,19 +253,18 @@ public final class LightNeighborhoodGate {
 
     /**
      * 门控阻塞诊断（每条目一次）：区分「邻柱未注入」（等不来 → 需要存在性预言机）与
-     * 「邻柱已注入但未过 INITIALIZE_LIGHT」（等得到 → 只是慢），并附权威声明覆盖情况。
+     * 「邻柱已注入但未过 INITIALIZE_LIGHT」（等得到 → 只是慢）。
      */
     private static void logBlockedOnce(long key, String dimension, ChunkPos pos, long waitedMs,
-                                       CharSequence neighbors, int injectedNotInit, int notInjected,
-                                       int notAuthoritative) {
+                                       CharSequence neighbors, int injectedNotInit, int notInjected) {
         if (!blockedLogged.add(key)) {
             return;
         }
         DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
                 "[LIGHT_GATE] Blocked ({}, {}) dim={} waited={}ms neighbors=[{}] "
-                        + "injectedNotInit={} notInjected={} notAuthoritative={}",
+                        + "injectedNotInit={} notInjected={}",
                 pos.x, pos.z, dimension, waitedMs, neighbors,
-                injectedNotInit, notInjected, notAuthoritative);
+                injectedNotInit, notInjected);
     }
 
     /** 待齐套 key 快照（供 consumeLoop 遍历；tryPromote 内部条件移除，安全）。 */

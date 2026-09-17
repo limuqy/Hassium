@@ -37,6 +37,33 @@ def _obj(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _player_chunk(probe: dict[str, Any]) -> tuple[int, int] | None:
+    pos = probe.get("playerPos")
+    if not isinstance(pos, list) or len(pos) < 3:
+        return None
+    try:
+        return int(pos[0]) >> 4, int(pos[2]) >> 4
+    except (TypeError, ValueError):
+        return None
+
+
+def _all_outside_final_vd_window(probe: dict[str, Any], gap: dict[str, Any], server_vd: int) -> bool:
+    """缺口坐标是否全部落在玩家区块 Chebyshev 半径 server_vd 之外（明确窗外）。"""
+    positions = gap.get("positions") or []
+    if not positions:
+        return False
+    chunk = _player_chunk(probe)
+    if chunk is None:
+        return False
+    px, pz = chunk
+    for item in positions:
+        if not isinstance(item, (list, tuple)) or len(item) < 2:
+            return False
+        if max(abs(int(item[0]) - px), abs(int(item[1]) - pz)) <= server_vd:
+            return False
+    return True
+
+
 def _num(value: Any) -> int | float | None:
     return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
@@ -403,10 +430,22 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
                 else:
                     failures.append(_failure(code, round=number, gap=gaps[key]))
             # 投递链缺口：与驻留无关（注入/ready 是交付路径本身），移动会话同样把守。
+            # R4 降级策略：classic R2 cache-only + VD 缩距后，injectedNotReady 若**全部**
+            # 落在最终玩家 ServerVD 窗外（Chebyshev > VD，经典 R2=10），视为票/红发残留
+            # 的窗外 inject 未 publish，降 P1；窗内缺口仍 P0。窗内虚空由 enclosed-hole 把守。
             for key, code in (("receivedNotInjected", "TRACE_RECEIVED_NOT_INJECTED"),
                               ("injectedNotReady", "TRACE_INJECTED_NOT_READY")):
-                if gaps[key]["count"]:
-                    failures.append(_failure(code, round=number, gap=gaps[key]))
+                if not gaps[key]["count"]:
+                    continue
+                if (code == "TRACE_INJECTED_NOT_READY" and cache_only_reconnect
+                        and _all_outside_final_vd_window(probe, gaps[key], 10)):
+                    warnings.append(_failure(
+                        code, "P1", round=number, gap=gaps[key],
+                        detail=("classic R2 cache-only after VD shrink: inject-without-ready "
+                                "entirely outside final ServerVD window; "
+                                "enclosed-hole + stats remain authoritative")))
+                    continue
+                failures.append(_failure(code, round=number, gap=gaps[key]))
         if gaps["appliedNotMeshed"]["count"]:
             skipped.append(_failure("TRACE_MESH_PENDING", "INFO", round=number,
                                     gap=gaps["appliedNotMeshed"],

@@ -71,31 +71,9 @@ public final class ShadowTrackingSession {
     private String currentDimension;
     private boolean createFailed;
     private long lastChunkTickMs;
-    /** 悬置登记队列（worldgen 压制柱；scheduleChunkLoad 钩子线程写入，影子主循环消费）。 */
-    private final java.util.Queue<SelectedChunk> pendingSelections =
-            new java.util.concurrent.ConcurrentLinkedQueue<>();
 
-    private record SelectedChunk(String dimension, int x, int z) {}
-
-    /** 会话落位基准点：首个稳定座位（虚拟玩家放置瞬间的 chunk）。用于补齐起飞后身侧/身后的
-     *  滞留环 —— 移动窗口天然不对称，绕该点铺静态「基准光盘」；半径 = 通告视距
-     *  （isChunkInRange 同款，≈ 原版可见 1529@VD20），不铺 authority 边距外圈。 */
+    /** 会话落位基准点：首个稳定座位（虚拟玩家放置瞬间的 chunk）。 */
     private ChunkPos homeChunk;
-    /** 基准光盘已布防待铺（ensureVirtualPlayer 落位后置真；单元格耗尽清除）。 */
-    /** 基准光盘单元格队列（螺旋由近及远；半径 = 当时 resolveViewDistance()）。 */
-    /** 相邻两次光盘发射的最小间隔（毫秒）：防百柱级无基线请求同心跳灌入服务端按需装载。 */
-    private static final long BOOT_EMIT_MIN_GAP_MS = 25L;
-    private long lastBootEmitMs;
-
-    /**
-     * 可见形状周期扫描间隔（毫秒）。移动后 vanilla 选柱链（scheduleChunkLoad →
-     * onChunkSelected → pendingSelections）会停——悬置 future 卡住或 2ms tick 预算被
-     * 卸载耗尽。本扫描不依赖 vanilla，直接枚举虚拟玩家当前可见形状内未注入柱补齐 pull。
-     */
-    private static final long SWEEP_INTERVAL_MS = 500L;
-    /** 单次形状扫描最多入队的缺失柱数（防单泵风暴；剩余下轮续扫）。 */
-    private static final int MAX_SWEEP_PER_PUMP = 128;
-    /** 客户端 unload 后、影子仍在可见形状内时的重发队列（真实服 Forget 半径可能小于影子 vd）。 */
     private final java.util.concurrent.ConcurrentLinkedQueue<ChunkPos> redeliverQueue =
             new java.util.concurrent.ConcurrentLinkedQueue<>();
     /** 单泵最多本地重发柱数。 */
@@ -156,8 +134,7 @@ public final class ShadowTrackingSession {
             }, RECLAIM_INTERVAL_MS, RECLAIM_INTERVAL_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
         }
     }
-    private long lastSweepMs;
-    /** 形状扫描 / boot / 悬置选柱共用的在途柱（复合键 → 入队时刻）：已发 pull 未注入。 */
+    /** 形状扫描 / 悬置选柱共用的在途柱（复合键 → 入队时刻）：已发 pull 未注入。 */
     private static final long SWEEP_INFLIGHT_TIMEOUT_MS = 60_000L;
     private final java.util.Map<Long, Long> sweepInFlight =
             new java.util.concurrent.ConcurrentHashMap<>();
@@ -222,6 +199,49 @@ public final class ShadowTrackingSession {
         }
     }
 
+    /**
+     * 权威 pull 门（R4）：**优先用真实客户端玩家区块**（真服 tracking 的中心），
+     * 会话未就绪（VD 未知 / 无中心）时禁止 pull。与 {@link #inVanillaVisibleShape}
+     * 的交付门语义分离：后者 center 未知时放行；这里保守，且不得用滞后的虚拟玩家中心
+     * （R2 join 期 VP 可能仍在 (0,0)，会把玩家脚下窗内柱误判窗外）。
+     */
+    public boolean isAuthorityPullEligible(int x, int z) {
+        if (serverViewDistance <= 0) {
+            return false;
+        }
+        ChunkPos center = deliveryCenter();
+        if (center == null) {
+            return false;
+        }
+        return ChunkShapeCompat.contains(center.x, center.z, serverViewDistance, x, z);
+    }
+
+    /**
+     * 交付/trace/pull 几何中心：真实客户端玩家区块优先（与 ClientChunkCache / 真服
+     * tracking 同轴），缺失时退回虚拟玩家 / homeChunk。
+     */
+    public static ChunkPos deliveryCenter() {
+        try {
+            Minecraft mc = Minecraft.getInstance();
+            if (mc != null && mc.player != null) {
+                return new ChunkPos(mc.player.getBlockX() >> 4, mc.player.getBlockZ() >> 4);
+            }
+        } catch (Throwable ignored) {
+            // 无客户端环境（单测/服务端线程）：退回影子会话中心
+        }
+        ShadowTrackingSession s = INSTANCE;
+        if (s == null) {
+            return null;
+        }
+        if (s.virtualPlayer != null) {
+            ChunkPos vp = s.virtualPlayer.chunkPosition();
+            if (vp != null) {
+                return vp;
+            }
+        }
+        return s.homeChunk;
+    }
+
     /** 当前服务端通告视距（未知 -1）。 */
     public static int serverViewDistance() {
         return INSTANCE.serverViewDistance;
@@ -270,11 +290,9 @@ public final class ShadowTrackingSession {
             virtualPlayer = null;
             currentDimension = null;
             createFailed = false;
-            pendingSelections.clear();
             sweepInFlight.clear();
             redeliverQueue.clear();
             lastChunkTickMs = 0;
-            lastSweepMs = 0;
         }
         if (shadow == null || createFailed) {
             return;
@@ -436,14 +454,9 @@ public final class ShadowTrackingSession {
                 outsideSinceMs.remove(key);
                 continue;
             }
-            if (shadow.unloadChunk(dimension, new ChunkPos(x, z), chunk, false)) {
+            if (ShadowColumnStore.flushAndEvict(dimension, new ChunkPos(x, z), chunk)) {
                 outsideSinceMs.remove(key);
                 reclaimed++;
-                io.github.limuqy.mc.hassium.shadow.track.VanillaAlignedChunkProvider
-                        .failAcquire(dimension, new ChunkPos(x, z));
-                DebugLogger.info(DebugLogger.LogType.NETWORK,
-                        "[SHADOW_TRACK] reclaim ({}, {}) -> flush+evict injected (dimension={})",
-                        x, z, dimension);
             }
         }
     }
@@ -681,7 +694,6 @@ public final class ShadowTrackingSession {
      * 探针 trace 也按维度会话重置，避免返主世界读到进服那一轮的 stale overworld 计数。
      */
     private void onTrackingDimensionChanged(PendingState state) {
-        pendingSelections.clear();
         sweepInFlight.clear();
         redeliverQueue.clear();
         ovdCounted.clear();
@@ -689,8 +701,6 @@ public final class ShadowTrackingSession {
         ovdMissRetryAt.clear();
         lastOvdSweepMs = 0L;
         homeChunk = new ChunkPos((int) state.x() >> 4, (int) state.z() >> 4);
-        lastBootEmitMs = 0L;
-        lastSweepMs = 0L;
         lastChunkTickMs = 0L;
         appliedViewDistance = -1;
         SmokeChunkTrace.reset();
@@ -778,12 +788,12 @@ public final class ShadowTrackingSession {
         return cfg.isClientCacheEnabled() && cfg.isViewDistanceExtensionEnabled();
     }
 
-    /** 权威窗：原版可见形状（pull / bootGrid / sweep 唯一几何）。 */
+    /** 权威窗：原版可见形状（pull / bootGrid / sweep 唯一几何）。中心与真服 tracking 同轴。 */
     private boolean inVanillaVisibleShape(int x, int z) {
         if (serverViewDistance <= 0) {
             return true;
         }
-        ChunkPos center = virtualPlayer == null ? homeChunk : virtualPlayer.chunkPosition();
+        ChunkPos center = deliveryCenter();
         if (center == null) {
             return true;
         }
@@ -804,7 +814,7 @@ public final class ShadowTrackingSession {
         if (serverViewDistance <= 0 || effectiveClientVD <= serverViewDistance) {
             return false;
         }
-        ChunkPos center = virtualPlayer == null ? homeChunk : virtualPlayer.chunkPosition();
+        ChunkPos center = deliveryCenter();
         if (center == null) {
             return false;
         }
@@ -840,6 +850,46 @@ public final class ShadowTrackingSession {
                     desired, serverViewDistance);
         } catch (Throwable t) {
             DebugLogger.warn(DebugLogger.LogType.ASYNC, "[SHADOW_TRACK] view distance apply failed", t);
+        }
+        // R4：VD 应用后按当前权威窗扫描注入表，窗外柱入 reclaim（原版票掉出→save→离内存）。
+        enqueueOutOfWindowInjectedForReclaim(shadow);
+    }
+
+    /**
+     * 原版生命周期（R4）：保留域外的注入柱登记离开时刻，由 reclaim 线程
+     * {@link ShadowColumnStore#flushAndEvict}（type126 先落盘再摘表）。
+     * <b>不得</b>在影子主循环内直接 unload（flush 会等主循环 → 自死锁）。
+     */
+    private void enqueueOutOfWindowInjectedForReclaim(ShadowSeedServer shadow) {
+        if (shadow == null || virtualPlayer == null || currentDimension == null
+                || serverViewDistance <= 0) {
+            return;
+        }
+        ChunkPos center = deliveryCenter();
+        if (center == null) {
+            return;
+        }
+        int enrolled = 0;
+        long now = System.currentTimeMillis();
+        for (Long key : shadow.injectedKeys()) {
+            if (key == null || !currentDimension.equals(DimensionKey.dimensionOf(key))) {
+                continue;
+            }
+            int x = DimensionKey.chunkXOf(key);
+            int z = DimensionKey.chunkZOf(key);
+            if (ChunkShapeCompat.contains(center.x, center.z, serverViewDistance, x, z)
+                    || inOvdWindow(x, z)) {
+                continue;
+            }
+            if (outsideSinceMs.putIfAbsent(key, now) == null) {
+                enrolled++;
+            }
+        }
+        if (enrolled > 0) {
+            ensureReclaimTimer();
+            DebugLogger.info(DebugLogger.LogType.NETWORK,
+                    "[SHADOW_TRACK] enqueue out-of-window reclaim count={} center=({},{}) vd={} (dimension={})",
+                    enrolled, center.x, center.z, serverViewDistance, currentDimension);
         }
     }
 
@@ -977,14 +1027,7 @@ public final class ShadowTrackingSession {
             DebugLogger.info(DebugLogger.LogType.NETWORK,
                     "[SHADOW_TRACK] local worldgen ({}, {}) persist then compare-before-light (dimension={})",
                     pos.x, pos.z, dimension);
-            if (!markPullInFlight(dimension, pos, System.currentTimeMillis())) {
-                return;
-            }
-            if (ShadowLightCompute.hasLocalPullBaseline(dimension, pos)) {
-                ShadowPullClient.requestFull(dimension, java.util.List.of(pos));
-            } else {
-                ShadowPullClient.requestAuthoritativeFull(dimension, java.util.List.of(pos));
-            }
+            requestPullEligible(dimension, pos, false);
             return;
         }
         // 空占位/无盘命中的首注入：没有可发布的基线，先 pull 真实数据（禁止把空气柱推给客户端）
@@ -995,14 +1038,7 @@ public final class ShadowTrackingSession {
             DebugLogger.info(DebugLogger.LogType.NETWORK,
                     "[SHADOW_TRACK] materialized ({}, {}) no-local-baseline -> pull (dimension={})",
                     pos.x, pos.z, dimension);
-            if (!markPullInFlight(dimension, pos, System.currentTimeMillis())) {
-                return;
-            }
-            if (ShadowLightCompute.hasLocalPullBaseline(dimension, pos)) {
-                ShadowPullClient.requestFull(dimension, java.util.List.of(pos));
-            } else {
-                ShadowPullClient.requestAuthoritativeFull(dimension, java.util.List.of(pos));
-            }
+            requestPullEligible(dimension, pos, false);
             return;
         }
         // 本会话客户端尚未落地（重连后新 ClientChunkCache）：必须重新 publish。
@@ -1015,15 +1051,11 @@ public final class ShadowTrackingSession {
                         "[SHADOW_TRACK] materialized ({}, {}) redeliver-publish-failed -> pull (dimension={})",
                         pos.x, pos.z, dimension);
                 ShadowLightCompute.clearRequestMiss(dimension, pos);
-                if (markPullInFlight(dimension, pos, System.currentTimeMillis())) {
-                    ShadowPullClient.requestAuthoritativeFull(dimension, java.util.List.of(pos));
-                }
+                requestPullEligible(dimension, pos, true);
                 return;
             }
-            if (!io.github.limuqy.mc.hassium.network.ChunkAuthorityClient.pullEmissionSuppressed()
-                    && ShadowLightCompute.tryRequestMiss(dimension, pos)
-                    && markPullInFlight(dimension, pos, System.currentTimeMillis())) {
-                ShadowPullClient.requestFull(dimension, java.util.List.of(pos));
+            if (ShadowLightCompute.tryRequestMiss(dimension, pos)) {
+                requestPullEligible(dimension, pos, false);
             }
             return;
         }
@@ -1032,10 +1064,8 @@ public final class ShadowTrackingSession {
         if (alreadyMaterialized
                 && (ShadowLightCompute.wasNetworkIngress(dimension, pos)
                     || ShadowLightCompute.hasClientApplyEpoch(dimension, pos))) {
-            if (!io.github.limuqy.mc.hassium.network.ChunkAuthorityClient.pullEmissionSuppressed()
-                    && ShadowLightCompute.tryRequestMiss(dimension, pos)
-                    && markPullInFlight(dimension, pos, System.currentTimeMillis())) {
-                ShadowPullClient.requestFull(dimension, java.util.List.of(pos));
+            if (ShadowLightCompute.tryRequestMiss(dimension, pos)) {
+                requestPullEligible(dimension, pos, false);
             }
             return;
         }
@@ -1046,20 +1076,42 @@ public final class ShadowTrackingSession {
                     "[SHADOW_TRACK] materialized ({}, {}) publish-failed -> pull (dimension={})",
                     pos.x, pos.z, dimension);
             ShadowLightCompute.clearRequestMiss(dimension, pos);
-            if (markPullInFlight(dimension, pos, System.currentTimeMillis())) {
-                ShadowPullClient.requestAuthoritativeFull(dimension, java.util.List.of(pos));
-            }
+            requestPullEligible(dimension, pos, true);
             return;
         }
         DebugLogger.info(DebugLogger.LogType.NETWORK,
                 "[SHADOW_TRACK] materialized ({}, {}) alreadyMaterialized={} -> publishCached (dimension={})",
                 pos.x, pos.z, alreadyMaterialized, dimension);
         // 已本地交付后，可选对真实服 compare 保新鲜；防抖只作用于网络请求
-            if (!io.github.limuqy.mc.hassium.network.ChunkAuthorityClient.pullEmissionSuppressed()
-                    && ShadowLightCompute.tryRequestMiss(dimension, pos)
-                    && markPullInFlight(dimension, pos, System.currentTimeMillis())) {
-                    ShadowPullClient.requestFull(dimension, java.util.List.of(pos));
+        if (ShadowLightCompute.tryRequestMiss(dimension, pos)) {
+            requestPullEligible(dimension, pos, false);
         }
+    }
+
+    /**
+     * R4：仅在权威窗内且会话就绪时向真服 pull。
+     *
+     * @param authoritative true = 无基线/发布失败后的权威 FULL；false = 有基线 compare（FULL 优先）
+     */
+    private boolean requestPullEligible(String dimension, ChunkPos pos, boolean authoritative) {
+        if (pos == null || dimension == null) {
+            return false;
+        }
+        if (!isAuthorityPullEligible(pos.x, pos.z)) {
+            DebugLogger.info(DebugLogger.LogType.NETWORK,
+                    "[SHADOW_TRACK] skip pull outside authority window ({}, {}) dim={} auth={}",
+                    pos.x, pos.z, dimension, authoritative);
+            return false;
+        }
+        if (!markPullInFlight(dimension, pos, System.currentTimeMillis())) {
+            return false;
+        }
+        if (!authoritative && ShadowLightCompute.hasLocalPullBaseline(dimension, pos)) {
+            ShadowPullClient.requestFull(dimension, java.util.List.of(pos));
+        } else {
+            ShadowPullClient.requestAuthoritativeFull(dimension, java.util.List.of(pos));
+        }
+        return true;
     }
 
     /**
@@ -1132,7 +1184,6 @@ public final class ShadowTrackingSession {
         // 覆盖，异步清理会把它抹掉（R2 OVD 窗不开 → ovdLoaded=0）。
         s.boundServer = null;
         s.createFailed = false;
-        s.pendingSelections.clear();
         s.sweepInFlight.clear();
         s.redeliverQueue.clear();
         s.outsideSinceMs.clear();
@@ -1147,7 +1198,6 @@ public final class ShadowTrackingSession {
         s.ovdMissRetryAt.clear();
         s.lastOvdSweepMs = 0;
         s.homeChunk = null;
-        s.lastBootEmitMs = 0;
         s.lastChunkTickMs = 0;
     }
 

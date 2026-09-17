@@ -62,14 +62,24 @@ public final class VanillaAlignedChunkProvider implements ShadowChunkProvider {
         if (raced != null) {
             inflight.replace(key, raced, future);
         }
+        ShadowTrackingSession session = ShadowTrackingSession.getInstance();
+        // R4：会话未就绪 / 权威窗外禁止向真服 acquire（对齐原版 untrack 不发包）
+        if (session != null && !session.isAuthorityPullEligible(pos.x, pos.z)) {
+            inflight.remove(key, future);
+            future.completeExceptionally(
+                    new IllegalStateException("acquire outside authority window: " + pos));
+            DebugLogger.info(DebugLogger.LogType.NETWORK,
+                    "[SHADOW_PROVIDER] skip acquire outside authority window ({}, {}) dim={}",
+                    pos.x, pos.z, dimension);
+            return future;
+        }
         if (!io.github.limuqy.mc.hassium.network.ShadowPullClient
                 .isPullRetryAllowed(dimension, pos)) {
             // 冷却：清失败戳后立刻允许本轮（重连窗口不得整窗饿死）
             io.github.limuqy.mc.hassium.network.ShadowPullClient.clearPullFailure(dimension, pos);
         }
         boolean hasBaseline = ShadowLightCompute.hasLocalPullBaseline(dimension, pos);
-        ShadowTrackingSession session = ShadowTrackingSession.getInstance();
-        if (!session.markPullInFlightForAcquire(dimension, pos, System.currentTimeMillis())) {
+        if (session != null && !session.markPullInFlightForAcquire(dimension, pos, System.currentTimeMillis())) {
             // 残留在途标记：清掉后重试一次，保证悬置 future 一定有 pull 在途
             session.clearPullInFlight(dimension, pos);
             if (!session.markPullInFlightForAcquire(dimension, pos, System.currentTimeMillis())) {

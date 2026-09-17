@@ -925,6 +925,8 @@ public final class ShadowLightCompute {
         if (chunk == null) {
             return false;
         }
+        // S3 光照缓存：publish 路径（R2 缓存回放等未必再进 scheduleChunkLoad）
+        accountLightFromChunk(resolved, pos, chunk);
         if (localGeneration) {
             return submitGenerated(pos, chunk, level, false);
         }
@@ -973,6 +975,7 @@ public final class ShadowLightCompute {
                     return;
                 }
                 server.injectLoadedChunk(dimension, pos, loaded);
+                accountLightFromChunk(dimension, pos, loaded);
                 net.minecraft.server.level.ServerLevel level = server.level(dimension);
                 if (level == null) {
                     onDiskPublishMiss(dimension, pos, localGeneration, renderOnly);
@@ -1544,14 +1547,59 @@ public final class ShadowLightCompute {
             pump();
             return;
         }
-        // 两阶段光照第一阶段：立即跑 INITIALIZE_LIGHT（装空 DataLayer），
-        // 对齐原版生成金字塔——邻柱先到 INITIALIZE_LIGHT，中心柱才跑 LIGHT。
+        // S3：原版光——INITIALIZE_LIGHT 后直接进光屏障，不进 NeighborhoodGate/park。
         initializeLightImmediately(server, key, chunk, level);
-        // 进齐套门控：等 3×3 邻域都过 INITIALIZE_LIGHT 后再跑 LIGHT 交付。
-        LightNeighborhoodGate.enqueue(key, resolved, pos,
-                new GateContext(null, chunk, level,
-                        LightMetric.RECOMPUTE, false, resolvedOrigin));
+        generated.put(key, new GenEntry(chunk, level, false, false, resolvedOrigin));
         pump();
+    }
+
+    /**
+     * S3 光照缓存口径（客户端统计，按柱去重）：
+     * <ul>
+     *   <li>{@code isLightCorrect()==true}（读盘完整光 / 注入前引擎已点亮）→ {@code lightReuseShadow}</li>
+     *   <li>其它（网络注入后 {@code setLightCorrect(false)}、光未完成）→ {@code lightCacheMiss}</li>
+     * </ul>
+     * 调用点：{@code scheduleChunkLoad}、{@code injectChunk}、{@code injectLoadedChunk}、
+     * {@code publishCachedChunk}（含异步读盘回调）。首记胜出，防双计。
+     */
+    public static void accountLightFromChunk(String dimension, ChunkPos pos,
+                                             net.minecraft.world.level.chunk.LevelChunk chunk) {
+        if (pos == null) {
+            return;
+        }
+        String dim = dimension == null ? currentDimension() : dimension;
+        if (dim == null) {
+            return;
+        }
+        boolean complete = chunk != null && chunk.isLightCorrect();
+        accountLightColumn(dim, pos, complete);
+    }
+
+    /**
+     * {@code scheduleChunkLoad} 记账：注入表 → 读盘；无柱记重算。
+     * 不短路 schedule future（S2 始终悬置 + Provider）。
+     */
+    public static void accountLightAtScheduleLoad(String dimension, ChunkPos pos) {
+        if (pos == null) {
+            return;
+        }
+        ShadowSeedServer server = ShadowServerRegistry.getInstance().get();
+        if (server == null) {
+            return;
+        }
+        String dim = dimension == null ? currentDimension() : dimension;
+        if (dim == null) {
+            return;
+        }
+        LevelChunk chunk = server.injectedChunk(dim, pos.x, pos.z);
+        if (chunk == null) {
+            LevelChunk disk = server.loadFromDisk(dim, pos);
+            if (disk != null) {
+                server.injectLoadedChunk(dim, pos, disk, false);
+                chunk = disk;
+            }
+        }
+        accountLightFromChunk(dim, pos, chunk);
     }
 
     /**
@@ -1623,12 +1671,7 @@ public final class ShadowLightCompute {
             if (!ShadowTrackingSession.isDeliverableToClient(pos.x, pos.z)) {
                 return; // 光环柱：只算光不交付
             }
-            // 整柱交付收敛停车门（与 pushReady 同一语义，见 shouldParkFullDelivery）。
-            long publishKey = DimensionKey.key(dimension, pos.x, pos.z);
-            if (shouldParkFullDelivery(publishKey, chunk, level)) {
-                parkFullDelivery(publishKey, chunk, level, true, false, origin, 0);
-                return;
-            }
+            // S3：原版光——status/引擎产出即交付，无收敛停车门。
             runBuildOnShadowMain(pos, () -> {
                 ClientboundLevelChunkWithLightPacket packet;
                 packet = withChunkLock(pos, () -> SeedGenChunkCodec.buildPacket(chunk, level));
@@ -1893,15 +1936,13 @@ public final class ShadowLightCompute {
                                                 : traceOrigin(TraceOrigin.SHADOW_MEMORY_CACHE)));
                                 continue;
                             }
-                            // 需要重算光：先跑 INITIALIZE_LIGHT，再进齐套门控。
+                            // S3：原版光，不进齐套门控
                             initializeLightImmediately(server, e.getKey(), existing, server.level(dimension));
-                            LightNeighborhoodGate.enqueue(e.getKey(), dimension, pos,
-                                    new GateContext(null, existing,
-                                            server.level(dimension), LightMetric.RECOMPUTE,
-                                            false,
-                                            pendingEntry.traceOrigin() != null
-                                                    ? pendingEntry.traceOrigin()
-                                                    : traceOrigin(TraceOrigin.SHADOW_MEMORY_CACHE)));
+                            generated.put(e.getKey(), new GenEntry(existing, server.level(dimension),
+                                    false, false,
+                                    pendingEntry.traceOrigin() != null
+                                            ? pendingEntry.traceOrigin()
+                                            : traceOrigin(TraceOrigin.SHADOW_MEMORY_CACHE)));
                             continue;
                         }
                         // hash 已知且不匹配：影子副本过期，覆盖注入（走下方 injectChunk）。
@@ -1921,12 +1962,10 @@ public final class ShadowLightCompute {
                     }
                     accountVisibleNetworkIngress(dimension, pos, staleRepush);
                     LevelChunk injected = server.injectedChunk(dimension, pos.x, pos.z);
-                    // 两阶段光照第一阶段：立即跑 INITIALIZE_LIGHT，再进齐套门控。
+                    // S3：原版光——INITIALIZE_LIGHT 后直接光屏障，不进 NeighborhoodGate。
                     initializeLightImmediately(server, e.getKey(), injected, server.level(dimension));
-                    LightNeighborhoodGate.enqueue(e.getKey(), dimension, pos,
-                            new GateContext(pendingEntry, injected,
-                                    server.level(dimension), LightMetric.RECOMPUTE, false,
-                                    pendingEntry.traceOrigin()));
+                    generated.put(e.getKey(), new GenEntry(injected, server.level(dimension),
+                            false, false, pendingEntry.traceOrigin()));
                 }
                 // 分段增量应用：本地基线 chunk 上就地覆盖变更 section + heightmaps + BE，
                 // 变更 section 清光（applySectionDelta 内）→ 与注入共享下方光屏障。
@@ -2091,21 +2130,8 @@ public final class ShadowLightCompute {
                 }
                 try {
                     startLightBarrier(server, t, deadlineMs);
-                    // 光照统计在提交成功时记（而非回传完成时）：冒烟快照窗口内光屏障可能还在
-                    // 在途，等 finishLight 再记会让「分片增量已发生但光照重算仍显示 0」。
-                    // PENDING（服务端直推剥光柱）同样计入：任务建时就带 RECOMPUTE metric，
-                    // 排除它会让剥光会话 round1 的重算量整体漏记（光照行恒 0/0 死区）。
-                    if (shouldAccountLightBarrierMetric(t.source == LightSource.LIGHT_ONLY)) {
-                        ChunkPos metricPos = new ChunkPos(
-                                DimensionKey.chunkXOf(t.key), DimensionKey.chunkZOf(t.key));
-                        String metricDim = DimensionKey.dimensionOf(t.key);
-                        if (t.renderOnly || t.metric == LightMetric.REUSE_CACHE) {
-                            // OVD/renderOnly：本地全量服务，按复用记账、不进重算分母。
-                            accountLightColumn(metricDim, metricPos, true);
-                        } else if (t.metric == LightMetric.RECOMPUTE) {
-                            accountLightColumn(metricDim, metricPos, false);
-                        }
-                    }
+                    // S3：光照缓存计数改在 scheduleChunkLoad（accountLightAtScheduleLoad），
+                    // 光屏障提交不再按 REUSE/RECOMPUTE 记账，避免双计。
                 } catch (Throwable ex) {
                     abortLight(t.key, ex);
                 }
@@ -2278,13 +2304,8 @@ public final class ShadowLightCompute {
                     generated.put(task.key, new GenEntry(task.chunk, task.level, false,
                             task.renderOnly, task.traceOrigin));
                     pump();
-                } else if (server != null && !surfaceReady) {
-                    // 地表仍黑一律停车（含「引擎已收敛」）：占位邻域算完后队列可很快空，
-                    // 但 surface 探针仍 0——此时直接 pack 会发出首包黑柱（8,19 / 5,21）。
-                    // flush 超时（约 1s）仍会强制打包，洞穴/遮挡柱最多多等一轮。
-                    parkFullDelivery(task.key, task.chunk, task.level, converged,
-                            task.renderOnly, task.traceOrigin, 0);
                 } else {
+                    // S3：原版光——引擎算完即交付，不因地表探针 park。
                     if (lightUsable) {
                         lightFollowUps.remove(task.key);
                     }
@@ -2567,13 +2588,7 @@ public final class ShadowLightCompute {
                     pos.x, pos.z, DimensionKey.dimensionOf(key));
             return;
         }
-        // 收敛停车门（flyrt7 实证）：引擎仍有在途光工作时不打包整柱——重算/邻柱收紧窗口里的
-        // 半成品层会被 wire 掩码放行（「有非 0 值但整体偏暗」）当权威值下发，正是已持柱被打黑的
-        // 整柱路径。standing 首包豁免（进服加载屏不等待）。
-        if (!standingPreview && shouldParkFullDelivery(key, chunk, level)) {
-            parkFullDelivery(key, chunk, level, converged, renderOnly, traceOrigin, 0);
-            return;
-        }
+        // S3：原版光——引擎产出即打包交付，无 park / NeighborhoodGate 门。
         // P1（T7）：buildPacket 读注入 chunk section 容器（extractChunkData →
         // LevelChunkSection.write → PalettedContainer.acquire）——与 hash 比对线程
         // （chunkHashOf / computeSectionHashes）同 chunk 锁互斥，消除 1.21.11

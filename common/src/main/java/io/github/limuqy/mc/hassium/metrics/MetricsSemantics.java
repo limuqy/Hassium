@@ -77,21 +77,18 @@ package io.github.limuqy.mc.hassium.metrics;
  *       命中 N/B，重算 N/B
  * </pre>
  * <ul>
- *   <li><b>命中</b>：影子端读取已收敛光照的区块（区块缓存全命中且
- *       {@code isLightCorrect}；或 OVD/renderOnly 本地全量服务）。
+ *   <li><b>命中</b>：S3 口径——{@code isLightCorrect()==true}（读盘完整光）。
  *       计数器：{@code lightReuseShadowCount/Bytes}（剥光协商下直连
  *       {@code lightCacheHitCount} 恒 0）。</li>
- *   <li><b>重算</b>：所有需要算光的场景——网络 FULL 注入、DELTA 合并后、
- *       缓存柱欠光（{@code !isLightCorrect}）续算。
+ *   <li><b>重算</b>：光未完成（网络注入 {@code setLightCorrect(false)} 等）。
  *       计数器：{@code lightCacheMissCount/Bytes}。
  *       邻柱 LIGHT_ONLY 补光不进分母。</li>
  * </ul>
- * 锚点：
+ * 锚点（S3：首记胜出，按柱去重 {@code accountLightColumn}）：
  * <ul>
- *   <li>{@code recordLightReuseShadow} ← 光屏障提交且 (renderOnly || REUSE_CACHE)</li>
- *   <li>{@code recordLightCacheMiss} ← 光屏障提交且 RECOMPUTE</li>
- *   <li>REUSE_CACHE 条件：{@code GenEntry.lightReuse == true}，
- *       即提交时 {@code chunk.isLightCorrect()}</li>
+ *   <li>{@code accountLightFromChunk} ← {@code scheduleChunkLoad} /
+ *       {@code injectChunk} / {@code injectLoadedChunk} / {@code publishCachedChunk}</li>
+ *   <li>光屏障提交<b>不再</b>按 REUSE/RECOMPUTE 记账（防双计）</li>
  * </ul>
  *
  * <h2>4. 流量节省（有 MOD vs 无 MOD）</h2>

@@ -188,27 +188,39 @@ public final class ShadowColumnStore {
 
 - **现象**：`1.20.1_fabric_I_shadowpkg` analyzer `TRACE_INJECTED_NOT_READY` P0 **round=2 count=16**；stats 仍 PASS、exit 0  
 - **口径**：影子 `shadowInjected` 有、`shadowReady` 无 → 注入后未进 ready（光/交付门）  
-- **建议**：  
-  1. 从 `build/smoke-test/results/result_1.20.1_fabric_I_shadowpkg.json` 取 16 个坐标  
-  2. 对照 client log：`window-complete` / `SHADOW_BRIDGE` / `Parked` / `LIGHT_GATE` / `Ignoring chunk`  
-  3. 修：光未收敛即注入未 publish，或 Bridge 窗口拒收  
-  4. 门禁：classic analyzer 无 `TRACE_INJECTED_NOT_READY`（或降级策略写明）  
+- **R4 处置（2026-09-18，已实现）**  
+  1. **原版生命周期 + type126**（不改压缩格式）：`applyViewDistanceIfChanged` 后 `enqueueOutOfWindowInjectedForReclaim`；reclaim 走 `ShadowColumnStore.flushAndEvict`（先 flush 再摘表）  
+  2. **权威 pull 门**：`isAuthorityPullEligible` / `requestPullEligible` / Provider.acquire——中心优先真实客户端玩家区块（`deliveryCenter`）；窗外或会话未就绪禁止向真服 pull  
+  3. **trace**：`recordShadowReady` = 官方包入 ready 队列即记（不再用 isDeliveryCandidate 过滤，避免窗外队列被记成 injectedNotReady）  
+  4. **analyzer 降级策略**【已验证】：classic R2 cache-only 且 `injectedNotReady` **全部** Chebyshev > ServerVD(10)（相对 `playerPos`）→ P1；窗内缺口仍 P0；enclosed-hole / stats 仍把守玩家可见虚空  
+- **验证**：编译矩阵绿；classic `1.20.1_fabric_I_r4unload2` **RESULT: PASS**（analyzer exit=0；R2 缓存 100%）  
+- **未做**：`processUnloads` mixin 级挂钩（依赖 reclaim 扫描）；1.21.1 classic 冒烟未跑  
 
 ### 待办 B — 往返飞行 / 缓存观感
 
-- **场景**：`flyroundtrip -MoveSeconds 15`（或自定往返）  
+- **场景**：`flyroundtrip -MoveSeconds 15`  
 - **关注**：`clientDarkRegressionChunks==0`；回程缓存命中（非全网络 FULL）；`reclaim` + `window-complete` 日志  
 - **历史参考**：`flyrt3` 曾 PASS dark=0、缓存 ~28%（含去程新地形）  
+- **本轮验证（2026-09-18）**【已验证】  
+  - `1.20.1_fabric_flyrtB`：**PASS**；`clientDarkRegressionChunks=0`、`clientDarkLightProbeChunks=0`（samples=9 为首落地瞬态）；缓存 **10%**（全命中 319/5.0MB，应用 50MB——首飞新地形多属正常）；`[SHADOW_STORE] flushAndEvict` 大量出现在 `hassium-shadow-reclaim` 线程（R4 卸载路径生效）  
+  - `1.21.1_fabric_flyrtB`：**PASS**；同门禁 dark=0  
+- **未验证**：同世界二次 flyroundtrip（回程缓存应更高）；手工肉眼观感  
 
 ### 待办 C —（可选）继续删残留
 
-- `ShadowTrackingSession` 内 `pendingSelections`/`SelectedChunk` 字段与 `pendingSelections.clear()`（逻辑已无消费方）  
-- `sweepVisibleShape` 空方法、`network/ChunkAuthority*` 协议壳类是否迁 `server.legacy` 或删  
-- `network/seedgen` 空目录清理；mixin 子包拆分（见 repackage handoff）  
+- **已做（2026-09-18）**：删 `pendingSelections`/`SelectedChunk` 与全部 `clear()`；删 `SWEEP_INTERVAL_MS`/`MAX_SWEEP_PER_PUMP`/`BOOT_EMIT_MIN_GAP_MS`/`lastBootEmitMs`/`lastSweepMs`（无消费方）；`ShadowTrackingSession` 不再引用恒 false 的 `pullEmissionSuppressed()`；`LightNeighborhoodGate` 去掉 `notAuthoritative`（`isAuthoritative` 恒 false）；清空 `network/seedgen` 目录与 `scripts/tmp_purge_shadow_dead.py`
+- **保留**：`ChunkAuthority*` 协议壳（`handle`/`Notifier.wantsAuthority` 恒 no-op/false；forge/neoforge 网络登记仍引用）——整族删除需同步三端 NetworkManager，未做
+- **未做**：mixin 子包拆分（见 repackage handoff §2）  
 
 ### 其它 S 阶段（未做）
 
-- [ ] S3 算光归 status 主路径（弱化 NeighborhoodGate/park 作主交付门）  
+- [x] **S3 算光归 status 主路径（2026-09-18，已实现）**  
+  - **交付**：去 `LightNeighborhoodGate` / `parkFullDelivery` 主门；inject → `initializeLightImmediately` → `generated` 光屏障 → 引擎产出即 `pushReady`（原版光是什么就发什么）  
+  - **光照缓存统计**：迁到 `MixinChunkMap.scheduleChunkLoad` → `ShadowLightCompute.accountLightAtScheduleLoad`：读盘/注入且 `isLightCorrect`+引擎层齐 = 命中（`lightReuseShadow`），否则重算（`lightCacheMiss`）；光屏障提交不再按 REUSE/RECOMPUTE 记账  
+  - **门禁**【已验证】编译矩阵绿；classic `1.20.1_fabric_I_s3classic` **PASS**；flyrt `1.20.1_fabric_s3flyrt2` **PASS**（`clientDarkRegressionChunks=0`；exit 0）。首飞光照缓存 **22.2%**（命中 371 / 重算 1297——scheduleChunkLoad 口径：读盘完整光 vs 重算）。  
+  - **并发修复**：`playerLoadedChunk` 桥内 `ClientboundLevelChunkWithLightPacket` 构造改持 `chunkLock`（与 flush `ChunkSerializer.pack` 互斥；s3flyrt 首轮 ThreadingDetector FAIL 已消失）。  
+  - **未验证**：R2 cache-only 的光照缓存可能为 0/0（重连路径未必再进 `scheduleChunkLoad`）；1.21.1 classic/flyrt 未跑。  
+  - **记账完善（2026-09-18）**：统一 `accountLightFromChunk`（`isLightCorrect` → 命中 / 否则重算），挂到 `scheduleChunkLoad` / `injectChunk` / `injectLoadedChunk` / `publishCachedChunk`（含异步读盘）；按柱首记去重。classic `1.20.1_fabric_I_s3lightacct` **PASS**【已验证】：R1 光照 **0%**（命中 0 / 重算 1671——网络注入路径，符合「光未完成=重算」）；R2 光照 **100%**（命中 **486** / 重算 0——缓存回放完整光，R2 不再 0/0）。
 - [ ] S5 可选：Provider 内 compare 优化、连接转发接法 A、client/server 包迁移  
 
 **S0 修订记录**

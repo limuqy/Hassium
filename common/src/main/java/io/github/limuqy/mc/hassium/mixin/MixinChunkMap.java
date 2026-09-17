@@ -97,7 +97,13 @@ public class MixinChunkMap {
         // S3 接法 B：官方包桥接真实客户端 + 影子物化记账
         Packet<?> packet = holder != null ? holder.getValue() : null;
         if (packet == null && lightEngine != null) {
-            packet = new ClientboundLevelChunkWithLightPacket(chunk, lightEngine, null, null);
+            // 与 flush 序列化共用 chunkLock：否则 PalettedContainer ThreadingDetector
+            //（pack 线程 vs 本钩子 extractChunkData，1.20.1 实测 s3flyrt）。
+            final var engine = this.lightEngine;
+            packet = io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.withChunkLock(
+                    chunk.getPos(),
+                    () -> (Packet<?>) new ClientboundLevelChunkWithLightPacket(
+                            chunk, engine, null, null));
         }
         io.github.limuqy.mc.hassium.shadow.track.ShadowOfficialPacketBridge
                 .forwardToRealClient(packet);
@@ -130,6 +136,9 @@ public class MixinChunkMap {
             return;
         }
         String dimension = hassium$shadowDimension();
+        // S3：光照缓存客户端口径——读盘完整光=命中，否则重算（不短路 future）。
+        io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute
+                .accountLightAtScheduleLoad(dimension, pos);
         CompletableFuture<Either<ChunkAccess, ChunkHolder.ChunkLoadingFailure>> suspended =
                 new CompletableFuture<>();
         ShadowChunkMapCompat.registerSuspendedLoad(dimension, pos, suspended);
@@ -151,6 +160,9 @@ public class MixinChunkMap {
             return;
         }
         String dimension = hassium$shadowDimension();
+        // S3：光照缓存客户端口径——读盘完整光=命中，否则重算（不短路 future）。
+        io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute
+                .accountLightAtScheduleLoad(dimension, pos);
         CompletableFuture<ChunkAccess> suspended = new CompletableFuture<>();
         ShadowChunkMapCompat.registerSuspendedLoad(dimension, pos, suspended);
         io.github.limuqy.mc.hassium.shadow.track.VanillaAlignedChunkProvider.getInstance()

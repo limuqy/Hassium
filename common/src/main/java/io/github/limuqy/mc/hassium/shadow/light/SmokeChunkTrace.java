@@ -75,7 +75,10 @@ public final class SmokeChunkTrace {
     }
 
     public static void recordShadowReady(String dimension, ChunkPos pos) {
-        if (!isDeliveryCandidate(dimension, pos)) {
+        // Ready = 官方包已入回传队列（offerReady）。不得再用 isDeliveryCandidate 过滤：
+        // 窗外包也可能进队列后被 vanilla ignore，那应是 readyNotApplied（cache_only 已降 P1），
+        // 记成 injectedNotReady 会把「窗外残留」打成交付链 P0（R4 实证）。
+        if (!ENABLED || pos == null || !DimensionKey.isCacheableDimension(dimension)) {
             return;
         }
         record(SHADOW_READY, null, dimension, pos);

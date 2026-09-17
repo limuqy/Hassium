@@ -472,6 +472,9 @@ public class ShadowSeedServer extends MinecraftServer {
             if (clearPlaceholder(dimension, pos, key)) {
                 ShadowLightCompute.notePlaceholderReplaced(this, dimension, pos);
             }
+            // S3 光照缓存：网络注入后 setLightCorrect(false) → 记重算
+            io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute
+                    .accountLightFromChunk(dimension, pos, chunk);
             return true;
         } catch (Throwable t) {
             ShadowLightCompute.withChunkLock(pos, () -> restoreInjectedChunk(key, previous));
@@ -1477,6 +1480,9 @@ public class ShadowSeedServer extends MinecraftServer {
         if (clearPlaceholder(dimension, pos, key)) {
             ShadowLightCompute.notePlaceholderReplaced(this, dimension, pos);
         }
+        // S3 光照缓存：读盘完整光（isLightCorrect）→ 命中，否则重算
+        io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute
+                .accountLightFromChunk(dimension, pos, chunk);
     }
 
     /**
