@@ -162,8 +162,10 @@ public class MixinConnection {
 
         // 将包交给聚合管理器（原版包和自定义包都聚合）
         Constants.LOG.debug("Aggregating packet: {}", packetType);
-        HassiumAggregationManager.takeOver(packet, self);
-        ci.cancel();
+        // 仅入缓冲成功才 cancel；失败（序列化 null/异常、缓冲溢出降级）必须让原版 send 继续，否则丢包
+        if (HassiumAggregationManager.takeOver(packet, self)) {
+            ci.cancel();
+        }
     }
 
     // review-fix: T7-60: 带描述符注入 disconnect——1.21.1+ 有 Component/DisconnectionDetails 双重载

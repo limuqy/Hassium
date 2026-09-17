@@ -201,7 +201,8 @@ public class ServerChunkPushManager {
             return;
         }
         ChunkPos pos = new ChunkPos(pending.entry().chunkX(), pending.entry().chunkZ());
-        long key = pos.toLong();
+        // 必须带维度：票加在各自 ServerLevel 上，跨维同坐标共享 refs 会导致一维漏加票、另一维票泄漏
+        long key = DimensionKey.key(pending.dimension(), pos.x, pos.z);
         int refs = demandTicketRefs.merge(key, 1, Integer::sum);
         pending.ticketed = true;
         pending.ticketNanos = System.nanoTime();
@@ -227,7 +228,8 @@ public class ServerChunkPushManager {
         }
         pending.ticketed = false;
         ChunkPos pos = new ChunkPos(pending.entry().chunkX(), pending.entry().chunkZ());
-        long key = pos.toLong();
+        // 与 acquireDemandTicket 同源：DimensionKey 复合键
+        long key = DimensionKey.key(pending.dimension(), pos.x, pos.z);
         Integer refs = demandTicketRefs.get(key);
         if (refs == null) {
             return;

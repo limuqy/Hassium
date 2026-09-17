@@ -147,9 +147,15 @@ public final class KeyedPriorityQueue<E> {
         }
         // REPLACE：条件替换登记表（并发 REPLACE 已抢先时本任务作废）；旧任务留在堆中
         // 作为过期残留，由 poll/peek 侧 isCurrent 丢弃——不再 heap.remove(old) 线性扫
-        // （玩家来回移动高频 REPLACE 时整体 O(n²) → 摊还 O(1)，review-fix: T8-22）。
+        // （玩家来回移动高频 REPLACE 时整体 O(n²) → 摊还 O(1），review-fix: T8-22）。
         if (!current.replace(key, old, entry)) {
-            return OfferResult.DUP_SKIPPED; // 被并发 REPLACE 抢先：丢弃，防双 entry
+            // replace 失败 ≠ 一定是被更新任务抢先：消费线程可能已 poll+release 把 old 摘掉。
+            // 此时 key 可空，必须 putIfAbsent 抢回；直接丢会静默丢失新任务（逻辑 BUG）。
+            if (current.putIfAbsent(key, entry) != null) {
+                return OfferResult.DUP_SKIPPED; // 真被并发 REPLACE 抢先
+            }
+            heap.offer(entry);
+            return OfferResult.INSERTED; // 接管空槽；old 已不在堆中，无 stale 残留
         }
         heap.offer(entry);
         staleCount.incrementAndGet(); // review-fix: T8-22: 旧任务留堆为过期残留，计数供 size()/压缩阈值

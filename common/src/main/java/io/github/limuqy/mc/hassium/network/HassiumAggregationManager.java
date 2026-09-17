@@ -98,16 +98,17 @@ public class HassiumAggregationManager {
     }
 
     /**
-     * 接管包，添加到聚合缓冲区
+     * 接管包，添加到聚合缓冲区。
      *
      * @param packet     数据包
      * @param connection 连接
+     * @return true=已入聚合缓冲（调用方应 cancel 原发送）；false=未入缓冲（调用方必须直发，禁止 cancel）
      */
-    public static void takeOver(Packet<?> packet, Connection connection) {
+    public static boolean takeOver(Packet<?> packet, Connection connection) {
         PacketId type = PacketTypeHelper.getPacketType(packet);
         if (type == null) {
             Constants.LOG.warn("Unknown packet type, skipping aggregation: {}", packet.getClass().getSimpleName());
-            return;
+            return false;
         }
 
         // 序列化包数据
@@ -121,7 +122,7 @@ public class HassiumAggregationManager {
                 data = PacketPayloadCompat.extractPayloadData(packet);
                 if (data == null) {
                     Constants.LOG.warn("Failed to extract payload data, skipping aggregation: {}", type);
-                    return;
+                    return false;
                 }
                 Constants.LOG.debug("Hassium: Extracted payload from CustomPayloadPacket: {} ({} bytes)",
                         type, data.length);
@@ -131,7 +132,7 @@ public class HassiumAggregationManager {
                         packet, PacketCodecCompat.resolveRegistryAccess(connection));
                 if (data == null) {
                     Constants.LOG.warn("Failed to serialize vanilla packet, skipping aggregation: {}", type);
-                    return;
+                    return false;
                 }
                 Constants.LOG.debug("Hassium: Serialized vanilla packet: {} ({} bytes)",
                         type, data.length);
@@ -142,21 +143,24 @@ public class HassiumAggregationManager {
             synchronized (buffer.packets) {
                 if (buffer.bytes + data.length > MAX_PENDING_BUFFER_BYTES || buffer.count >= MAX_PENDING_BUFFER_ENTRIES) {
                     // 2.0.X 兼容面语义：超限丢弃整个缓冲 + 关闭该连接聚合（后续包直发）+ warn
+                    // 当前包必须返回 false 让调用方直发，否则 ci.cancel() 会静默丢掉本包
                     Constants.LOG.warn("Aggregation buffer overflow for {}, dropping {} packets/{} bytes; degrading to direct send",
                             sanitizeLog(connection.getRemoteAddress()), buffer.count, buffer.bytes);
                     buffer.packets.clear();
                     buffer.bytes = 0;
                     buffer.count = 0;
                     HassiumConnectionRegistry.markDisabled(connection);
-                    return;
+                    return false;
                 }
                 buffer.packets.add(subPacket);
                 buffer.bytes += data.length;
                 buffer.count++;
                 Constants.LOG.debug("Added packet to aggregation buffer: {} (total: {})", type, buffer.count);
+                return true;
             }
         } catch (Exception e) {
             Constants.LOG.error("Failed to serialize packet for aggregation: {}", type, e);
+            return false;
         } finally {
             buf.release();
         }
