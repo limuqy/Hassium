@@ -2,7 +2,7 @@ package io.github.limuqy.mc.hassium.network;
 
 import io.github.limuqy.mc.hassium.network.handshake.LoginHandshake;
 import io.github.limuqy.mc.hassium.network.handshake.PlayInitClient;
-import io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute;
+import io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.server.level.ServerPlayer;

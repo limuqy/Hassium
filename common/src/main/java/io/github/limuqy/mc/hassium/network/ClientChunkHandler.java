@@ -1,6 +1,6 @@
 package io.github.limuqy.mc.hassium.network;
 
-import io.github.limuqy.mc.hassium.network.seedgen.ShadowVanillaLightPipeline;
+import io.github.limuqy.mc.hassium.shadow.light.ShadowVanillaLightPipeline;
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;

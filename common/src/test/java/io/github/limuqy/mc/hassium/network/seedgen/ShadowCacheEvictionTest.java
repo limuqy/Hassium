@@ -1,6 +1,7 @@
 package io.github.limuqy.mc.hassium.network.seedgen;
 
-import io.github.limuqy.mc.hassium.storage.ShadowRegionHeat;
+import io.github.limuqy.mc.hassium.shadow.storage.ShadowCacheEviction;
+import io.github.limuqy.mc.hassium.shadow.storage.ShadowRegionHeat;
 import net.minecraft.world.level.ChunkPos;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;

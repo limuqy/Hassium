@@ -1,5 +1,6 @@
 package io.github.limuqy.mc.hassium.network.seedgen;
 
+import io.github.limuqy.mc.hassium.shadow.server.SeedGenExecutor;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 

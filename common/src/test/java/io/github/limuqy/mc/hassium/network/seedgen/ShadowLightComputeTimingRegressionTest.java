@@ -1,5 +1,8 @@
 package io.github.limuqy.mc.hassium.network.seedgen;
 
+import io.github.limuqy.mc.hassium.shadow.light.ShadowVanillaLightPipeline;
+import io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute;
+import io.github.limuqy.mc.hassium.shadow.light.LightNeighborhoodGate;
 import io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.network.ClientChunkHandler;

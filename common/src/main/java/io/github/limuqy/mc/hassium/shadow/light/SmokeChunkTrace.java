@@ -1,4 +1,6 @@
-package io.github.limuqy.mc.hassium.network.seedgen;
+package io.github.limuqy.mc.hassium.shadow.light;
+
+import io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession;
 
 import io.github.limuqy.mc.hassium.utils.DimensionKey;
 
@@ -59,15 +61,54 @@ public final class SmokeChunkTrace {
     }
 
     public static void recordNetworkReceived(String dimension, ChunkPos pos) {
+        if (!isDeliveryCandidate(dimension, pos)) {
+            return;
+        }
         record(NETWORK_RECEIVED, NETWORK_RECEIVED_AT_MS, dimension, pos);
     }
 
     public static void recordShadowInjected(String dimension, ChunkPos pos) {
+        if (!isDeliveryCandidate(dimension, pos)) {
+            return;
+        }
         record(SHADOW_INJECTED, null, dimension, pos);
     }
 
     public static void recordShadowReady(String dimension, ChunkPos pos) {
+        if (!isDeliveryCandidate(dimension, pos)) {
+            return;
+        }
         record(SHADOW_READY, null, dimension, pos);
+    }
+
+    /**
+     * 交付候选：OVD 开启时全量记录；OVD 冻结时只记权威可见窗内柱。
+     * <p>
+     * serverViewDistance≤0（重连 join 窗、VD 尚未由登录包写入）时**不记录**：
+     * 否则 R2 冷启动窗口会把整盘注入记成 expected，客户端随后只驻留 VD10 子集，
+     * analyzer 报 TRACE_EXPECTED_NOT_PRESENT 假阳性（phaseA2 实证 gap=1076）。
+     */
+    private static boolean isDeliveryCandidate(String dimension, ChunkPos pos) {
+        if (!ENABLED || pos == null) {
+            return false;
+        }
+        try {
+            if (io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance()
+                    .isViewDistanceExtensionEnabled()) {
+                return true;
+            }
+        } catch (Throwable ignored) {
+            // 配置不可读：按冻结处理，继续走会话门
+        }
+        // OVD 冻结：VD≤0 或虚拟玩家未就绪时**不记录**。
+        // isDeliverableToClient 在 center==null 时会放行全部（交付门语义），
+        // 若用作 trace 候选门，R2 join 窗口会把整盘注入记成 expected
+        //（phaseA4：tracked=1384 vs present=511）。
+        ShadowTrackingSession session = ShadowTrackingSession.getInstance();
+        if (ShadowTrackingSession.serverViewDistance() <= 0 || !session.hasVirtualPlayer()) {
+            return false;
+        }
+        return ShadowTrackingSession.isDeliverableToClient(pos.x, pos.z);
     }
 
     public static void recordClientApplied(String dimension, ChunkPos pos) {
@@ -212,7 +253,7 @@ public final class SmokeChunkTrace {
     }
 
     /** 最近秩百分位（ms）；空样本返回 {@link Latency#EMPTY}。包可见供单测。 */
-    static Latency latency(List<Long> samplesMs) {
+    public static Latency latency(List<Long> samplesMs) {
         if (samplesMs.isEmpty()) {
             return Latency.EMPTY;
         }

@@ -2,8 +2,8 @@ package io.github.limuqy.mc.hassium.compat.mods;
 
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.server.RuntimeServerContext;
-import io.github.limuqy.mc.hassium.storage.HassiumType126Codec;
-import io.github.limuqy.mc.hassium.storage.ShadowStorageHashes;
+import io.github.limuqy.mc.hassium.shadow.storage.HassiumType126Codec;
+import io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes;
 import net.minecraft.world.level.ChunkPos;
 
 import java.io.OutputStream;

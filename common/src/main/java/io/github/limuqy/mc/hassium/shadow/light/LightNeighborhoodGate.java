@@ -1,4 +1,6 @@
-package io.github.limuqy.mc.hassium.network.seedgen;
+package io.github.limuqy.mc.hassium.shadow.light;
+
+import io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer;
 
 import io.github.limuqy.mc.hassium.network.ChunkAuthorityClient;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
@@ -20,7 +22,7 @@ import net.minecraft.world.level.ChunkPos;
  * <ul>
  *   <li>已过 INITIALIZE_LIGHT（{@code ShadowLightCompute.isLightInitPassed}，**单调**）→ 就绪</li>
  *   <li>已注入但尚未过 INITIALIZE_LIGHT → 等（超时后降级放行）</li>
- *   <li>未注入 → 等待超时（{@link #NEIGHBORHOOD_TIMEOUT_MS}）→ 注入空气空壳占位</li>
+ *   <li>未注入 → 等待超时（{@link #NEIGHBORHOOD_TIMEOUT_MS}）→ <b>不注入占位</b>，直接放行</li>
  * </ul>
  * 超时统一自「**邻域最后一次变化**」起算（见 {@link AwaitingEntry#lastProgressAtMs}）：
  * 邻域还在长就一直等，避免推送爬坡期把「马上就到」的邻柱判成永久缺失而降级。
@@ -41,17 +43,15 @@ public final class LightNeighborhoodGate {
 
     /**
      * 邻域齐套超时（毫秒）：自**邻域最后一次变化**起算（见
-     * {@link AwaitingEntry#lastProgressAtMs}），超时后对缺失邻柱注入空气占位降级算光，
-     * 宁可边缘不准也不卡死首波。
+     * {@link AwaitingEntry#lastProgressAtMs}）。
      * <p>
-     * 起算点为何不是「本柱入队」：推送爬坡期（前几秒只到几十柱）本柱的邻柱还在路上，
-     * 从入队起算会让这批「马上就到」的柱在 3s 后全部降级占位——实测 forge 锚点因此
-     * 在视距内（r≤8）产生 33 个空气占位柱。改挂邻域进展后，只要邻域还在长就继续等，
-     * 只有邻域**停了** 3s 才认「不会来」。
+     * 对齐原版：邻柱真实数据（含 VD+1 光环）到达前一直等；超时后<b>不再注入空气占位</b>
+     * ——占位会把空层当权威邻域算光，边缘首包黑柱。超时仅放行 LIGHT（缺邻按空 section），
+     * 交付侧再由地表探针/停车门拦黑柱。
      * <p>
-     * 该超时**不是**主要推进路径——正常流下邻柱在 1 帧内就绪并立即提升。
+     * 10s：覆盖冷启动 pull + 光环一圈；比旧 3s 少误占位，比无限等有饿死上限。
      */
-    public static final long NEIGHBORHOOD_TIMEOUT_MS = 3_000L;
+    public static final long NEIGHBORHOOD_TIMEOUT_MS = 10_000L;
 
     /**
      * 待齐套队列：复合键 → 等待上下文。consumeLoop 注入后入队，齐套后出队提交算光。
@@ -173,6 +173,11 @@ public final class LightNeighborhoodGate {
         return awaiting.size();
     }
 
+    /** 该柱是否在齐套等待中（防重复 submitPreLight 重置超时钟）。 */
+    public static boolean isAwaiting(long key) {
+        return awaiting.containsKey(key);
+    }
+
     /**
      * 尝试齐套：检查该柱 3×3 邻域，齐套则出队并返回上下文，否则保留等待返回 null。
      * <p>
@@ -196,7 +201,6 @@ public final class LightNeighborhoodGate {
         // 超时自「邻域最后一次变化」起算：邻柱还在陆续到达就不降级（见 AwaitingEntry）。
         long sinceProgressMs = now - Math.max(entry.enqueuedAtMs(), entry.lastProgressAtMs());
         boolean timedOut = sinceProgressMs >= NEIGHBORHOOD_TIMEOUT_MS;
-        List<ChunkPos> needPlaceholders = new ArrayList<>(8);
         // 诊断态：方向序 NW,N,NE,W,E,SW,S,SE；'.'=就绪 'I'=已注入未过 INIT 'M'=未注入
         StringBuilder neighbors = new StringBuilder(8);
         int injectedNotInit = 0;
@@ -222,11 +226,8 @@ public final class LightNeighborhoodGate {
                     injectedNotInit++;
                     continue;
                 }
-                neighbors.append('M'); // 未注入：只能等超时后占位
+                neighbors.append('M'); // 未注入：等超时后放行（不再空气占位）
                 notInjected++;
-                if (timedOut) {
-                    needPlaceholders.add(new ChunkPos(nx, nz));
-                }
             }
         }
         if ((injectedNotInit > 0 || notInjected > 0) && !timedOut) {
@@ -234,16 +235,13 @@ public final class LightNeighborhoodGate {
                     injectedNotInit, notInjected, notAuthoritative);
             return null;
         }
-        // 批量注入占位（幂等：已有柱时 injectPlaceholder no-op）
-        for (ChunkPos placeholderPos : needPlaceholders) {
-            server.injectPlaceholder(dimension, placeholderPos.x, placeholderPos.z);
-        }
-        if (!needPlaceholders.isEmpty()) {
+        // 退役空气占位：缺邻按引擎空 section 参与传播（对齐原版），不再把全空气柱
+        // 标成 lightCorrect 当权威邻域。超时仅放行本柱 LIGHT。
+        if (notInjected > 0) {
             DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
-                    "[LIGHT_GATE] Promote ({}, {}) dim={} with {} air placeholders "
-                            + "(timedOut={} waited={}ms sinceProgress={}ms)",
-                    pos.x, pos.z, dimension, needPlaceholders.size(), timedOut,
-                    waitedMs, sinceProgressMs);
+                    "[LIGHT_GATE] Promote ({}, {}) dim={} missing={} timedOut={} "
+                            + "waited={}ms sinceProgress={}ms (no placeholders)",
+                    pos.x, pos.z, dimension, notInjected, timedOut, waitedMs, sinceProgressMs);
         } else {
             DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
                     "[LIGHT_GATE] Promote ({}, {}) dim={} neighborhood ready "

@@ -1,6 +1,9 @@
 package io.github.limuqy.mc.hassium.network.seedgen;
 
-import io.github.limuqy.mc.hassium.storage.ShadowStorageHashes;
+import io.github.limuqy.mc.hassium.shadow.storage.ShadowCacheEviction;
+import io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry;
+import io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer;
+import io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes;
 import io.github.limuqy.mc.hassium.utils.DimensionKey;
 import net.minecraft.world.level.ChunkPos;
 import org.junit.jupiter.api.AfterEach;

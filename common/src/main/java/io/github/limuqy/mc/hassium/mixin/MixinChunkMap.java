@@ -2,10 +2,11 @@ package io.github.limuqy.mc.hassium.mixin;
 
 import io.github.limuqy.mc.hassium.compat.LevelCompat;
 import io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat;
-import io.github.limuqy.mc.hassium.network.seedgen.ShadowSeedServer;
+import io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer;
 import io.github.limuqy.mc.hassium.network.PlayerCompressionTracker;
 import io.github.limuqy.mc.hassium.server.RuntimeServerContext;
 import java.util.concurrent.CompletableFuture;
+import net.minecraft.network.protocol.Packet;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.chunk.ChunkAccess;
@@ -93,6 +94,13 @@ public class MixinChunkMap {
         if (!RuntimeServerContext.isShadowServerContext() || chunk == null) {
             return;
         }
+        // S3 接法 B：官方包桥接真实客户端 + 影子物化记账
+        Packet<?> packet = holder != null ? holder.getValue() : null;
+        if (packet == null && lightEngine != null) {
+            packet = new ClientboundLevelChunkWithLightPacket(chunk, lightEngine, null, null);
+        }
+        io.github.limuqy.mc.hassium.shadow.track.ShadowOfficialPacketBridge
+                .forwardToRealClient(packet);
         hassium$notifyShadowMaterialized(chunk);
         ci.cancel();
     }
@@ -111,46 +119,44 @@ public class MixinChunkMap {
     @Inject(method = "scheduleChunkLoad", at = @At("HEAD"), cancellable = true)
     private void hassium$shortCircuitInjectLoad(ChunkPos pos,
             CallbackInfoReturnable<CompletableFuture<Either<ChunkAccess, ChunkHolder.ChunkLoadingFailure>>> cir) {
-        LevelChunk loaded = hassium$chunkForScheduleLoad(pos);
-        if (loaded != null) {
-            ImposterProtoChunk wrapped = ShadowChunkMapCompat.asImposter(loaded);
-            cir.setReturnValue(CompletableFuture.completedFuture(Either.left(wrapped)));
+        if (!RuntimeServerContext.isShadowServerContext() || pos == null) {
             return;
         }
-        if (hassium$shadowSuppressGeneration(pos)) {
-            // 影子虚拟玩家 tracking 选中且无数据：返回悬置 future，等待 pull 响应。
-            // pull 响应到达后 injectChunk 注入真实数据 → completeSuspendedLoad 放行
-            // 原版链 → playerLoadedChunk(有数据) → onChunkMaterialized → compare-pull。
-            // 超时由 ShadowChunkMapCompat.sweepSuspendedTimeouts 兜底（完成为空柱）。
-            CompletableFuture<Either<ChunkAccess, ChunkHolder.ChunkLoadingFailure>> suspended =
-                    new CompletableFuture<>();
-            ShadowChunkMapCompat.registerSuspendedLoad(hassium$shadowDimension(), pos, suspended);
-            cir.setReturnValue(suspended);
+        // S2：禁止有盘/有注入 Imposter 同步短路。始终悬置 future + Provider 异步 acquire
+        //（始终 compare/FULL）。SeedGen 门控开且 worldgen 允许时不压制，走原版生成链。
+        if (ShadowChunkMapCompat.isWorldgenAllowed()
+                || io.github.limuqy.mc.hassium.shadow.server.SeedGenExecutor.getInstance()
+                        .isGenerationGateOpen()) {
             return;
         }
-        // 未命中：无注入、无盘。门控开则原版 worldgen；关则上面已悬置。
-        // 有盘基线已由 hassium$chunkForScheduleLoad 短路，禁止再生成。
+        String dimension = hassium$shadowDimension();
+        CompletableFuture<Either<ChunkAccess, ChunkHolder.ChunkLoadingFailure>> suspended =
+                new CompletableFuture<>();
+        ShadowChunkMapCompat.registerSuspendedLoad(dimension, pos, suspended);
+        io.github.limuqy.mc.hassium.shadow.track.VanillaAlignedChunkProvider.getInstance()
+                .acquire(dimension, pos,
+                        io.github.limuqy.mc.hassium.shadow.track.ShadowChunkProvider.AcquireReason.TRACKING);
+        cir.setReturnValue(suspended);
     }
-
-    // 1.20.5–1.20.6 的 ChunkResult/ChunkHolder 中间层注入已随版本支持裁剪删除（API 自 1.21.1 起变化）
 #else
     @Inject(method = "scheduleChunkLoad", at = @At("HEAD"), cancellable = true)
     private void hassium$shortCircuitInjectLoad(ChunkPos pos,
             CallbackInfoReturnable<CompletableFuture<ChunkAccess>> cir) {
-        LevelChunk loaded = hassium$chunkForScheduleLoad(pos);
-        if (loaded != null) {
-            cir.setReturnValue(ShadowChunkMapCompat.completedImposter(loaded));
+        if (!RuntimeServerContext.isShadowServerContext() || pos == null) {
             return;
         }
-        if (hassium$shadowSuppressGeneration(pos)) {
-            // 悬置 future 等待 pull 响应（与 1.20.1 同款）。
-            CompletableFuture<ChunkAccess> suspended = new CompletableFuture<>();
-            ShadowChunkMapCompat.registerSuspendedLoad(hassium$shadowDimension(), pos, suspended);
-            cir.setReturnValue(suspended);
+        if (ShadowChunkMapCompat.isWorldgenAllowed()
+                || io.github.limuqy.mc.hassium.shadow.server.SeedGenExecutor.getInstance()
+                        .isGenerationGateOpen()) {
             return;
         }
-        // 未命中：无注入、无盘。门控开则原版 worldgen；关则上面已悬置。
-        // 产出经 onChunkReadyToSend → onChunkMaterialized（1.21+ 已无 playerLoadedChunk）。
+        String dimension = hassium$shadowDimension();
+        CompletableFuture<ChunkAccess> suspended = new CompletableFuture<>();
+        ShadowChunkMapCompat.registerSuspendedLoad(dimension, pos, suspended);
+        io.github.limuqy.mc.hassium.shadow.track.VanillaAlignedChunkProvider.getInstance()
+                .acquire(dimension, pos,
+                        io.github.limuqy.mc.hassium.shadow.track.ShadowChunkProvider.AcquireReason.TRACKING);
+        cir.setReturnValue(suspended);
     }
 
     /**
@@ -182,7 +188,7 @@ public class MixinChunkMap {
             return;
         }
         try {
-            io.github.limuqy.mc.hassium.network.seedgen.ShadowTrackingSession.getInstance()
+            io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession.getInstance()
                     .onChunkMaterialized(hassium$shadowDimension(), chunk.getPos(), chunk);
         } catch (Throwable t) {
             io.github.limuqy.mc.hassium.Constants.LOG.error(
@@ -201,7 +207,7 @@ public class MixinChunkMap {
             return dimension;
         }
         try {
-            String tracked = io.github.limuqy.mc.hassium.network.seedgen.ShadowTrackingSession
+            String tracked = io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession
                     .getInstance().currentDimension();
             if (tracked != null && !tracked.isEmpty()) {
                 return tracked;
@@ -232,22 +238,21 @@ public class MixinChunkMap {
         }
         if (ShadowChunkMapCompat.isWorldgenAllowed()) {
             // SeedGen worldgen 窗口：依赖柱不登记、不压制
-            io.github.limuqy.mc.hassium.network.seedgen.SmokeChunkTrace
+            io.github.limuqy.mc.hassium.shadow.light.SmokeChunkTrace
                     .recordWorldgenStart(hassium$shadowDimension(), pos);
             return false;
         }
-        if (io.github.limuqy.mc.hassium.network.seedgen.SeedGenExecutor.getInstance()
+        if (io.github.limuqy.mc.hassium.shadow.server.SeedGenExecutor.getInstance()
                 .isGenerationGateOpen()) {
             // 门控通过：虚拟玩家触发原版生成链（真实种子），产出经
             // playerLoadedChunk（1.20.1）/ onChunkReadyToSend（1.21+）桥转
             // 统一 Compare+Pull（生成内容作基线，服务端裁决）
-            io.github.limuqy.mc.hassium.network.seedgen.SmokeChunkTrace
+            io.github.limuqy.mc.hassium.shadow.light.SmokeChunkTrace
                     .recordWorldgenStart(hassium$shadowDimension(), pos);
             return false;
         }
-        String dimension = hassium$shadowDimension();
-        io.github.limuqy.mc.hassium.network.seedgen.ShadowTrackingSession.getInstance()
-                .onChunkSelected(dimension, pos.x, pos.z);
+        // S2：无数据柱悬置 + VanillaAlignedChunkProvider.acquire（scheduleChunkLoad 已处理）
+        // 不再 onChunkSelected 旁路 pull
         return true;
     }
 
@@ -267,7 +272,7 @@ public class MixinChunkMap {
     /**
      * 影子原版 {@code ChunkMap.save} 与 flush 线程 {@code ChunkSerializer.write}
      * 抢同一份 PalettedContainer → 1.20.1 ThreadingDetector。与
-     * {@link io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute#withChunkLock}
+     * {@link io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute#withChunkLock}
      * 同一把可重入锁。{@code save} 内部 catch 后仍走 RETURN，成对解锁。
      */
     @Unique
@@ -279,7 +284,7 @@ public class MixinChunkMap {
         if (!RuntimeServerContext.isShadowServerContext() || chunk == null) {
             return;
         }
-        io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.lockChunk(chunk.getPos());
+        io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.lockChunk(chunk.getPos());
         hassium$saveLockDepth.set(hassium$saveLockDepth.get() + 1);
     }
 
@@ -290,7 +295,7 @@ public class MixinChunkMap {
             return;
         }
         hassium$saveLockDepth.set(depth - 1);
-        io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.unlockChunk(chunk.getPos());
+        io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.unlockChunk(chunk.getPos());
     }
 
 }

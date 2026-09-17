@@ -1,11 +1,14 @@
-package io.github.limuqy.mc.hassium.network.seedgen;
+package io.github.limuqy.mc.hassium.shadow.storage;
+
+import io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer;
+import io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry;
 
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.concurrent.HassiumTaskExecutor;
 import io.github.limuqy.mc.hassium.concurrent.TaskCategory;
 import io.github.limuqy.mc.hassium.config.HassiumConfig;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
-import io.github.limuqy.mc.hassium.storage.ShadowRegionHeat;
+import io.github.limuqy.mc.hassium.shadow.storage.ShadowRegionHeat;
 import io.github.limuqy.mc.hassium.utils.DimensionKey;
 import java.nio.file.Path;
 import java.util.ArrayList;

@@ -161,8 +161,8 @@ public final class SmokeProbeWriter {
             try {
                 net.minecraft.client.multiplayer.ClientChunkCache cache =
                         ((io.github.limuqy.mc.hassium.mixin.ClientLevelAccessor) mc.level).hassium$getChunkSource();
-                io.github.limuqy.mc.hassium.network.seedgen.SmokeChunkTrace.Snapshot trace =
-                        io.github.limuqy.mc.hassium.network.seedgen.SmokeChunkTrace.snapshot(dimension);
+                io.github.limuqy.mc.hassium.shadow.light.SmokeChunkTrace.Snapshot trace =
+                        io.github.limuqy.mc.hassium.shadow.light.SmokeChunkTrace.snapshot(dimension);
                 java.util.List<net.minecraft.world.level.ChunkPos> candidates = trace.networkReceived();
                 if (candidates.isEmpty()) candidates = trace.shadowReady();
                 if (candidates.isEmpty()) candidates = trace.clientApplied();
@@ -291,23 +291,23 @@ public final class SmokeProbeWriter {
     private static void appendCounters(StringBuilder sb) {
         HassiumMetricsImpl m = NetworkStats.getMetrics();
         sb.append("  \"counters\": {\n");
-        field(sb, "hashMemoryHit", io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hashMemoryHitCount());
-        field(sb, "hashMemoryMismatch", io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hashMemoryMismatchCount());
-        field(sb, "hashDiskHit", io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hashDiskHitCount());
-        field(sb, "hashDiskMismatch", io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hashDiskMismatchCount());
-        field(sb, "hashAbsent", io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hashAbsentCount());
-        field(sb, "hashLeftover", io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hashLeftoverCount());
-        field(sb, "hashEntriesProcessed", io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hashEntriesProcessedCount());
-        field(sb, "hashEntriesUnique", io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hashEntriesUniqueCount());
-        field(sb, "hashChunkKeysUnique", io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hashChunkKeysUniqueCount());
-        field(sb, "hashEntryDuplicates", io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hashEntryDuplicatesCount());
-        field(sb, "hashMemoryMismatchUnique", io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hashMemoryMismatchUniqueCount());
-        field(sb, "hashMemoryMismatchDuplicates", io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hashMemoryMismatchDuplicatesCount());
-        field(sb, "hashDiskMismatchUnique", io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hashDiskMismatchUniqueCount());
-        field(sb, "hashDiskMismatchDuplicates", io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hashDiskMismatchDuplicatesCount());
-        field(sb, "hashLeftoverUnique", io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hashLeftoverUniqueCount());
-        field(sb, "hashLeftoverUniqueChunkKeys", io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hashLeftoverUniqueChunkKeysCount());
-        field(sb, "hashLeftoverDuplicates", io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hashLeftoverDuplicatesCount());
+        field(sb, "hashMemoryHit", io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.hashMemoryHitCount());
+        field(sb, "hashMemoryMismatch", io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.hashMemoryMismatchCount());
+        field(sb, "hashDiskHit", io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.hashDiskHitCount());
+        field(sb, "hashDiskMismatch", io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.hashDiskMismatchCount());
+        field(sb, "hashAbsent", io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.hashAbsentCount());
+        field(sb, "hashLeftover", io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.hashLeftoverCount());
+        field(sb, "hashEntriesProcessed", io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.hashEntriesProcessedCount());
+        field(sb, "hashEntriesUnique", io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.hashEntriesUniqueCount());
+        field(sb, "hashChunkKeysUnique", io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.hashChunkKeysUniqueCount());
+        field(sb, "hashEntryDuplicates", io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.hashEntryDuplicatesCount());
+        field(sb, "hashMemoryMismatchUnique", io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.hashMemoryMismatchUniqueCount());
+        field(sb, "hashMemoryMismatchDuplicates", io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.hashMemoryMismatchDuplicatesCount());
+        field(sb, "hashDiskMismatchUnique", io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.hashDiskMismatchUniqueCount());
+        field(sb, "hashDiskMismatchDuplicates", io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.hashDiskMismatchDuplicatesCount());
+        field(sb, "hashLeftoverUnique", io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.hashLeftoverUniqueCount());
+        field(sb, "hashLeftoverUniqueChunkKeys", io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.hashLeftoverUniqueChunkKeysCount());
+        field(sb, "hashLeftoverDuplicates", io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.hashLeftoverDuplicatesCount());
         field(sb, "sectionDeltaRequestsSent", m.getSectionDeltaRequestsSent());
         field(sb, "sectionDeltaApplied", m.getSectionDeltaChunksReceived());
         field(sb, "lightSegRecalc", m.getLightCacheMissCount());
@@ -363,7 +363,7 @@ public final class SmokeProbeWriter {
                 dimCounts.put("end", endRegions);
                 // 自定义维：影子 storageDimensions（已装配）优先；无影子时扫 cacheable
                 try {
-                    var shadow = io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry
+                    var shadow = io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry
                             .getInstance().get();
                     java.util.Collection<String> extra = shadow != null
                             ? shadow.storageDimensions()
@@ -417,8 +417,8 @@ public final class SmokeProbeWriter {
         sb.append("  },\n");
     }
     private static void appendChunkTrace(StringBuilder sb, String dimension) {
-        io.github.limuqy.mc.hassium.network.seedgen.SmokeChunkTrace.Snapshot trace =
-                io.github.limuqy.mc.hassium.network.seedgen.SmokeChunkTrace.snapshot(dimension);
+        io.github.limuqy.mc.hassium.shadow.light.SmokeChunkTrace.Snapshot trace =
+                io.github.limuqy.mc.hassium.shadow.light.SmokeChunkTrace.snapshot(dimension);
         sb.append("  \"chunkTrace\": {\n");
         appendTraceStage(sb, "networkReceived", trace.networkReceived(), true);
         appendTraceStage(sb, "shadowInjected", trace.shadowInjected(), true);
@@ -445,7 +445,7 @@ public final class SmokeProbeWriter {
      * 全部在进程内按真实 long 键配对算出（外部解析 JSON 的大整数键会失真）。
      */
     private static void appendLatency(StringBuilder sb, String name,
-                                      io.github.limuqy.mc.hassium.network.seedgen.SmokeChunkTrace.Latency latency,
+                                      io.github.limuqy.mc.hassium.shadow.light.SmokeChunkTrace.Latency latency,
                                       boolean trailingComma) {
         sb.append("    \"").append(name).append("\": {\"count\": ").append(latency.count())
                 .append(", \"p50Ms\": ").append(latency.p50Ms())

@@ -1,5 +1,6 @@
 package io.github.limuqy.mc.hassium.network.seedgen;
 
+import io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 

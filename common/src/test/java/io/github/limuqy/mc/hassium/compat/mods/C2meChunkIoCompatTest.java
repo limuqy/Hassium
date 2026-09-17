@@ -1,6 +1,6 @@
 package io.github.limuqy.mc.hassium.compat.mods;
 
-import io.github.limuqy.mc.hassium.storage.HassiumType126Codec;
+import io.github.limuqy.mc.hassium.shadow.storage.HassiumType126Codec;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 

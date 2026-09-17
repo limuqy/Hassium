@@ -47,15 +47,15 @@ public class MixinClientPacketListener {
             return;
         }
         if (!io.github.limuqy.mc.hassium.network.ClientChunkPipeline.getInstance().isApplyInProgress()
-                && io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.shouldInterceptVanillaChunks()) {
+                && io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.shouldInterceptVanillaChunks()) {
             // pull FULL 响应落地（影子 tracking 采集）以 REMOTE_PULL 归因，区别于服务端自主推送
             io.github.limuqy.mc.hassium.network.ClientChunkHandler.TraceOrigin origin =
                     io.github.limuqy.mc.hassium.network.ClientChunkHandler.consumePullApplyOrigin(
                             packet.getX(), packet.getZ())
                             ? io.github.limuqy.mc.hassium.network.ClientChunkHandler.TraceOrigin.REMOTE_PULL
                             : io.github.limuqy.mc.hassium.network.ClientChunkHandler.TraceOrigin.SERVER_PUSH;
-            io.github.limuqy.mc.hassium.network.seedgen.ShadowVanillaLightPipeline.submitVisible(
-                    io.github.limuqy.mc.hassium.network.seedgen.ShadowVanillaLightPipeline.currentDimension(),
+            io.github.limuqy.mc.hassium.shadow.light.ShadowVanillaLightPipeline.submitVisible(
+                    io.github.limuqy.mc.hassium.shadow.light.ShadowVanillaLightPipeline.currentDimension(),
                     new net.minecraft.world.level.ChunkPos(packet.getX(), packet.getZ()), packet,
                     origin);
             this.hassium$recordNativeChunk = false;
@@ -96,7 +96,7 @@ public class MixinClientPacketListener {
     private void hassium$onServerViewDistance(
             net.minecraft.network.protocol.game.ClientboundSetChunkCacheRadiusPacket packet,
             CallbackInfo ci) {
-        io.github.limuqy.mc.hassium.network.seedgen.ShadowTrackingSession
+        io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession
                 .setServerViewDistance(packet.getRadius());
     }
 
@@ -109,7 +109,7 @@ public class MixinClientPacketListener {
         // 服务端 chunk cache 半径捕获：1.20.1 与 1.21.1+ 的 placeNewPlayer/placeNewPlayer
         // 等价路径都只把 viewDistance 放在登录包 chunkRadius 里（join 时不发
         // SetChunkCacheRadius）。须在 onLogin() 之后赋值——onLogin 的会话 reset 会清半径。
-        io.github.limuqy.mc.hassium.network.seedgen.ShadowTrackingSession
+        io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession
                 .setServerViewDistance(packet.chunkRadius());
     }
 

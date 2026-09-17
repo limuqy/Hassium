@@ -1,4 +1,6 @@
-package io.github.limuqy.mc.hassium.network.seedgen;
+package io.github.limuqy.mc.hassium.shadow.light;
+
+import io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer;
 
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.compat.ShadowServerCompat;
@@ -97,7 +99,7 @@ public final class SeedGenChunkCodec {
      * 无数组层走 {@code isDefinitelyHomogenous} 的 O(1) 分支——清光占位层正是这一形态，
      * 既快又不会调 {@code getData()} 去 materialize 共享实例（有副作用）。
      */
-    static boolean hasWireLight(DataLayer layer) {
+    public static boolean hasWireLight(DataLayer layer) {
         if (layer == null) {
             return false;
         }

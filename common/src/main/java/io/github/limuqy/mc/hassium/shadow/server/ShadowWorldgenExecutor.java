@@ -1,4 +1,4 @@
-package io.github.limuqy.mc.hassium.network.seedgen;
+package io.github.limuqy.mc.hassium.shadow.server;
 
 import io.github.limuqy.mc.hassium.Constants;
 import java.util.concurrent.ExecutorService;

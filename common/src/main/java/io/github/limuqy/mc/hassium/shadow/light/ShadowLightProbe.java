@@ -1,4 +1,7 @@
-package io.github.limuqy.mc.hassium.network.seedgen;
+package io.github.limuqy.mc.hassium.shadow.light;
+
+import io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer;
+import io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry;
 
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;

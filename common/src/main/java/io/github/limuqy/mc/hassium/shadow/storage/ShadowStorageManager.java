@@ -1,4 +1,4 @@
-package io.github.limuqy.mc.hassium.storage;
+package io.github.limuqy.mc.hassium.shadow.storage;
 
 import io.github.limuqy.mc.hassium.utils.DimensionKey;
 import java.io.IOException;
@@ -90,7 +90,7 @@ public final class ShadowStorageManager implements AutoCloseable {
     private static final java.util.concurrent.atomic.AtomicBoolean ENCODING_PAUSED =
             new java.util.concurrent.atomic.AtomicBoolean();
     /** 测试钩子：worker 编码前睡眠，用于 flush 超时。 */
-    volatile long testWriteDelayMs;
+    public volatile long testWriteDelayMs;
     /** 本 manager 服务的维度（HashIndex 复合键的维度段）。 */
     private final String dimension;
 
@@ -405,14 +405,43 @@ public final class ShadowStorageManager implements AutoCloseable {
         return new FlushResult(0, 0, false);
     }
 
-    /** T5：脏柱不在调用线程序列化，留给定时/退出刷脏。 */
+    /**
+     * 卸载前单柱落盘：脏柱必须**同步**编码进映像并写 .mca，成功且脏位清零才允许摘表。
+     * <p>
+     * 旧实现 {@code isDirty → return false} 会让 reclaim 的 {@code unloadChunk} 对脏柱
+     * 直接失败；若与 {@code claimForWorker} 并发（脏位已被认领、NBT 尚未序列化）则可能
+     * 「!isDirty 摘表 + 序列化拿到 null」→ **盘上无柱**，往返飞行后旧区域只能再拉网络
+     * FULL（cache miss）。正确语义：先 flush 成功，再允许 unload。
+     */
     public boolean flushColumn(ChunkPos pos, long timeoutMs) {
-        long key = DimensionKey.key(dimension, pos.x, pos.z);
-        if (ShadowStorageHashes.isDirty(key)) {
+        if (closed || pos == null) {
             return false;
         }
-        saveDirtyRegionsAsync();
-        return true;
+        long key = DimensionKey.key(dimension, pos.x, pos.z);
+        if (ENCODING_PAUSED.get()) {
+            // 编码暂停窗口：仍脏则不能承诺已落盘
+            return !ShadowStorageHashes.isDirty(key);
+        }
+        synchronized (flushLock) {
+            if (ShadowStorageHashes.isDirty(key)) {
+                PendingWrite write = claimAndSerialize(pos);
+                if (write != null) {
+                    List<PendingWrite> batch = new ArrayList<>(1);
+                    batch.add(write);
+                    AtomicInteger written = new AtomicInteger();
+                    writeBatch(batch, written);
+                    if (written.get() < 1) {
+                        return false;
+                    }
+                } else if (ShadowStorageHashes.isDirty(key)) {
+                    // 未注入 / 序列化失败且已 restoreDirty：不能摘表
+                    return false;
+                }
+            }
+            // 映像 → .mca（含本轮 encode 或此前 encode 未落盘的数据）
+            saveDirtyRegions(Math.max(0L, timeoutMs));
+            return !ShadowStorageHashes.isDirty(key);
+        }
     }
 
     /**

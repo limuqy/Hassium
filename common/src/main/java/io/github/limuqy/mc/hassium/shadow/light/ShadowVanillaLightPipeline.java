@@ -1,4 +1,10 @@
-package io.github.limuqy.mc.hassium.network.seedgen;
+package io.github.limuqy.mc.hassium.shadow.light;
+
+import io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer;
+import io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry;
+import io.github.limuqy.mc.hassium.shadow.server.ShadowChunkPersistenceRole;
+import io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession;
+import io.github.limuqy.mc.hassium.shadow.track.ShadowChunkSource;
 
 import io.github.limuqy.mc.hassium.network.ClientChunkHandler.TraceOrigin;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
@@ -28,12 +34,12 @@ public final class ShadowVanillaLightPipeline {
     }
 
     /** 影子端尚未装配时不把一次竞态误判为永久失败。 */
-    static boolean shouldFailShadowWhenServerUnavailable() {
+    public static boolean shouldFailShadowWhenServerUnavailable() {
         return false;
     }
 
     /** 单柱 inject 失败不得关整台影子端：真服仍抑制原版区块包，关引擎后切维世界会空。 */
-    static boolean shouldFailShadowOnInjectFailure() {
+    public static boolean shouldFailShadowOnInjectFailure() {
         return false;
     }
 

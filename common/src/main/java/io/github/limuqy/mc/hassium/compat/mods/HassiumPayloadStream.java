@@ -1,7 +1,7 @@
 package io.github.limuqy.mc.hassium.compat.mods;
 
 import io.github.limuqy.mc.hassium.compression.CompressionService;
-import io.github.limuqy.mc.hassium.storage.HassiumType126Codec;
+import io.github.limuqy.mc.hassium.shadow.storage.HassiumType126Codec;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;

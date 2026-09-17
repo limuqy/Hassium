@@ -319,16 +319,10 @@ public final class ChunkAuthorityNotifier {
         return hash;
     }
 
-    /** 链路门控：压缩启用 + PULL_MODE + AUTHORITY_NOTIFY 协商位。 */
+    /** 权威声明整族降级（S0）：恒 false，服务端不再发 chunk_authority_s2c。 */
     private static final class PlayerCompressionTrackerGate {
         private static boolean wantsAuthority(ServerPlayer player) {
-            if (!io.github.limuqy.mc.hassium.network.PlayerCompressionTracker
-                    .isCompressionEnabled(player)) {
-                return false;
-            }
-            UUID id = player.getUUID();
-            return ServerHandshakeActivation.hasCaps(id, LoginCaps.PULL_MODE)
-                    && ServerHandshakeActivation.hasCaps(id, LoginCaps.AUTHORITY_NOTIFY);
+            return false;
         }
     }
 }

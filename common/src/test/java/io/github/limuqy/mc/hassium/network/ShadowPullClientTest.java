@@ -1,6 +1,6 @@
 package io.github.limuqy.mc.hassium.network;
 
-import io.github.limuqy.mc.hassium.storage.ShadowStorageHashes;
+import io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes;
 import java.util.List;
 import net.minecraft.world.level.ChunkPos;
 import org.junit.jupiter.api.AfterEach;

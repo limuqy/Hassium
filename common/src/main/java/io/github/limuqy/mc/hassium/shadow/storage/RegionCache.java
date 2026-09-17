@@ -1,4 +1,4 @@
-package io.github.limuqy.mc.hassium.storage;
+package io.github.limuqy.mc.hassium.shadow.storage;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -18,7 +18,7 @@ import org.slf4j.LoggerFactory;
  */
 public final class RegionCache {
 
-    static final int SECTOR_SIZE = 4096;
+    public static final int SECTOR_SIZE = 4096;
     static final int SLOTS = 1024;
 
     /**

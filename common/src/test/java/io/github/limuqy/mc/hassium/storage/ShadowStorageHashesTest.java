@@ -1,5 +1,6 @@
 package io.github.limuqy.mc.hassium.storage;
 
+import io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes;
 import io.github.limuqy.mc.hassium.utils.DimensionKey;
 import net.minecraft.world.level.ChunkPos;
 import org.junit.jupiter.api.AfterEach;

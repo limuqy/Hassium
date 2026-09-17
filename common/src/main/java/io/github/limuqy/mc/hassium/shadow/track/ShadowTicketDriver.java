@@ -1,4 +1,6 @@
-package io.github.limuqy.mc.hassium.network.seedgen;
+package io.github.limuqy.mc.hassium.shadow.track;
+
+import io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer;
 
 import io.github.limuqy.mc.hassium.compat.ChunkShapeCompat;
 import io.github.limuqy.mc.hassium.concurrent.ChunkDistancePriority;
@@ -49,7 +51,7 @@ public final class ShadowTicketDriver {
      * 2026-09-13 第五轮后默认开启：classic + dimension + seedgen 接管矩阵已 PASS
      * （见 {@code docs/handoff/handoff-2026-09-13-authority-edge-p5-verdict.md}）。
      */
-    private static final boolean P5_TAKEOVER = true;
+    private static final boolean P5_TAKEOVER = false;
 
     /** 驱动总开关（恒等于 {@link #P5_TAKEOVER}）。 */
     static final boolean ENABLED = P5_TAKEOVER;
@@ -202,7 +204,7 @@ public final class ShadowTicketDriver {
                             dim, java.util.List.of(pos));
                     return;
                 }
-                io.github.limuqy.mc.hassium.network.seedgen.ShadowTrackingSession.getInstance()
+                io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession.getInstance()
                         .onChunkMaterialized(dim, pos, chunk);
             });
         }

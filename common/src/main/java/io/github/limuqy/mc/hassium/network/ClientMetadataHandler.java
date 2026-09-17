@@ -41,8 +41,8 @@ public class ClientMetadataHandler {
         if (!io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance().isClientFeatureGateOpen()) {
             return;
         }
-        io.github.limuqy.mc.hassium.network.seedgen.ShadowSeedServer server =
-                io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry.getInstance().getOrCreate();
+        io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer server =
+                io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry.getInstance().getOrCreate();
         if (server == null) {
             return; // 未握手/创建失败（断连或降级）：静默跳过，hash 比对 miss 兜底
         }

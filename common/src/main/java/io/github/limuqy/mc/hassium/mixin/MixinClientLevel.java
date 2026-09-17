@@ -23,10 +23,10 @@ public class MixinClientLevel {
         String dim = LevelCompat.getDimensionId(self);
         // 必须用正在卸的 ClientLevel 维 id：切维后 Minecraft.level 已是新世界，
         // 旧世界 unload 会打到错误 DimensionKey，上一维 epoch 残留。
-        io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute
+        io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute
                 .onClientChunkUnloaded(pos, dim);
         // 清光桥凭据；若影子仍在 tracking 窗内则入重发队列（§6.0）
-        io.github.limuqy.mc.hassium.network.seedgen.ShadowTrackingSession.getInstance()
+        io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession.getInstance()
                 .onClientChunkUnloaded(pos);
         hassium$logChunkUnload(pos);
     }

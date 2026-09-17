@@ -4,9 +4,9 @@ import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.compat.LevelCompat;
 import io.github.limuqy.mc.hassium.network.handshake.ClientLoginNegotiation;
 import io.github.limuqy.mc.hassium.network.handshake.LoginCaps;
-import io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute;
+import io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute;
 import io.github.limuqy.mc.hassium.platform.Services;
-import io.github.limuqy.mc.hassium.storage.ShadowStorageHashes;
+import io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes;
 import io.netty.buffer.Unpooled;
 import java.util.ArrayList;
 import java.util.List;
@@ -48,17 +48,54 @@ public final class ShadowPullClient {
     /** 拦截后响应未到达的最长等待；超时回退为网络数据注入，防区块黑洞。 */
     private static final long COMPARE_TIMEOUT_MS = 10_000L;
     /**
-     * 已失败过一次的柱（复合键）：ERROR / UNCHANGED 无基线 / FULL 应用失败的重试上限。
-     * 每柱每会话只重试一次——服务端 range 拒绝（柱在权威半径外）会无限复现，无上限重试
-     * 会打出请求风暴拖垮客户端（pull9 实证：610 柱 × ~600 次重试）。二次失败即放弃，
-     * 后续由玩家移动触发的 vanilla tracking 再自然触达。
+     * Pull 失败冷却：RANGE/ERROR 等拒绝后短冷却，而非会话级一次失败永久放弃。
+     * <p>
+     * 移动时校验中心与请求时刻错位会打出 range 拒绝；会话级 {@code RETRIED} 会
+     * 让该柱在 60s sweep 在途锁之外再也发不出去。冷却期内跳过，到期后
+     * sweep / 权威选柱可再试。
      */
-    private static final java.util.Set<Long> RETRIED =
-            java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private static final long RETRY_COOLDOWN_MS = 3_000L;
+    private static final java.util.concurrent.ConcurrentHashMap<Long, Long> lastFailAtMs =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
     private record PendingCompare(String dimension, long timestampMs, Runnable fallback) {}
 
     private ShadowPullClient() {}
+
+    /** 记录失败并释放影子在途锁，使冷却结束后可被再次选中。 */
+    public static void notePullFailure(String dimension, ChunkPos pos) {
+        if (pos == null) {
+            return;
+        }
+        String dim = dimension != null ? dimension : null;
+        if (dim == null) {
+            return;
+        }
+        long key = io.github.limuqy.mc.hassium.utils.DimensionKey.key(dim, pos.x, pos.z);
+        lastFailAtMs.put(key, System.currentTimeMillis());
+        io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession.getInstance()
+                .clearPullInFlight(dim, pos);
+    }
+
+    /** 冷却是否已过（可再次发 pull）。 */
+    public static boolean isPullRetryAllowed(String dimension, ChunkPos pos) {
+        if (pos == null || dimension == null) {
+            return true;
+        }
+        Long at = lastFailAtMs.get(
+                io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z));
+        return at == null || System.currentTimeMillis() - at >= RETRY_COOLDOWN_MS;
+    }
+
+    /** 成功注入/交付后清除失败冷却；dimension/pos 为 null 时清空全部（会话 reset）。 */
+    public static void clearPullFailure(String dimension, ChunkPos pos) {
+        if (dimension == null || pos == null) {
+            lastFailAtMs.clear();
+            return;
+        }
+        lastFailAtMs.remove(
+                io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z));
+    }
 
     /**
      * Compares any locally known shadow baseline with the authoritative chunk and pulls a FULL
@@ -182,7 +219,7 @@ public final class ShadowPullClient {
             return false;
         }
         return tryInterceptForCompare(dimension, pos,
-                () -> io.github.limuqy.mc.hassium.network.seedgen.ShadowVanillaLightPipeline.submitVisible(
+                () -> io.github.limuqy.mc.hassium.shadow.light.ShadowVanillaLightPipeline.submitVisible(
                         dimension, pos, packet,
                         io.github.limuqy.mc.hassium.network.ClientChunkHandler.TraceOrigin.SERVER_PUSH));
     }
@@ -211,12 +248,18 @@ public final class ShadowPullClient {
         }
     }
 
-    /** 带重试上限的权威 FULL 重试：每柱每会话仅一次（见 {@link #RETRIED}）。 */
+    /** 冷却后重试权威 FULL；冷却未到则只释放在途锁（sweep 稍后再发现）。 */
     private static void retryAuthoritativeFullOnce(String dimension, ChunkPos pos) {
-        long key = io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z);
-        if (RETRIED.add(key)) {
-            requestAuthoritativeFull(dimension, List.of(pos));
+        if (pos == null || dimension == null) {
+            return;
         }
+        notePullFailure(dimension, pos);
+        if (!isPullRetryAllowed(dimension, pos)) {
+            return;
+        }
+        long key = io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z);
+        lastFailAtMs.put(key, System.currentTimeMillis());
+        requestAuthoritativeFull(dimension, List.of(pos));
     }
 
     /** Applies compare-and-pull responses for the current client dimension. */
@@ -287,8 +330,9 @@ public final class ShadowPullClient {
                 if (pending != null) {
                     pending.fallback().run();
                 }
-                // 终态拒绝（range/unloaded/timeout 等）：失败即放弃，不重试——
-                // 柱已不在服务端权威范围内，重试只会复现同一拒绝（pull9 风暴实证）
+                // RANGE/unloaded/timeout：释放影子在途锁 + 短冷却，禁止 60s sweep 锁死
+                //（移动中心错位会反复 range，但冷却后 tracking/sweep/权威选柱可再试）
+                notePullFailure(response.dimension(), pos);
             }
         }
     }
@@ -320,13 +364,13 @@ public final class ShadowPullClient {
         NEXT_REQUEST_ID.set(0L);
         REQUEST_MODES.clear();
         PENDING_COMPARE.clear();
-        RETRIED.clear();
+        lastFailAtMs.clear();
     }
 
-    /** 真客户端切维：作废旧维度在途 compare / 单次 FULL 重试，避免坐标碰撞串维。 */
+    /** 真客户端切维：作废旧维度在途 compare / 失败冷却，避免坐标碰撞串维。 */
     public static void onClientDimensionChanged() {
         PENDING_COMPARE.clear();
-        RETRIED.clear();
+        lastFailAtMs.clear();
         REQUEST_MODES.clear();
     }
 }

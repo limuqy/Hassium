@@ -1,4 +1,7 @@
-package io.github.limuqy.mc.hassium.network.seedgen;
+package io.github.limuqy.mc.hassium.shadow.server;
+
+import io.github.limuqy.mc.hassium.shadow.storage.ShadowCacheEviction;
+import io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes;
 
 import com.mojang.serialization.Lifecycle;
 import io.github.limuqy.mc.hassium.Constants;
@@ -695,7 +698,7 @@ public final class SeedGenLevelCompat {
                 .getShadowGeneration() == shadowGeneration) {
             io.github.limuqy.mc.hassium.server.RuntimeServerContext
                     .clearShadowServerIfCurrentGeneration(shadowGeneration);
-            io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.clear();
+            io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes.clear();
             io.github.limuqy.mc.hassium.network.sectiondelta.SectionDeltaSnapshots.clear();
             // 热度索引内存态清空（磁盘 heat.idx 已随 saveAll 落盘，重连装配时重新加载）
             ShadowCacheEviction.reset();

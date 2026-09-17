@@ -46,7 +46,7 @@ public class MixinClientTick {
 
         // 1.20.1 Forge revert 窗口内 pauseEncoding 只挡新的 ChunkSerializer。
         // 无世界时跳过 drain/OVD；窗口 TAIL 已 resume，标题画面仍可 tickStorageFlush。
-        if (io.github.limuqy.mc.hassium.storage.ShadowStorageManager.isEncodingPaused()) {
+        if (io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager.isEncodingPaused()) {
             Minecraft pausedMc = Minecraft.getInstance();
             if (pausedMc == null || pausedMc.level == null || pausedMc.getConnection() == null) {
                 return;
@@ -73,7 +73,7 @@ public class MixinClientTick {
         // 影子虚拟玩家 tracking：真实玩家位置/维度单向同步（发布 volatile 状态，
         // 影子主循环消费；见 ShadowTrackingSession）
         try {
-            io.github.limuqy.mc.hassium.network.seedgen.ShadowTrackingSession
+            io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession
                     .onClientTick(net.minecraft.client.Minecraft.getInstance());
         } catch (Exception e) {
             // 位置同步失败不阻断 tick
@@ -92,7 +92,7 @@ public class MixinClientTick {
         long budgetNs = ClientMainThreadBudget.getBudgetNs();
         long frameStartNs = System.nanoTime();
         boolean reserveDrainReady = ClientMainThreadBudget.isJoinBoostActive()
-                || io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.hasBacklog();
+                || io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.hasBacklog();
         io.github.limuqy.mc.hassium.utils.StallDiag.noteJoinBoost(ClientMainThreadBudget.isJoinBoostActive());
         long dispatcherDeadlineNs = frameStartNs
                 + ClientMainThreadBudget.dispatcherShareNs(budgetNs, reserveDrainReady);
@@ -111,7 +111,7 @@ public class MixinClientTick {
 
         // 影子端缓存清理节流检查（容量/热度淘汰；超限时后台执行，不卡帧）
         try {
-            io.github.limuqy.mc.hassium.network.seedgen.ShadowCacheEviction.tick();
+            io.github.limuqy.mc.hassium.shadow.storage.ShadowCacheEviction.tick();
         } catch (Exception e) {
             // 忽略
         }
@@ -119,9 +119,9 @@ public class MixinClientTick {
         // 缓存存储定时刷新：后台从 ChunkMap 刷脏，不堵 tick。park 保活期间不刷，
         // 避免标题画面 / 重连投机把刚落盘的实例再拉进编码。
         try {
-            io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry registry =
-                    io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry.getInstance();
-            io.github.limuqy.mc.hassium.network.seedgen.ShadowSeedServer shadow = registry.get();
+            io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry registry =
+                    io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry.getInstance();
+            io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer shadow = registry.get();
             if (shadow != null && !registry.isParked()) {
                 shadow.tickStorageFlush();
             }
@@ -133,7 +133,7 @@ public class MixinClientTick {
         // 黑块窗口 = 0（apply 后立即落地）。随后单柱失败兜底（注入失败/超时柱走
         // 客户端重算；正常流程不触发）。
         try {
-            io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.drainReady(frameDeadlineNs);
+            io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.drainReady(frameDeadlineNs);
         } catch (Exception e) {
             // 影子光照可选；异常不得中断客户端 tick
         }

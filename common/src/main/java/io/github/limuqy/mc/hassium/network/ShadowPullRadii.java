@@ -19,4 +19,13 @@ public final class ShadowPullRadii {
 
     /** 相对 cacheRadius / viewDistance 的可视权威外扩边距（柱计数单位）。 */
     public static final int AUTHORITY_MARGIN = 2;
+
+    /**
+     * 光照光环：在可见形状（serverVD）之外再多拉 1 环，对齐原版
+     * {@code ChunkStatus.LIGHT} 的 3×3 邻域依赖（range=1）。
+     * <p>
+     * 光环柱只进影子端 inject/算光/缓存，<b>不得</b>交付客户端；交付域仍是 serverVD
+     * （∪ OVD）。服务端签发上界已是 {@link #AUTHORITY_MARGIN}，无需再放宽。
+     */
+    public static final int LIGHT_HALO_RADIUS = 1;
 }

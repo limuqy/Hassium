@@ -1,9 +1,9 @@
 package io.github.limuqy.mc.hassium.mixin;
 import io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat;
-import io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute;
-import io.github.limuqy.mc.hassium.network.seedgen.ShadowSeedServer;
-import io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry;
-import io.github.limuqy.mc.hassium.network.seedgen.SeedGenExecutor;
+import io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute;
+import io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer;
+import io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry;
+import io.github.limuqy.mc.hassium.shadow.server.SeedGenExecutor;
 import io.github.limuqy.mc.hassium.server.RuntimeServerContext;
 #if MC_VER < MC_1_21_1
 import net.minecraft.world.level.chunk.ChunkStatus;

@@ -1,5 +1,10 @@
 package io.github.limuqy.mc.hassium.storage;
 
+import io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager;
+import io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes;
+import io.github.limuqy.mc.hassium.shadow.storage.ShadowRegionHeat;
+import io.github.limuqy.mc.hassium.shadow.storage.RegionCache;
+import io.github.limuqy.mc.hassium.shadow.storage.HassiumType126Codec;
 import io.github.limuqy.mc.hassium.utils.DimensionKey;
 import io.github.limuqy.mc.hassium.compression.HassiumCompression;
 import java.nio.file.Path;
@@ -71,6 +76,37 @@ class ShadowStorageManagerTest {
         assertFalse(java.nio.file.Files.isRegularFile(file), "热路径不得整文件落盘");
         assertFalse(manager.saveDirtyRegions(5_000L).timedOut());
         assertTrue(java.nio.file.Files.isRegularFile(file));
+    }
+
+    @Test
+    @DisplayName("flushColumn：脏柱同步编码+落盘，成功后 isDirty=false 可读回")
+    void flushColumnPersistsDirtyColumnBeforeUnload() throws Exception {
+        ChunkPos pos = new ChunkPos(5, 6);
+        injected.add(ChunkPos.asLong(pos.x, pos.z));
+        ShadowStorageHashes.put(pos, 99L);
+        manager.markContentDirty(pos);
+        manager.markLightReady(pos);
+        assertTrue(ShadowStorageHashes.isDirty(pos), "脏位在 flushColumn 前应存在");
+        assertTrue(manager.flushColumn(pos, 5_000L), "脏柱 flushColumn 必须成功");
+        assertFalse(ShadowStorageHashes.isDirty(pos), "成功后脏位应清零");
+        Path file = RegionCache.regionFile(regionDir, pos.x, pos.z);
+        assertTrue(java.nio.file.Files.isRegularFile(file), "flushColumn 必须写 .mca");
+        // 模拟 unload 后回程读盘
+        injected.remove(ChunkPos.asLong(pos.x, pos.z));
+        manager.close();
+        manager = new ShadowStorageManager(regionDir, p -> nbtPayload.clone(), injected::contains, 1);
+        byte[] read = manager.readChunk(pos);
+        assertArrayEquals(nbtPayload, read, "回程 loadFromDisk 必须读到 flushColumn 写入的柱");
+    }
+
+    @Test
+    @DisplayName("flushColumn：未注入脏位失败且不清脏，unload 不得摘表")
+    void flushColumnFailsWhenNotInjected() {
+        ChunkPos pos = new ChunkPos(9, 9);
+        ShadowStorageHashes.put(pos, 1L);
+        manager.markContentDirty(pos);
+        assertFalse(manager.flushColumn(pos, 1_000L));
+        assertTrue(ShadowStorageHashes.isDirty(pos), "失败时不得清脏");
     }
 
     @Test

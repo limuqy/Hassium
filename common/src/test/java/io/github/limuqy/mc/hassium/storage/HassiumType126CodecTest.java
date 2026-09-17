@@ -1,5 +1,6 @@
 package io.github.limuqy.mc.hassium.storage;
 
+import io.github.limuqy.mc.hassium.shadow.storage.HassiumType126Codec;
 import io.github.limuqy.mc.hassium.compression.HassiumCompression;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;

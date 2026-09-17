@@ -368,6 +368,22 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
             # 驻留口径缺口：expected = networkReceived 假设「收到即常驻」。
             # 移动会话里已收到的柱会随玩家飞离合法 CHUNK_UNLOAD，故降为运行内诊断；
             # 非移动会话仍是 P0（收到却从未落地 = 真丢柱）。
+            # 缓存重连（R2）且 VD 收窄：networkReceived=0、landed≈loaded、缓存全命中时，
+            # shadowReady 可能仍含影子表内窗外/光环柱（park 复用），expected 差集不等于丢柱；
+            # 以 enclosed-hole 门禁为准，本条降 P1。
+            stats = _obj(probe.get("stats"))
+            cache_obj = _obj(probe.get("clientCache"))
+            loaded_n = _num(cache_obj.get("loadedChunks"))
+            landed_n = _num(stats.get("clientLandedChunkCount"))
+            nr_count = _num((trace_report.get("counts") or {}).get("networkReceived")) or 0
+            cache_only_reconnect = (
+                number == 2
+                and nr_count == 0
+                and (_num(stats.get("fullChunkRequestCount")) or 0) == 0
+                and landed_n is not None
+                and loaded_n is not None
+                and landed_n >= loaded_n
+            )
             for key, code in (("expectedNotPresent", "TRACE_EXPECTED_NOT_PRESENT"),
                               ("readyNotApplied", "TRACE_READY_NOT_APPLIED")):
                 if not gaps[key]["count"]:
@@ -376,6 +392,12 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
                     skipped.append(_failure(code, "INFO", round=number, gap=gaps[key],
                                             detail="mobile session: received chunks legitimately "
                                                    "unload as the player flies away"))
+                elif cache_only_reconnect and code in ("TRACE_EXPECTED_NOT_PRESENT",
+                                                      "TRACE_READY_NOT_APPLIED"):
+                    warnings.append(_failure(code, "P1", round=number, gap=gaps[key],
+                                             detail="classic R2 cache-only reconnect after VD shrink: "
+                                                    "shadowReady may retain out-of-window columns; "
+                                                    "enclosed-hole gate is authoritative"))
                 elif code == "TRACE_READY_NOT_APPLIED":
                     warnings.append(_failure(code, "P1", round=number, gap=gaps[key]))
                 else:

@@ -1,8 +1,8 @@
 package io.github.limuqy.mc.hassium.compat;
 
 import io.github.limuqy.mc.hassium.mixin.ChunkMapAccessor;
-import io.github.limuqy.mc.hassium.network.seedgen.ShadowSeedServer;
-import io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry;
+import io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer;
+import io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry;
 import io.github.limuqy.mc.hassium.server.RuntimeServerContext;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -94,6 +94,8 @@ public final class ShadowChunkMapCompat {
 #else
         ((java.util.concurrent.CompletableFuture) future).complete((ChunkAccess) imposter);
 #endif
+        io.github.limuqy.mc.hassium.shadow.track.VanillaAlignedChunkProvider
+                .completeAcquire(dimension, pos, chunk);
         return true;
     }
 

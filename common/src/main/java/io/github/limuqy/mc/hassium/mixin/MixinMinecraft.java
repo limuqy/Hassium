@@ -65,7 +65,7 @@ public abstract class MixinMinecraft {
         if (!ClientLifecycleHelper.hasActiveClientSession()) {
             return;
         }
-        io.github.limuqy.mc.hassium.storage.ShadowStorageManager.pauseEncoding();
+        io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager.pauseEncoding();
     }
 
     /**
@@ -101,7 +101,7 @@ public abstract class MixinMinecraft {
             io.github.limuqy.mc.hassium.compat.ShadowRegistryGate.releaseWrite();
         }
         // revert 窗口已过：放行从还活着的影子 ChunkMap 刷脏（park 在 finalize TAIL）。
-        io.github.limuqy.mc.hassium.storage.ShadowStorageManager.resumeEncoding();
+        io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager.resumeEncoding();
     }
 #endif
 

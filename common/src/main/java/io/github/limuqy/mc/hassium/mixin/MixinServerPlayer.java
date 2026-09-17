@@ -59,15 +59,18 @@ public abstract class MixinServerPlayer extends Player {
     private void hassium$onTrackChunk(ChunkPos pos, Packet<?> chunkPacket, CallbackInfo ci) {
         ServerPlayer self = (ServerPlayer) (Object) this;
         if (io.github.limuqy.mc.hassium.server.RuntimeServerContext.isShadowServerContext()) {
+            // S3 接法 B：影子专用服官方包 → 真实客户端
+            if (chunkPacket != null) {
+                io.github.limuqy.mc.hassium.shadow.track.ShadowOfficialPacketBridge
+                        .forwardToRealClient(chunkPacket);
+            }
+            ci.cancel();
             return;
         }
         if (PlayerCompressionTracker.isCompressionEnabled(self)) {
-            // Pull 模式：服务端停发 chunk_payload，整柱数据由客户端影子 tracking 统一拉取
+            // Pull 模式：服务端停发 chunk_payload，区块由影子 Provider/票窗交付
             if (io.github.limuqy.mc.hassium.network.handshake.ServerHandshakeActivation.hasCaps(
                     self.getUUID(), io.github.limuqy.mc.hassium.network.handshake.LoginCaps.PULL_MODE)) {
-                // 抑制整柱载荷的同时声明权威边沿（enter + 权威 hash）：客户端据此本地解析
-                io.github.limuqy.mc.hassium.network.ChunkAuthorityNotifier.onAuthoritativeEnter(
-                        self, io.github.limuqy.mc.hassium.compat.PlayerCompat.getServerLevel(self), pos);
                 ci.cancel();
                 return;
             }

@@ -1,8 +1,8 @@
 package io.github.limuqy.mc.hassium.mixin;
 
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
-import io.github.limuqy.mc.hassium.storage.HassiumChunkWriteBuffer;
-import io.github.limuqy.mc.hassium.storage.HassiumType126Codec;
+import io.github.limuqy.mc.hassium.shadow.storage.HassiumChunkWriteBuffer;
+import io.github.limuqy.mc.hassium.shadow.storage.HassiumType126Codec;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.chunk.storage.RegionFile;
 import org.spongepowered.asm.mixin.Mixin;
@@ -66,7 +66,7 @@ public abstract class MixinRegionFile {
     /** 影子上下文：本 RegionFile 的 region 目录归属的存储管理器（懒解析一次，见 hassium$shadowStorage）。 */
     @Unique
     @Nullable
-    private volatile io.github.limuqy.mc.hassium.storage.ShadowStorageManager hassium$shadowStorage;
+    private volatile io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager hassium$shadowStorage;
 
     /**
      * 存储格式只服务专用服务器：integrated server（单人/局域网）不写 Hassium type-126，
@@ -202,7 +202,7 @@ public abstract class MixinRegionFile {
         // storage.mode 键已删（REQ 决策 2/B）：存储模式内部固定 mirror，
         // readonly_vanilla 只读放行分支不再可达。
 
-        io.github.limuqy.mc.hassium.storage.ShadowStorageManager shadowMgr = hassium$shadowStorage();
+        io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager shadowMgr = hassium$shadowStorage();
         if (shadowMgr != null) {
             // 影子存档单写者 = 映像：原版写入收进映像，不碰 .mca（详见 adoptShadowPayload）。
             HassiumChunkWriteBuffer shadowBuffer = new HassiumChunkWriteBuffer(
@@ -229,13 +229,13 @@ public abstract class MixinRegionFile {
      * 取消同时也短路挂在同一注入点的后续 HEAD 注入（Mixin 把 cancel 的返回插在本注入之后，
      * 冒烟实测：影子写 2363 次只放行了 21 次 C2ME 补丁）——影子上下文里 C2ME 的
      * type126/hash 补丁因此不再执行：本收编路径已自行归一化嵌入 hash（
-     * {@link io.github.limuqy.mc.hassium.storage.ShadowStorageManager#adoptEncodedColumn}），
-     * {@link io.github.limuqy.mc.hassium.storage.RegionCache.Image#save} 落盘时写 type 字节，
+     * {@link io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager#adoptEncodedColumn}），
+     * {@link io.github.limuqy.mc.hassium.shadow.storage.RegionCache.Image#save} 落盘时写 type 字节，
      * 补丁在本上下文冗余。该补丁只在专用服存储路径（非影子）保留原有职责。
      */
     @Inject(method = "write", at = @At("HEAD"), cancellable = true)
     private void hassium$adoptShadowWrite(ChunkPos pos, ByteBuffer buffer, CallbackInfo ci) {
-        io.github.limuqy.mc.hassium.storage.ShadowStorageManager mgr = hassium$shadowStorage();
+        io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager mgr = hassium$shadowStorage();
         if (mgr == null) {
             return;
         }
@@ -252,20 +252,20 @@ public abstract class MixinRegionFile {
      */
     @Unique
     @Nullable
-    private io.github.limuqy.mc.hassium.storage.ShadowStorageManager hassium$shadowStorage() {
-        io.github.limuqy.mc.hassium.storage.ShadowStorageManager cached = hassium$shadowStorage;
+    private io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager hassium$shadowStorage() {
+        io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager cached = hassium$shadowStorage;
         if (cached != null) {
             return cached;
         }
         if (!io.github.limuqy.mc.hassium.server.RuntimeServerContext.isShadowServerContext()) {
             return null;
         }
-        io.github.limuqy.mc.hassium.network.seedgen.ShadowSeedServer server =
-                io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry.getInstance().get();
+        io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer server =
+                io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry.getInstance().get();
         if (server == null) {
             return null;
         }
-        io.github.limuqy.mc.hassium.storage.ShadowStorageManager resolved =
+        io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager resolved =
                 server.storageForRegionDir(hassium$self().hassium$getExternalFileDir());
         if (resolved != null) {
             hassium$shadowStorage = resolved;
@@ -283,11 +283,11 @@ public abstract class MixinRegionFile {
      */
     @Unique
     private void hassium$adoptShadowPayload(
-            io.github.limuqy.mc.hassium.storage.ShadowStorageManager mgr, ChunkPos pos, byte[] rawNbtData)
+            io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager mgr, ChunkPos pos, byte[] rawNbtData)
             throws IOException {
         try {
             int level = HassiumConfigService.getInstance().getStorageCompressionLevel();
-            Long storedHash = io.github.limuqy.mc.hassium.storage.ShadowStorageHashes
+            Long storedHash = io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes
                     .get(mgr.dimension(), pos);
             byte[] sector = HassiumType126Codec.encodeSector(rawNbtData, storedHash, level);
             if (!mgr.adoptEncodedColumn(pos, HassiumType126Codec.payloadAfterType(sector), storedHash)) {
@@ -311,7 +311,7 @@ public abstract class MixinRegionFile {
      */
     @Unique
     private boolean hassium$adoptShadowSector(
-            io.github.limuqy.mc.hassium.storage.ShadowStorageManager mgr, ChunkPos pos, ByteBuffer buffer) {
+            io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager mgr, ChunkPos pos, ByteBuffer buffer) {
         try {
             if (buffer == null || buffer.limit() < 5 + 1 + HassiumType126Codec.HASH_LENGTH) {
                 return false;
@@ -326,7 +326,7 @@ public abstract class MixinRegionFile {
             view.get(sector);
             // 显式给坐标 hash：外部 IO 的嵌入 hash 是零占位，补丁与本收编无先后约束，
             // adoptEncodedColumn 会按坐标 hash 归一化嵌入头（见 normalizeEmbeddedHash）。
-            Long hash = io.github.limuqy.mc.hassium.storage.ShadowStorageHashes
+            Long hash = io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes
                     .get(mgr.dimension(), pos);
             boolean adopted = mgr.adoptEncodedColumn(pos, HassiumType126Codec.payloadAfterType(sector), hash);
             if (adopted) {
@@ -344,7 +344,7 @@ public abstract class MixinRegionFile {
     @Unique
     @Nullable
     private DataInputStream hassium$tryReadHassiumChunk(ChunkPos pos) throws IOException {
-        io.github.limuqy.mc.hassium.storage.ShadowStorageManager shadowMgr = hassium$shadowStorage();
+        io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager shadowMgr = hassium$shadowStorage();
         if (shadowMgr != null) {
             // 影子存档单写者 = 映像（整文件重写）。原版 RegionFile 的内存扇区表自构造起
             // 不再重读，早已与磁盘布局错位；读也必须走映像，否则按过期偏移读回别的柱
@@ -405,7 +405,7 @@ public abstract class MixinRegionFile {
         try {
             HassiumType126Codec.Decoded decoded = HassiumType126Codec.decode(rawData);
             if (decoded.contentHash() != null) {
-                io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.put(pos.x, pos.z, decoded.contentHash());
+                io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes.put(pos.x, pos.z, decoded.contentHash());
             }
             decompressed = decoded.nbt();
         } catch (Exception e) {
@@ -427,7 +427,7 @@ public abstract class MixinRegionFile {
         HassiumConfigService configService = HassiumConfigService.getInstance();
         int level = configService.getStorageCompressionLevel();
 
-        Long storedHash = io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.get(pos);
+        Long storedHash = io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes.get(pos);
         ByteBuffer sectorBuf;
         int compressedLength;
         try {

@@ -1,4 +1,4 @@
-package io.github.limuqy.mc.hassium.storage;
+package io.github.limuqy.mc.hassium.shadow.storage;
 
 import io.github.limuqy.mc.hassium.utils.DimensionKey;
 import java.util.HashSet;

@@ -166,18 +166,18 @@ public final class ClientChunkPipeline {
         try {
             // 真实 seed 到达：若影子是投机创建的 seed=0 装配 → 关停重建（复用分支
             // 永不重进 seed 等待，必须在此主动判定）。
-            io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry.getInstance()
+            io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry.getInstance()
                     .onServerSeedArrived(seed);
             // 维度清单到达：投机影子常早于 play_init（seedGen 关时 seed=0 不触发 seed 重建），
             // 自定义维未装配则关停重建，使缓存/SeedGen 覆盖 TF/AoA 等维度。
-            io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry.getInstance()
+            io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry.getInstance()
                     .onServerDimensionIdsArrived(this.serverDimensionIds);
         } catch (Throwable ignored) {
         }
         // 握手完成后按当前影子 storage 再刷一次 cacheable（覆盖 park 复用、
         // 或本方法内刚完成的重建——resetStorage 已把集合复位为三维）。
         try {
-            var shadow = io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry
+            var shadow = io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry
                     .getInstance().get();
             if (shadow != null) {
                 for (String dim : shadow.storageDimensions()) {

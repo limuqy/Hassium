@@ -120,6 +120,12 @@ public abstract class MixinPlayerChunkSender {
                     ordinal = 0))
     private static void hassium$onChunkPacketSend(ServerGamePacketListenerImpl listener, Packet<?> packet) {
         ServerPlayer player = listener.getPlayer();
+        if (io.github.limuqy.mc.hassium.server.RuntimeServerContext.isShadowServerContext()) {
+            // S3 接法 B：影子上下文官方包转发真实客户端，不进 dummy、也不走真服抑制逻辑
+            io.github.limuqy.mc.hassium.shadow.track.ShadowOfficialPacketBridge
+                    .forwardToRealClient(packet);
+            return;
+        }
         if (!PlayerCompressionTracker.isCompressionEnabled(player)) {
             listener.send(packet);
             return;
@@ -132,12 +138,7 @@ public abstract class MixinPlayerChunkSender {
         if (!io.github.limuqy.mc.hassium.server.RuntimeServerContext.isShadowServerContext()
                 && io.github.limuqy.mc.hassium.network.handshake.ServerHandshakeActivation.hasCaps(
                         player.getUUID(), io.github.limuqy.mc.hassium.network.handshake.LoginCaps.PULL_MODE)) {
-            // Pull 模式：抑制整柱载荷的同时声明权威边沿（enter + 权威 hash），
-            // 整柱数据由客户端影子 tracking 统一拉取。
-            for (net.minecraft.world.level.ChunkPos pos : enters) {
-                io.github.limuqy.mc.hassium.network.ChunkAuthorityNotifier.onAuthoritativeEnter(
-                        player, io.github.limuqy.mc.hassium.compat.PlayerCompat.getServerLevel(player), pos);
-            }
+            // Pull 模式：整柱不下发；数据由影子 Provider 交付（权威声明已降级）
         }
         // 压缩门已开：整柱一律不下发（bundle 情形下连同其辅助光照子包一并丢弃，
         // 与 lightStrip 语义一致——Hassium 客户端光照由影子端统一计算）。

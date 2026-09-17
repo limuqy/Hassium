@@ -244,7 +244,7 @@ public final class ScenarioEngine {
             LOGGER.info("HassiumSmokeTest: {} player entered world at y={}", label, mc.player.getY());
             // 会话起点置位点：单轮场景不调 SmokeChunkTrace.reset()，
             // 起点只能在这里落下，否则 probe 的 sessionToAllMs 恒为 -1。
-            io.github.limuqy.mc.hassium.network.seedgen.SmokeChunkTrace.markSessionStart();
+            io.github.limuqy.mc.hassium.shadow.light.SmokeChunkTrace.markSessionStart();
         }
         return Outcome.DONE;
     }
@@ -456,8 +456,8 @@ public final class ScenarioEngine {
     private static void resetNetworkStatsForRound2() {
         try {
             io.github.limuqy.mc.hassium.metrics.NetworkStats.reset();
-            io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.resetHashClassify();
-            io.github.limuqy.mc.hassium.network.seedgen.SmokeChunkTrace.reset();
+            io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.resetHashClassify();
+            io.github.limuqy.mc.hassium.shadow.light.SmokeChunkTrace.reset();
             LOGGER.info("HassiumSmokeTest: network stats reset for ROUND2");
         } catch (Throwable t) {
             LOGGER.warn("HassiumSmokeTest: failed to reset network stats", t);
@@ -713,8 +713,8 @@ public final class ScenarioEngine {
                 io.github.limuqy.mc.hassium.metrics.NetworkStats.getMetrics();
         String dim = mc != null && mc.player != null && mc.level != null
                 ? dimensionId(mc.player.level().dimension()) : null;
-        io.github.limuqy.mc.hassium.network.seedgen.SmokeChunkTrace.Snapshot trace =
-                io.github.limuqy.mc.hassium.network.seedgen.SmokeChunkTrace.snapshot(dim);
+        io.github.limuqy.mc.hassium.shadow.light.SmokeChunkTrace.Snapshot trace =
+                io.github.limuqy.mc.hassium.shadow.light.SmokeChunkTrace.snapshot(dim);
         return switch (key) {
             // counters.*（appendCounters 同名）
             case "counters.sectionDeltaRequestsSent" -> m.getSectionDeltaRequestsSent();
@@ -817,7 +817,7 @@ public final class ScenarioEngine {
         // T6 实体冒烟增强（dev 测试代码）：R2 断线 → 影子端异步保存（park 线程）。
         // 不主动断连直接退出时，JVM 终止会打断 daemon saveAll。先被动断连，关闭线程
         // 等 saveAll 序号递增后再 stop()，不占客户端 tick。
-        long saveSeq = io.github.limuqy.mc.hassium.network.seedgen.ShadowSeedServer.saveAllSeq();
+        long saveSeq = io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer.saveAllSeq();
         triggerDisconnect(mc);
         LOGGER.info("HassiumSmokeTest: ROUND2 exit scheduling code={} saveSeq={}",
                 allPass ? 0 : 2, saveSeq);
@@ -829,7 +829,7 @@ public final class ScenarioEngine {
 
     /**
      * T6 实体冒烟增强（dev 测试代码）：等待影子端断连保存完成。
-     * 完成信号 = {@link io.github.limuqy.mc.hassium.network.seedgen.ShadowSeedServer#saveAllSeq()}
+     * 完成信号 = {@link io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer#saveAllSeq()}
      * 递增。须在 {@code triggerDisconnect} 之前采样序号：park 的 saveAll 常在数毫秒内结束，
      * 若事后再看 heat.idx mtime，文件可能已写完 → 空等到 15s 超时，R2 退出像卡死。
      */
@@ -837,11 +837,11 @@ public final class ScenarioEngine {
         try {
             long deadline = System.currentTimeMillis() + 2_000L;
             while (System.currentTimeMillis() < deadline) {
-                if (io.github.limuqy.mc.hassium.network.seedgen.ShadowSeedServer.saveAllSeq()
+                if (io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer.saveAllSeq()
                         > saveSeqBeforeDisconnect) {
                     LOGGER.info("HassiumSmokeTest: shadow save completed (seq {} -> {})",
                             saveSeqBeforeDisconnect,
-                            io.github.limuqy.mc.hassium.network.seedgen.ShadowSeedServer.saveAllSeq());
+                            io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer.saveAllSeq());
                     return;
                 }
                 Thread.sleep(20L);
@@ -961,11 +961,23 @@ public final class ScenarioEngine {
                 roundLabel, content.sampledChunks(), content.chunksWithNonAir(),
                 content.playerChunkNonAir(), content.footBlock());
 
-        // G1：classic ROUND2 超视渲染（影子双窗本地源）必须至少装载一柱
+        // G1：classic ROUND2 超视渲染 —— 仅在 OVD 配置开启时要求 ovdLoaded>0；
+        // 阶段 A 冻结 OVD（viewDistanceExtensionEnabled=false）时该门禁跳过。
         if ("ROUND2".equals(roundLabel) && m.getOvdLoadedCount() <= 0) {
-            LOGGER.error("{} {} stats validation FAILED: G1 ovdLoaded==0 (shadow dual-window OVD)",
-                    MARKER_FAIL, roundLabel);
-            return false;
+            boolean ovdEnabled = false;
+            try {
+                ovdEnabled = io.github.limuqy.mc.hassium.config.HassiumConfigService
+                        .getInstance().isViewDistanceExtensionEnabled();
+            } catch (Throwable ignored) {
+                ovdEnabled = true; // 配置不可读：保持旧语义（要求 OVD 有装载）
+            }
+            if (ovdEnabled) {
+                LOGGER.error("{} {} stats validation FAILED: G1 ovdLoaded==0 (shadow dual-window OVD)",
+                        MARKER_FAIL, roundLabel);
+                return false;
+            }
+            LOGGER.info("HassiumSmokeTest: {} G1 ovdLoaded==0 skipped (OVD frozen/disabled)",
+                    roundLabel);
         }
 
         boolean ok = true;

@@ -1,4 +1,7 @@
-package io.github.limuqy.mc.hassium.network.seedgen;
+package io.github.limuqy.mc.hassium.shadow.server;
+
+import io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute;
+import io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager;
 
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.network.ClientChunkPipeline;
@@ -155,7 +158,7 @@ public final class ShadowServerRegistry {
                 parked = false;
                 boundServerId = ClientChunkPipeline.getInstance().getServerId();
                 cancelIdleTimeout();
-                io.github.limuqy.mc.hassium.storage.ShadowStorageManager.resumeEncoding();
+                io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager.resumeEncoding();
                 ClientChunkPipeline.getInstance().setShadowServerReady(true);
                 ShadowLightCompute.onShadowServerReady();
                 DebugLogger.info(DebugLogger.LogType.ASYNC,
@@ -232,7 +235,7 @@ public final class ShadowServerRegistry {
      * 重建判定（纯函数测试缝）：SeedGen 预期下，真实 seed 到达且当前实例装配种子不符
      * （投机创建的 seed=0 实例）→ 需要重建。
      */
-    static boolean shouldRebuildForSeed(long assembledSeed, long arrivedSeed,
+    public static boolean shouldRebuildForSeed(long assembledSeed, long arrivedSeed,
                                         boolean clientSeedGenEnabled) {
         return clientSeedGenEnabled && arrivedSeed != 0L && assembledSeed != arrivedSeed;
     }
@@ -241,7 +244,7 @@ public final class ShadowServerRegistry {
      * 重建判定：握手维度清单含本地可装配的自定义维，而当前影子实例尚未装配该维
      * （投机创建早于 play_init，seedGen 关闭时 seed 恒 0 不会走 seed 重建）。
      */
-    static boolean shouldRebuildForDimensions(
+    public static boolean shouldRebuildForDimensions(
             java.util.Collection<String> arrivedIds,
             java.util.Collection<String> assembledDims) {
         if (arrivedIds == null || arrivedIds.isEmpty() || assembledDims == null) {
@@ -340,7 +343,7 @@ public final class ShadowServerRegistry {
      * {@code unparkPermitted}：仅 onLogin 放行——去掉 HEAD 全局 pause 后，投机
      * {@code getOrCreate} 不能再靠 {@code !encodingPaused} 立刻把 park 实例拉活。
      */
-    static boolean shouldUnpark(boolean parked, boolean encodingPaused, boolean unparkPermitted) {
+    public static boolean shouldUnpark(boolean parked, boolean encodingPaused, boolean unparkPermitted) {
         return parked && !encodingPaused && unparkPermitted;
     }
 
@@ -352,12 +355,12 @@ public final class ShadowServerRegistry {
     /** park → 活跃：取消 idle，标记 ready，唤醒消费者。 */
     private ShadowSeedServer unparkIfNeeded(ShadowSeedServer s) {
         if (shouldUnpark(parked,
-                io.github.limuqy.mc.hassium.storage.ShadowStorageManager.isEncodingPaused(),
+                io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager.isEncodingPaused(),
                 unparkPermitted)) {
             parkEpoch.incrementAndGet(); // 使在途 park 线程的 clearHot/idle 失效
             parked = false;
             cancelIdleTimeout();
-            io.github.limuqy.mc.hassium.storage.ShadowStorageManager.resumeEncoding();
+            io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager.resumeEncoding();
             ClientChunkPipeline.getInstance().setShadowServerReady(true);
             // 会话级降级随重进清除：R1 单柱失败/误置 failed 会让 R2 OVD publish 恒 false
             // （test1 实证 ovdLoaded=0），park 复用不得继承上一会话的 failed。
@@ -597,7 +600,7 @@ public final class ShadowServerRegistry {
     }
 
     /** 测试缝：同 serverId 应复用；不同应关旧。 */
-    static boolean shouldReuseParkedInstance(String boundId, String wantId, boolean hasServer) {
+    public static boolean shouldReuseParkedInstance(String boundId, String wantId, boolean hasServer) {
         if (!hasServer) {
             return false;
         }

@@ -1,4 +1,13 @@
-package io.github.limuqy.mc.hassium.network.seedgen;
+package io.github.limuqy.mc.hassium.shadow.track;
+
+import io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer;
+import io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry;
+import io.github.limuqy.mc.hassium.shadow.server.ShadowWorldgenExecutor;
+import io.github.limuqy.mc.hassium.shadow.server.SeedGenLevelCompat;
+import io.github.limuqy.mc.hassium.shadow.server.SeedGenExecutor;
+import io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute;
+import io.github.limuqy.mc.hassium.shadow.light.SmokeChunkTrace;
+import io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes;
 
 import io.github.limuqy.mc.hassium.compat.ChunkShapeCompat;
 import io.github.limuqy.mc.hassium.compat.LevelCompat;
@@ -41,6 +50,10 @@ public final class ShadowTrackingSession {
     private static final long CHUNK_TICK_BUDGET_NANOS = 2_000_000L;
     /** 一次泵最多发出的 pull 请求柱数（防首帧风暴；剩余下轮续发）。 */
     private static final int MAX_REQUESTS_PER_PUMP = 128;
+    /** 票窗补全泵间隔与单泵预算（ServerVD 窗内 completeness，非窗外 bootGrid）。 */
+    private static final long WINDOW_PUMP_INTERVAL_MS = 200L;
+    private static final int WINDOW_PUMP_BUDGET = 64;
+    private long lastWindowPumpMs;
 
     /** 客户端 tick 发布的待同步状态（volatile 整体换引用，无锁）。 */
     private record PendingState(String dimension, double x, double y, double z,
@@ -69,9 +82,7 @@ public final class ShadowTrackingSession {
      *  （isChunkInRange 同款，≈ 原版可见 1529@VD20），不铺 authority 边距外圈。 */
     private ChunkPos homeChunk;
     /** 基准光盘已布防待铺（ensureVirtualPlayer 落位后置真；单元格耗尽清除）。 */
-    private boolean bootGridArmed;
     /** 基准光盘单元格队列（螺旋由近及远；半径 = 当时 resolveViewDistance()）。 */
-    private final java.util.ArrayDeque<ChunkPos> bootGridCells = new java.util.ArrayDeque<>();
     /** 相邻两次光盘发射的最小间隔（毫秒）：防百柱级无基线请求同心跳灌入服务端按需装载。 */
     private static final long BOOT_EMIT_MIN_GAP_MS = 25L;
     private long lastBootEmitMs;
@@ -100,7 +111,7 @@ public final class ShadowTrackingSession {
      */
     private static final long RECLAIM_INTERVAL_MS = 1000L;
     /** 离开保留域后的宽限（吸收边界抖动 / 来回移动）。 */
-    static final long RECLAIM_GRACE_MS = 6000L;
+    public static final long RECLAIM_GRACE_MS = 6000L;
     /** 单轮最多回收柱数。 */
     private static final int MAX_RECLAIM_PER_PASS = 64;
     /** key(复合键) -> 首次观察到离开保留域的毫秒时刻。 */
@@ -146,31 +157,11 @@ public final class ShadowTrackingSession {
         }
     }
     private long lastSweepMs;
-    /** 形状扫描 / boot / 悬置选柱共用的在途柱（复合键 → 入队时刻）：已发 pull 未注入。
-     *  注入后或超时清除。超时须长于 VD20 冷装填（1529 柱 / 2 tick ≈ 38s），
-     *  15s 会把外环未注入柱当丢失再扫一遍。 */
+    /** 形状扫描 / boot / 悬置选柱共用的在途柱（复合键 → 入队时刻）：已发 pull 未注入。 */
     private static final long SWEEP_INFLIGHT_TIMEOUT_MS = 60_000L;
     private final java.util.Map<Long, Long> sweepInFlight =
             new java.util.concurrent.ConcurrentHashMap<>();
 
-    /**
-     * 让位门的**兜底宽限**：同一柱被扣住超过该时长（且期间没有新声明覆盖它）即无条件补发一次 pull。
-     * <p>
-     * 语义 = 「让路不让弃」：让位期间影子端不自绘选柱，但必须保证任一可见柱最终都有来源——
-     * 声明流若漏了某柱、或覆盖后仍交付失败，到期即由影子端补一次 pull。
-     * <p>
-     * 宽限取权威声明流的存活窗口（{@link ChunkAuthorityClient#AUTHORITY_WATCHDOG_MS}）。
-     * 取比它更短的窗口必然产生**假饥饿**：声明流按原版限速下发（首批
-     * {@code PlayerChunkSender.START_CHUNKS_PER_TICK=9}，自适应上限 64），灌满 VD20 可见窗需要
-     * 数秒；扣留在声明到达前就到期，等于把兜底当常态（实测 3s 宽限下 {@code _p5fix1} 每场 15 次补发）。
-     * {@link ChunkAuthorityClient#declaredAtMs} 会把已声明柱的起算点抬到声明时刻，因此本宽限只在
-     * 「声明流真的漏了 / 覆盖后仍没交付」时触发——那才是要看的兜底信号。
-     */
-    private static final long GATE_STARVE_GRACE_MS =
-            io.github.limuqy.mc.hassium.network.ChunkAuthorityClient.AUTHORITY_WATCHDOG_MS;
-
-    /** 让位期间被扣住的柱 → 首次被扣时间（仅影子主循环线程读写）。 */
-    private final java.util.Map<Long, Long> gateWaitingSinceMs = new java.util.HashMap<>();
     /** 本会话已计 OVD 的坐标（防 materialize/sweep 双计；reset 清空）。 */
     private final java.util.Set<Long> ovdCounted = java.util.concurrent.ConcurrentHashMap.newKeySet();
     /** 本会话已计 OVD miss 的坐标（retry 不再累加「缺失」）。 */
@@ -297,9 +288,7 @@ public final class ShadowTrackingSession {
             return;
         }
         applyViewDistanceIfChanged(shadow);
-        // P5 选柱接管（默认开，见 ShadowTicketDriver.P5_TAKEOVER）：OVD 环带票驱动。
-        // 中心沿用虚拟玩家位置——会话唯一位置真相源，inOvdWindow / sweep* 也用它，
-        // 故"出票中心"与"判据中心"天然同源，不会出现票在 A、判据在 B 的一圈缝。
+        // P5 票驱动已默认关闭（S0 专用服模型）
         ChunkPos ticketCenter = virtualPlayer.chunkPosition();
         ShadowTicketDriver.consumeOnShadowLoop(shadow, currentDimension,
                 ticketCenter.x, ticketCenter.z, serverViewDistance, effectiveClientVD);
@@ -327,14 +316,63 @@ public final class ShadowTrackingSession {
             }
         }
         ShadowPlayerCompat.flushVirtualPlayerChunks(virtualPlayer);
-        drainBootGrid(shadow, MAX_REQUESTS_PER_PUMP);
-        drainSelections(shadow, MAX_REQUESTS_PER_PUMP);
-        sweepVisibleShape(shadow, now);
         sweepOvdRing(shadow, now);
         drainRedeliver(shadow);
+        drainTrackingWindowCompleteness(shadow, now);
         // P3（注入表回收）不在此处调用：ShadowSeedServer.unloadChunk 的 flushColumn 会等待
         // 影子主循环 → 主循环内调用即自死锁（实测 R2 挂死 / teardown 悬挂）。候选由
         // onClientChunkUnloaded 登记，回收由独立的 hassium-shadow-reclaim 线程驱动。
+    }
+
+    /**
+     * 影子票窗（ServerVD）补全：客户端无落地凭据 → 已注入 publish / 未注入 Provider.acquire。
+     * 只扫当前窗，不自绘窗外几何（不是 bootGrid）。
+     */
+    private void drainTrackingWindowCompleteness(ShadowSeedServer shadow, long nowMs) {
+        if (shadow == null || virtualPlayer == null || currentDimension == null
+                || serverViewDistance <= 0) {
+            return;
+        }
+        if (nowMs - lastWindowPumpMs < WINDOW_PUMP_INTERVAL_MS) {
+            return;
+        }
+        lastWindowPumpMs = nowMs;
+        ChunkPos center = virtualPlayer.chunkPosition();
+        if (center == null) {
+            return;
+        }
+        int served = 0;
+        int acquired = 0;
+        for (int x = center.x - serverViewDistance; x <= center.x + serverViewDistance; x++) {
+            for (int z = center.z - serverViewDistance; z <= center.z + serverViewDistance; z++) {
+                if (served + acquired >= WINDOW_PUMP_BUDGET) {
+                    break;
+                }
+                if (!ChunkShapeCompat.contains(center.x, center.z, serverViewDistance, x, z)) {
+                    continue;
+                }
+                ChunkPos pos = new ChunkPos(x, z);
+                if (ShadowLightCompute.hasClientApplyEpoch(currentDimension, pos)) {
+                    continue;
+                }
+                net.minecraft.world.level.chunk.LevelChunk injected =
+                        shadow.injectedChunk(currentDimension, x, z);
+                if (injected != null && !shadow.isPlaceholder(currentDimension, x, z)) {
+                    if (ShadowChunkDeliver.deliverLocal(currentDimension, pos, false, false)) {
+                        served++;
+                    }
+                    continue;
+                }
+                VanillaAlignedChunkProvider.getInstance().acquire(
+                        currentDimension, pos, ShadowChunkProvider.AcquireReason.TRACKING);
+                acquired++;
+            }
+        }
+        if (served + acquired > 0) {
+            DebugLogger.info(DebugLogger.LogType.NETWORK,
+                    "[SHADOW_TRACK] window-complete center=({},{}) vd={} served={} acquired={}",
+                    center.x, center.z, serverViewDistance, served, acquired);
+        }
     }
 
     /**
@@ -342,7 +380,7 @@ public final class ShadowTrackingSession {
      * <p>
      * 任一不满足即不得回收。调用点先用宽限分支保留标记，再用本判定决定是否撤销标记。
      */
-    static boolean reclaimEligible(long outsideSinceMs, long nowMs, boolean inFlight, boolean clientHolds) {
+    public static boolean reclaimEligible(long outsideSinceMs, long nowMs, boolean inFlight, boolean clientHolds) {
         return outsideSinceMs > 0L && nowMs - outsideSinceMs >= RECLAIM_GRACE_MS
                 && !inFlight && !clientHolds;
     }
@@ -361,7 +399,7 @@ public final class ShadowTrackingSession {
         if (shadow == null || outsideSinceMs.isEmpty()) {
             return;
         }
-        if (io.github.limuqy.mc.hassium.network.seedgen.ShadowWorldgenExecutor.isTerminated()
+        if (io.github.limuqy.mc.hassium.shadow.server.ShadowWorldgenExecutor.isTerminated()
                 || io.github.limuqy.mc.hassium.compat.ShadowServerCompat.isSharedIoPoolShutdown()) {
             return; // 关停窗口：flush 会卡在已停止的主循环上（实测 teardown 悬挂）
         }
@@ -401,6 +439,8 @@ public final class ShadowTrackingSession {
             if (shadow.unloadChunk(dimension, new ChunkPos(x, z), chunk, false)) {
                 outsideSinceMs.remove(key);
                 reclaimed++;
+                io.github.limuqy.mc.hassium.shadow.track.VanillaAlignedChunkProvider
+                        .failAcquire(dimension, new ChunkPos(x, z));
                 DebugLogger.info(DebugLogger.LogType.NETWORK,
                         "[SHADOW_TRACK] reclaim ({}, {}) -> flush+evict injected (dimension={})",
                         x, z, dimension);
@@ -497,11 +537,7 @@ public final class ShadowTrackingSession {
                         }
                     } else {
                         notInjected++;
-                        if (diskTried >= OVD_DISK_BUDGET) {
-                            continue;
-                        }
-                        tryServeOvdLocal(shadow, new SelectedChunk(currentDimension, x, z));
-                        diskTried++;
+                        // OVD 冻结 / tryServeOvdLocal 已删：缺盘柱不在此泵
                     }
                 }
             }
@@ -653,8 +689,6 @@ public final class ShadowTrackingSession {
         ovdMissRetryAt.clear();
         lastOvdSweepMs = 0L;
         homeChunk = new ChunkPos((int) state.x() >> 4, (int) state.z() >> 4);
-        bootGridArmed = true;
-        bootGridCells.clear();
         lastBootEmitMs = 0L;
         lastSweepMs = 0L;
         lastChunkTickMs = 0L;
@@ -723,11 +757,9 @@ public final class ShadowTrackingSession {
             currentDimension = state.dimension();
             // 基准点取虚拟玩家坐下的一刻：此后任何旅行都以它为轴心铺静态盘面
             homeChunk = new ChunkPos(player.chunkPosition().x, player.chunkPosition().z);
-            bootGridArmed = true;
-            bootGridCells.clear();
             DebugLogger.info(DebugLogger.LogType.ASYNC,
                     "[SHADOW_TRACK] virtual player tracking session started (dimension={}, "
-                            + "viewDistance={}, serverRadius={})",
+                            + "viewDistance={}, serverRadius={}) S1-ticket-only",
                     currentDimension, viewDistance, serverViewDistance);
         } catch (Throwable t) {
             createFailed = true;
@@ -736,18 +768,9 @@ public final class ShadowTrackingSession {
     }
 
     private int resolveViewDistance() {
-        // 权威边距：原版玩家 tracking 半径（ChunkMap.setViewDistance 用 viewDistance+1 构造
-        // tracking view）：形状轴深 = vd+2 = 服务端签发上界（AUTHORITY_MARGIN）。
-        int authority = serverViewDistance > 0
-                ? serverViewDistance + 1
-                : DEFAULT_VIEW_DISTANCE + 1;
-        // OVD 双窗：effective clientRD > 权威边距时扩窗到 effective（ticket 覆盖环带）。
-        // pull 域仍由 inVanillaVisibleShape（serverVD）裁决，扩窗不扩大真服请求。
-        int effective = effectiveClientVD;
-        if (effective > authority && isOvdConfigActive()) {
-            return Math.min(effective, MAX_VIEW_DISTANCE);
-        }
-        return Math.min(authority, MAX_VIEW_DISTANCE);
+        // S1：影子票半径 = ServerVD（不加载完整 chebyshev 角区）
+        int base = serverViewDistance > 0 ? serverViewDistance : DEFAULT_VIEW_DISTANCE;
+        return Math.min(base, MAX_VIEW_DISTANCE);
     }
 
     private static boolean isOvdConfigActive() {
@@ -765,6 +788,15 @@ public final class ShadowTrackingSession {
             return true;
         }
         return ChunkShapeCompat.contains(center.x, center.z, serverViewDistance, x, z);
+    }
+
+    /** 交付/trace 候选：权威可见形状 ∪ OVD（OVD 冻结时仅权威形状）。 */
+    public static boolean isDeliverableToClient(int x, int z) {
+        ShadowTrackingSession s = INSTANCE;
+        if (s == null) {
+            return true;
+        }
+        return s.inVanillaVisibleShape(x, z) || s.inOvdWindow(x, z);
     }
 
     /** OVD 窗：client chebyshev 窗内且权威窗外；本地源服务，禁止 pull。 */
@@ -811,318 +843,8 @@ public final class ShadowTrackingSession {
         }
     }
 
-    /**
-     * 影子主循环分批发送悬置柱（worldgen 压制，无本地数据）的 pull 请求。
-     * 读盘/生成柱不走此路径——它们由 onChunkMaterialized 桥携带基线进比对。
-     */
-    private void drainSelections(ShadowSeedServer shadow, int maxPerPump) {
-        if (pendingSelections.isEmpty()) {
-            return;
-        }
-        java.util.List<ChunkPos> withBaseline = new java.util.ArrayList<>();
-        java.util.List<ChunkPos> withoutBaseline = new java.util.ArrayList<>();
-        int sent = 0;
-        while (sent < maxPerPump && !pendingSelections.isEmpty()) {
-            SelectedChunk sel = pendingSelections.poll();
-            if (!sel.dimension().equals(currentDimension)) {
-                continue; // 已切维度的旧选中柱作废
-            }
-            // 预过滤中心 = 虚拟玩家实时位置（泵循环内 applyState 已先行移动，跟随真实玩家）；
-            // 服务端校验中心同为真实玩家 chunkPosition()（逐请求实时取）。不能用 homeChunk——
-            // 那是落座快照，玩家移动超出窗口后会把新区域柱全部错杀（服务端本可签发）。
-            // 形状 = 原版可见圆角方形（range = 通告视距 vd，VD20 → 1529）：只拉用户能看到的；
-            // 影子 ticket 略宽的角区不在此路径请求，边缘光由邻柱 LightDelta 自愈。
-            if (!inVanillaVisibleShape(sel.x(), sel.z())) {
-                // OVD 窗：仅本地源，禁止 ShadowPull
-                if (inOvdWindow(sel.x(), sel.z())) {
-                    tryServeOvdLocal(shadow, sel);
-                }
-                continue;
-            }
-            // 空气空壳占位柱不算已物化：继续走拉取路径获取真实数据。
-            if (shadow.injectedChunk(sel.dimension(), sel.x(), sel.z()) != null
-                    && !shadow.isPlaceholder(sel.dimension(), sel.x(), sel.z())) {
-                continue; // 已物化（注入/本地生成），无需 pull
-            }
-            ChunkPos pos = new ChunkPos(sel.x(), sel.z());
-            if (!markPullInFlight(sel.dimension(), pos, System.currentTimeMillis())) {
-                continue; // boot / sweep 已发出，同柱不再打第二遍
-            }
-            if (ShadowLightCompute.hasLocalPullBaseline(sel.dimension(), pos)) {
-                withBaseline.add(pos);
-            } else {
-                withoutBaseline.add(pos);
-            }
-            sent++;
-        }
-        emitPullGroups(withBaseline, withoutBaseline);
-    }
+    /** OVD 环带扫描（冻结：仅统计，不 pull / 不 tryServeOvdLocal）。 */
 
-    /**
-     * 可见形状周期扫描：移动后 vanilla 选柱链（scheduleChunkLoad → onChunkSelected）会停
-     * ——悬置 future 卡住或 2ms tick 预算被卸载耗尽，pendingSelections 不再填充。
-     * 本扫描不依赖 vanilla，直接枚举虚拟玩家当前可见形状内「未注入且未在途」的柱补齐 pull。
-     * 形状 = isChunkInRange(serverViewDistance)；已注入 / 已请求（{@link #sweepInFlight}）跳过。
-     */
-    private void sweepVisibleShape(ShadowSeedServer shadow, long nowMs) {
-        if (virtualPlayer == null || currentDimension == null || serverViewDistance <= 0) {
-            return;
-        }
-        if (bootGridArmed) {
-            // 基准盘还在发射：未 mark 的外环仍在 bootGridCells 里，sweep 会抢发同一批。
-            return;
-        }
-        if (nowMs - lastSweepMs < SWEEP_INTERVAL_MS) {
-            return;
-        }
-        lastSweepMs = nowMs;
-        ChunkPos center = virtualPlayer.chunkPosition();
-        if (center == null) {
-            return;
-        }
-        // 过期在途清除：pull 响应丢失/服务端拒绝的柱超时后可重试，防形状永久洞
-        long expireBefore = nowMs - SWEEP_INFLIGHT_TIMEOUT_MS;
-        sweepInFlight.entrySet().removeIf(e -> e.getValue() < expireBefore);
-        java.util.List<ChunkPos> withBaseline = new java.util.ArrayList<>();
-        java.util.List<ChunkPos> withoutBaseline = new java.util.ArrayList<>();
-        int radius = serverViewDistance;
-        // 优先槽：被缺邻柱「主动等待」的未注入柱先收集（预算共享）；
-        // 剩余预算给普通距离环扫描。waiting 判定只查一层（A 缺 B → B 优先，
-        // 不递归），被动等待（邻已注入未 lightCorrect）不参与——sweep 只扫未注入柱。
-        int waitingSent = collectSweepRing(shadow, nowMs, center, radius, true,
-                withBaseline, withoutBaseline, MAX_SWEEP_PER_PUMP);
-        int sent = waitingSent + collectSweepRing(shadow, nowMs, center, radius, false,
-                withBaseline, withoutBaseline, MAX_SWEEP_PER_PUMP - waitingSent);
-        if (sent > 0) {
-            DebugLogger.info(DebugLogger.LogType.NETWORK,
-                    "[SHADOW_TRACK] sweep missing={} waiting={} localGen={} center=({},{}) radius={} (dimension={})",
-                    sent, waitingSent, preferLocalGeneration(), center.x, center.z, radius, currentDimension);
-        }
-        emitPullGroups(withBaseline, withoutBaseline);
-    }
-
-    /** 单遍环扫描收集（waitingOnly 时只收被缺邻柱等待的未注入柱；false 时走原逻辑）。
-     *  两遍共享 sweepInFlight：waiting pass 已 mark 的柱 normal pass 自然去重。 */
-    private int collectSweepRing(ShadowSeedServer shadow, long nowMs, ChunkPos center, int radius,
-                                 boolean waitingOnly,
-                                 java.util.List<ChunkPos> withBaseline,
-                                 java.util.List<ChunkPos> withoutBaseline,
-                                 int budget) {
-        int sent = 0;
-        // 逐环由近及远扫描，优先补齐玩家脚下的洞
-        for (int ring = 0; ring <= radius && sent < budget; ring++) {
-            int perimeter = ring == 0 ? 1 : 8 * ring;
-            for (int i = 0; i < perimeter && sent < budget; i++) {
-                int x, z;
-                if (ring == 0) {
-                    x = center.x;
-                    z = center.z;
-                } else {
-                    int side = i / (2 * ring);
-                    int step = i % (2 * ring);
-                    switch (side) {
-                        case 0 -> { x = center.x - ring; z = center.z - ring + step; }
-                        case 1 -> { x = center.x - ring + step; z = center.z + ring; }
-                        case 2 -> { x = center.x + ring; z = center.z + ring - step; }
-                        default -> { x = center.x + ring - step; z = center.z - ring; }
-                    }
-                }
-                if (!ChunkShapeCompat.contains(center.x, center.z, radius, x, z)) {
-                    continue;
-                }
-                // 空气空壳占位柱不算已注入：它是光照齐套的临时占位，
-                // 必须继续走拉取路径获取真实数据，否则视距内出现空洞。
-                if (shadow.injectedChunk(currentDimension, x, z) != null
-                        && !shadow.isPlaceholder(currentDimension, x, z)) {
-                    if (waitingOnly) {
-                        continue; // 已注入柱不参与优先槽；redeliver/在途清理留给 normal pass
-                    }
-                    sweepInFlight.remove(DimensionKey.key(currentDimension, x, z));
-                    // 已注入但客户端无落地凭据（真实服半径更小导致 Forget，或 tracking 边沿漏发）：
-                    // 入重发队列，由 drainRedeliver 限速 publish
-                    ChunkPos injectedPos = new ChunkPos(x, z);
-                    if (!ShadowLightCompute.hasClientApplyEpoch(currentDimension, injectedPos)
-                            && redeliverQueue.size() < MAX_REDELIVER_PER_PUMP * 4) {
-                        redeliverQueue.add(injectedPos);
-                    }
-                    continue;
-                }
-                ChunkPos pos = new ChunkPos(x, z);
-                boolean hasBaseline = ShadowLightCompute.hasLocalPullBaseline(currentDimension, pos);
-                if (!hasBaseline && preferLocalGeneration()) {
-                    continue; // SeedGen 本地生成，不占在途、不发 pull
-                }
-                if (!markPullInFlight(currentDimension, pos, nowMs)) {
-                    continue;
-                }
-                if (hasBaseline) {
-                    withBaseline.add(pos);
-                } else {
-                    withoutBaseline.add(pos);
-                }
-                sent++;
-            }
-        }
-        return sent;
-    }
-
-    /** 会话静态基准光盘：起步时把身子背后没有窗口追随的滞留环逐环补齐（气球尾部闭环）。 */
-    private void drainBootGrid(ShadowSeedServer shadow, int maxPerPump) {
-        if (!bootGridArmed) {
-            return;
-        }
-        if (homeChunk == null) {
-            bootGridArmed = false;
-            return;
-        }
-        if (bootGridCells.isEmpty()) {
-            // 一张盘多次发射：原版圆角方形盘面绕落位点，路径序遍历（反向侧南方的起动冷负荷先前置、
-            // 尽量均匀）而不是机械整数螺旋——练习周期太短时北方冷柱容易在场次收束前还没孵化。
-            // 形状 = isChunkInRange(serverViewDistance)：与原版可见集合同几何（VD20 → 1529），
-            // 不铺 resolveViewDistance()=vd+1 的 authority 边距圈（那会多出 ~136 越形状柱）。
-            int radius = Math.max(0, serverViewDistance > 0 ? serverViewDistance : DEFAULT_VIEW_DISTANCE);
-            int redeliver = 0;
-            for (ChunkPos pos : enumerateDiscBiased(homeChunk.x, homeChunk.z, radius)) {
-                if (shadow.injectedChunk(currentDimension, pos.x, pos.z) != null) {
-                    // 影子已有柱 ≠ 当前 ClientChunkCache 已有。切维后客户端是空的，
-                    // 跳过会只留下圆心偏移的那一圈新格（返主实测 1529→23）。
-                    if (!ShadowLightCompute.hasClientApplyEpoch(currentDimension, pos)) {
-                        redeliverQueue.add(pos);
-                        redeliver++;
-                    }
-                    continue;
-                }
-                bootGridCells.add(pos);
-            }
-            io.github.limuqy.mc.hassium.Constants.LOG.info(
-                    "[SHADOW_TRACK] boot grid primed around ({},{}) radius={} cells={} redeliver={} (dimension={})",
-                    homeChunk.x, homeChunk.z, radius, bootGridCells.size(), redeliver, currentDimension);
-        }
-        // 洪峰闸：两次光盘发射之间至少间隔 25ms，避免数百柱的无基线请求在同一心跳涌入服务端按需装载
-        long nowMs = System.currentTimeMillis();
-        if (nowMs - lastBootEmitMs < BOOT_EMIT_MIN_GAP_MS) {
-            return;
-        }
-        java.util.List<ChunkPos> withBaseline = new java.util.ArrayList<>();
-        java.util.List<ChunkPos> withoutBaseline = new java.util.ArrayList<>();
-        int sent = 0;
-        while (sent < maxPerPump && !bootGridCells.isEmpty()) {
-            ChunkPos pos = bootGridCells.pollFirst();
-            // 空气空壳占位柱不算已注入：继续走拉取路径获取真实数据。
-            if (shadow.injectedChunk(currentDimension, pos.x, pos.z) != null
-                    && !shadow.isPlaceholder(currentDimension, pos.x, pos.z)) {
-                continue;
-            }
-            boolean hasBaseline = ShadowLightCompute.hasLocalPullBaseline(currentDimension, pos);
-            if (!hasBaseline && preferLocalGeneration()) {
-                continue; // SeedGen 本地生成，不占在途、不发 pull
-            }
-            if (!markPullInFlight(currentDimension, pos, nowMs)) {
-                continue;
-            }
-            if (hasBaseline) {
-                withBaseline.add(pos);
-            } else {
-                withoutBaseline.add(pos);
-            }
-            sent++;
-        }
-        if (sent > 0) {
-            lastBootEmitMs = nowMs;
-        }
-        if (bootGridCells.isEmpty()) {
-            // 整盘发射完毕（本批恰好掏空）：本会话盘面交付结束；断连重连重新落座时再武装。
-            // 注意：不能在前面的 prime 块内解除武装——那会在首批发射后杀掉整张盘，
-            // 外环柱（西弧/南北滞环）永远不会被请求（bootgrid 系列空洞的根因）。
-            bootGridArmed = false;
-        }
-        emitPullGroups(withBaseline, withoutBaseline);
-    }
-
-    /** 逆飞行偏好枚举：先北方后南方交错混合，令背行侧冷柱提前获得按需装载机会。
-     *  形状 = 原版可见圆角方形（{@link ChunkShapeCompat}，range = 通告视距 vd），
-     *  与 isChunkInRange(vd) 同几何（VD20 → 1529），不铺 authority 边距外圈。 */
-    private static java.util.List<ChunkPos> enumerateDiscBiased(int cx, int cz, int range) {
-        java.util.List<ChunkPos> northHalf = new java.util.ArrayList<>(range * range);
-        java.util.List<ChunkPos> southHalf = new java.util.ArrayList<>(range * range);
-        for (int ring = 0; ring <= range + 1; ring++) {
-            int perimeter = ring == 0 ? 1 : 8 * ring;
-            for (int i = 0; i < perimeter; i++) {
-                int x, z;
-                if (ring == 0) {
-                    x = cx;
-                    z = cz;
-                } else {
-                    int side = i / (2 * ring);
-                    int step = i % (2 * ring);
-                    switch (side) {
-                        case 0 -> { x = cx - ring; z = cz - ring + step; } // 北缘 西→东
-                        case 1 -> { x = cx - ring + step; z = cz + ring; } // 东缘 北→南
-                        case 2 -> { x = cx + ring; z = cz + ring - step; } // 南缘 东→西
-                        default -> { x = cx + ring - step; z = cz - ring; } // 西缘 南→北
-                    }
-                }
-                if (!io.github.limuqy.mc.hassium.compat.ChunkShapeCompat.contains(cx, cz, range, x, z)) {
-                    continue; // 原版形状外（角区鬼影）不进盘
-                }
-                int dr = x - cx;
-                int dc = z - cz;
-                if (((dr + dc) & 1) == 0) {
-                    northHalf.add(new ChunkPos(x, z));
-                } else {
-                    southHalf.add(new ChunkPos(x, z));
-                }
-            }
-        }
-        java.util.List<ChunkPos> mixed = new java.util.ArrayList<>(
-                2 * Math.max(northHalf.size(), southHalf.size()));
-        int ni = 0, si = 0;
-        while (ni < northHalf.size() || si < southHalf.size()) {
-            if (ni < northHalf.size()) {
-                mixed.add(northHalf.get(ni++));
-            }
-            if (si < southHalf.size()) {
-                mixed.add(southHalf.get(si++));
-            }
-        }
-        return mixed;
-    }
-
-    /**
-     * OVD 窗本地源：injected / disk。绝不发 ShadowPull。
-     * 缺盘柱交给原版 tracking（视距已扩到 client VD，worldgen 本身并行），不再自管 generate 队列。
-     */
-    private void tryServeOvdLocal(ShadowSeedServer shadow, SelectedChunk sel) {
-        if (shadow == null || currentDimension == null) {
-            return;
-        }
-        ChunkPos pos = new ChunkPos(sel.x(), sel.z());
-        // 空气空壳占位柱不算已物化：继续走磁盘加载路径。
-        if (shadow.injectedChunk(sel.dimension(), pos.x, pos.z) != null
-                && !shadow.isPlaceholder(sel.dimension(), pos.x, pos.z)) {
-            return; // 已物化，tracking 边沿会交付
-        }
-        net.minecraft.world.level.chunk.LevelChunk chunk = shadow.loadFromDisk(sel.dimension(), pos);
-        if (chunk == null) {
-            long missKey = io.github.limuqy.mc.hassium.utils.DimensionKey
-                    .key(sel.dimension(), pos.x, pos.z);
-            ovdMissRetryAt.put(missKey, System.currentTimeMillis() + 2_000L);
-            recordOvdMissOnce(sel.dimension(), pos);
-            return; // 无本地数据：等原版 tracking，不 pull
-        }
-        boolean diskHit = io.github.limuqy.mc.hassium.storage.ShadowStorageHashes
-                .get(sel.dimension(), pos) != null;
-        shadow.injectLoadedChunk(sel.dimension(), pos, chunk, SeedGenExecutor.persistAsDirty(diskHit));
-        ShadowChunkMapCompat.completeSuspendedLoad(sel.dimension(), pos, chunk);
-        // 立即 publish：外环可能不走 tracking 边沿 materialize，只靠 sweep 会漏交付。
-        boolean published = ShadowLightCompute.publishOvdCachedChunk(sel.dimension(), pos);
-        if (published) {
-            recordOvdLoadedOnce(sel.dimension(), pos);
-        }
-        DebugLogger.info(DebugLogger.LogType.NETWORK,
-                "[SHADOW_TRACK] OVD local serve ({}, {}) diskHit={} published={}",
-                pos.x, pos.z, diskHit, published);
-    }
 
     /**
      * 本地生成优先（§6 供给路径）：门控开时 boot/sweep 不对无基线柱发
@@ -1148,94 +870,13 @@ public final class ShadowTrackingSession {
         }
     }
 
-    /** 统一的 pull 分组发射（悬置柱 / 基准光盘共用）：有基线走 compare，无基线走权威 FULL。 */
+    /** 统一 pull 分组（§3.2）：经 ShadowChunkAcquire；无权威让位门。 */
     private void emitPullGroups(java.util.List<ChunkPos> withBaseline, java.util.List<ChunkPos> withoutBaseline) {
-        String dimension = currentDimension;
-        if (io.github.limuqy.mc.hassium.network.ChunkAuthorityClient.pullEmissionSuppressed()) {
-            // 权威集合由服务端声明：唯一解析入口 = ChunkAuthorityClient（三分支本地解析链）。
-            // 影子端继续负责物化/交付/回收，但不再自绘选柱发 pull（避免抢跑声明）。
-            // 但让位只能是**让路**不是**放弃**：声明集合不含「登录期已推、此后不再声明」的柱
-            // （落位点 3x3），静默吞掉已入队的 pull 就会把它们变成永久空洞。故超宽限即补发。
-            long nowMs = System.currentTimeMillis();
-            java.util.List<ChunkPos> escapedWith = releaseGateStarvation(dimension, withBaseline, nowMs);
-            java.util.List<ChunkPos> escapedWithout = releaseGateStarvation(dimension, withoutBaseline, nowMs);
-            pruneGateWaiting(nowMs);
-            if (escapedWith.isEmpty() && escapedWithout.isEmpty()) {
-                return;
-            }
-            DebugLogger.info(DebugLogger.LogType.NETWORK,
-                    "[SHADOW_TRACK] authority gate starved {} chunks beyond {}ms -> pull anyway (dimension={})",
-                    escapedWith.size() + escapedWithout.size(), GATE_STARVE_GRACE_MS, dimension);
-            withBaseline = escapedWith;
-            withoutBaseline = escapedWithout;
-        } else if (!gateWaitingSinceMs.isEmpty()) {
-            gateWaitingSinceMs.clear(); // 让位解除：等待表作废
-        }
-        if (!withBaseline.isEmpty()) {
-            DebugLogger.info(DebugLogger.LogType.NETWORK,
-                    "[SHADOW_TRACK] compare-pull {} chunks (dimension={})",
-                    withBaseline.size(), dimension);
-            ShadowPullClient.requestFull(dimension, withBaseline);
-        }
-        if (!withoutBaseline.isEmpty()) {
-            DebugLogger.info(DebugLogger.LogType.NETWORK,
-                    "[SHADOW_TRACK] authoritative-full pull {} chunks (dimension={})",
-                    withoutBaseline.size(), dimension);
-            ShadowPullClient.requestAuthoritativeFull(dimension, withoutBaseline);
-        }
+        ShadowChunkAcquire.emitPullBatches(currentDimension, withBaseline, withoutBaseline);
     }
 
     /**
-     * 让位门扣留判定：登记每柱首次被扣的时间，返回已超 {@link #GATE_STARVE_GRACE_MS}、应无条件补发的柱。
-     * <p>
-     * 扣留中的柱要清掉 {@link #sweepInFlight} 在途标记——否则形状扫描会把它们当成「已发出」而在
-     * {@link #SWEEP_INFLIGHT_TIMEOUT_MS}（60s）内不再重新发现，上面的宽限就永远等不到第二次登记。
-     * 补发出去的柱反过来要保留在途标记（这一次 pull 确实发出去了），并撤销等待登记，避免同一拍里
-     * 第二个调用方（同拍的 shape sweep / selection drain）把同一柱再补一遍。
-     */
-    private java.util.List<ChunkPos> releaseGateStarvation(String dimension,
-                                                           java.util.List<ChunkPos> pending,
-                                                           long nowMs) {
-        if (dimension == null || pending.isEmpty()) {
-            return java.util.List.of();
-        }
-        java.util.List<ChunkPos> starved = new java.util.ArrayList<>();
-        for (ChunkPos pos : pending) {
-            long key = DimensionKey.key(dimension, pos.x, pos.z);
-            // 声明到达即把扣留起算点抬到声明时刻：该柱已归权威路径接管，影子端不抢跑、也不计饥饿。
-            // 只有「声明覆盖后再等满一个宽限仍没交付」才是真兜底（此时才补发 + 记 starved）。
-            long declaredAt = io.github.limuqy.mc.hassium.network.ChunkAuthorityClient
-                    .declaredAtMs(dimension, pos.x, pos.z);
-            Long since = gateWaitingSinceMs.get(key);
-            if (since == null || declaredAt > since) {
-                gateWaitingSinceMs.put(key, declaredAt > 0L ? declaredAt : nowMs);
-                sweepInFlight.remove(key);
-            } else if (nowMs - since >= GATE_STARVE_GRACE_MS) {
-                gateWaitingSinceMs.remove(key);
-                starved.add(pos);
-            } else {
-                sweepInFlight.remove(key);
-            }
-        }
-        return starved;
-    }
-
-    /**
-     * 等待表按**年龄**裁剪，不按"是否出现在本拍"裁剪：同一拍里
-     * {@code drainSelections} / {@code sweepVisibleShape} 是两个批次，互相看不见对方的键，
-     * 按本拍裁剪会把对方刚登记的宽限计时抹掉，宽限永远攒不满。补发的柱在补发时已出表，
-     * 故活过 {@code 2 × 宽限} 的条目必然是很久没再出现的，丢弃安全。
-     */
-    private void pruneGateWaiting(long nowMs) {
-        if (gateWaitingSinceMs.isEmpty()) {
-            return;
-        }
-        long staleBefore = nowMs - 2 * GATE_STARVE_GRACE_MS;
-        gateWaitingSinceMs.values().removeIf(since -> since < staleBefore);
-    }
-
-    /**
-     * boot / 悬置选柱 / 形状扫描共用在途。{@code true} = 本柱尚未在途，调用方应发出 pull。
+     * boot / 悬置选柱 / 形状扫描 / Provider 共用在途。{@code true} = 本柱尚未在途。
      */
     private boolean markPullInFlight(String dimension, ChunkPos pos, long nowMs) {
         if (pos == null) {
@@ -1248,13 +889,32 @@ public final class ShadowTrackingSession {
         return sweepInFlight.putIfAbsent(DimensionKey.key(dim, pos.x, pos.z), nowMs) == null;
     }
 
-    /**
-     * scheduleChunkLoad 影子钩子登记（worldgen 压制柱，无本地数据可悬置）：
-     * 由影子主循环泵分批发空基线（或磁盘基线）pull 请求。chunk worker 线程可调。
-     */
-    public void onChunkSelected(String dimension, int x, int z) {
-        pendingSelections.add(new SelectedChunk(dimension, x, z));
+    public boolean markPullInFlightForAcquire(String dimension, ChunkPos pos, long nowMs) {
+        return markPullInFlight(dimension, pos, nowMs);
     }
+
+    public void clearPullInFlight(String dimension, ChunkPos pos) {
+        if (pos == null) {
+            return;
+        }
+        String dim = dimension != null ? dimension : currentDimension;
+        if (dim == null) {
+            return;
+        }
+        sweepInFlight.remove(DimensionKey.key(dim, pos.x, pos.z));
+    }
+
+    public boolean isPullInFlight(String dimension, ChunkPos pos) {
+        if (pos == null) {
+            return false;
+        }
+        String dim = dimension != null ? dimension : currentDimension;
+        if (dim == null) {
+            return false;
+        }
+        return sweepInFlight.containsKey(DimensionKey.key(dim, pos.x, pos.z));
+    }
+
 
     /**
      * 原版链产出桥 = **tracking 进范围边沿**（§6.0）：1.20.1 {@code playerLoadedChunk}
@@ -1279,7 +939,7 @@ public final class ShadowTrackingSession {
                 && !shadow.isPlaceholder(dimension, pos.x, pos.z);
         // 磁盘命中柱的 hash 在 scheduleChunkLoad 读盘时由 MixinRegionFile 回填；
         // 生成柱无 hash → dirty（saveAll 落盘）。1.20.1 无 getPersistedStatus，按 hash 判别。
-        boolean diskHit = io.github.limuqy.mc.hassium.storage.ShadowStorageHashes
+        boolean diskHit = io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes
                 .get(dimension, pos) != null;
         // 首注入且无盘 hash = 本会话 vanilla worldgen 本地生成（门控开路径）；
         // 网络 FULL 经 injectChunk 入表后再走本桥时 alreadyMaterialized=true，不会误计。
@@ -1289,7 +949,7 @@ public final class ShadowTrackingSession {
                     SeedGenExecutor.persistAsDirty(diskHit));
         }
         if (localWorldgen) {
-            io.github.limuqy.mc.hassium.network.seedgen.SmokeChunkTrace
+            io.github.limuqy.mc.hassium.shadow.light.SmokeChunkTrace
                     .recordWorldgenEnd(dimension, pos);
             io.github.limuqy.mc.hassium.metrics.NetworkStats.recordLocallyGeneratedChunk(
                     io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_CHUNK_BYTES);
@@ -1476,15 +1136,17 @@ public final class ShadowTrackingSession {
         s.sweepInFlight.clear();
         s.redeliverQueue.clear();
         s.outsideSinceMs.clear();
-        // P5 接管臂（实验性，默认关闭）：会话边界撤掉声明集合出的票（影子主循环执行；实例已换则由实例对账兜底）
+        // Provider 在途 future / 悬置 load 必须随会话清空：R2 join 旧 future 会让
+        // scheduleChunkLoad 悬置 holder 永不完成（R2 landed 只有 71 的根因之一）。
+        VanillaAlignedChunkProvider.clearAll();
+        ShadowChunkMapCompat.clearSuspendedLoads();
+        io.github.limuqy.mc.hassium.network.ShadowPullClient.clearPullFailure(null, null);
         ShadowTicketDriver.requestClear();
         s.ovdCounted.clear();
         s.ovdMissCounted.clear();
         s.ovdMissRetryAt.clear();
         s.lastOvdSweepMs = 0;
         s.homeChunk = null;
-        s.bootGridArmed = false;
-        s.bootGridCells.clear();
         s.lastBootEmitMs = 0;
         s.lastChunkTickMs = 0;
     }

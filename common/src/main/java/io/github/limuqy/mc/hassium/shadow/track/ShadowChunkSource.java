@@ -1,4 +1,7 @@
-package io.github.limuqy.mc.hassium.network.seedgen;
+package io.github.limuqy.mc.hassium.shadow.track;
+
+import io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer;
+import io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute;
 
 /**
  * Source of a shadow chunk before the vanilla light pipeline.

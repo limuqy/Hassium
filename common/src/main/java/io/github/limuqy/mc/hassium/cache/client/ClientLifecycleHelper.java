@@ -80,13 +80,13 @@ public final class ClientLifecycleHelper {
         JoinWorldFocus.updateFromClient();
         // 影子虚拟玩家 tracking 会话随新连接重置：R2 复用 park 实例时旧虚拟玩家仍在
         // 影子世界且位置未变 → 不会重新选柱 → R2 黑洞；登录即重建会话重新 tracking
-        io.github.limuqy.mc.hassium.network.seedgen.ShadowTrackingSession.reset();
+        io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession.reset();
         // 新会话列级记账去重必须清零：否则 R1 的 accountedIngress 会挡住 R2 UNCHANGED
         // 的 publishCachedChunk / accountCacheFullHit（R2 全命中恒 0）。
-        io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.resetRequestDedupForReconnect();
+        io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.resetRequestDedupForReconnect();
         // connect 的 clearLevel 可能已 pauseEncoding；handleLogin 时 revert 已结束，必须放行
         // drainReady / hash 抽干 / unpark（否则 NeoForge 易卡在暂停态 → landed=0）。
-        io.github.limuqy.mc.hassium.storage.ShadowStorageManager.resumeEncoding();
+        io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager.resumeEncoding();
         if (!initialized) {
             // 连服投机已 ensureClient 时不得 shutdown 重建——会拆掉正在 WorldLoader 的 getOrCreate。
             HassiumTaskExecutor.ensureClient();
@@ -104,12 +104,12 @@ public final class ClientLifecycleHelper {
             // 影子端世界根定位：gameDir/serverId 同步记录（异步任务与影子端预创建竞态，
             // 影子端装配需要此信息——先于 initializeCacheAsync/onLogin 完成）。
             recordCacheLocationSync();
-            io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.onCacheLocationReady();
-            io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry.getInstance().permitUnparkForLogin();
-            io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.onLogin();
+            io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.onCacheLocationReady();
+            io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry.getInstance().permitUnparkForLogin();
+            io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.onLogin();
             // handleLogin 当下就发布位置：不等下一客户端 tick 才武装虚拟玩家。
             try {
-                io.github.limuqy.mc.hassium.network.seedgen.ShadowTrackingSession
+                io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession
                         .onClientTick(Minecraft.getInstance());
             } catch (Exception ignored) {
                 // 影子未就绪时 skip；后续 tick 会再发布
@@ -151,7 +151,7 @@ public final class ClientLifecycleHelper {
      */
     public static void onStartConnecting(net.minecraft.client.multiplayer.ServerData serverData) {
         connectInFlight = true;
-        io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry.getInstance()
+        io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry.getInstance()
                 .beginSpeculativeConnect();
         if (!HassiumConfigService.getInstance().isHassiumEngineEnabled()) {
             return;
@@ -159,7 +159,7 @@ public final class ClientLifecycleHelper {
         HassiumTaskExecutor.ensureClient();
         recordCacheLocationForConnect(serverData);
         if (HassiumConfigService.getInstance().isClientSeedGenEnabled()) {
-            io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.onCacheLocationReady();
+            io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.onCacheLocationReady();
             return;
         }
         startShadowIfConfigured(serverData);
@@ -177,7 +177,7 @@ public final class ClientLifecycleHelper {
             return;
         }
         connectInFlight = false;
-        io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry.getInstance()
+        io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry.getInstance()
                 .abandonSpeculativeConnect();
     }
 
@@ -198,8 +198,8 @@ public final class ClientLifecycleHelper {
             return;
         }
         recordCacheLocationForConnect(serverData);
-        io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.onCacheLocationReady();
-        io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.startShadowSpeculative();
+        io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.onCacheLocationReady();
+        io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.startShadowSpeculative();
     }
 
     /** ConnectScreen / 早期连接：用 ServerData.ip 或 currentServerIp 写入 cache 定位。 */
@@ -314,8 +314,8 @@ public final class ClientLifecycleHelper {
         JoinWorldFocus.clear();
         ClientMainThreadBudget.clearJoinBoost();
         io.github.limuqy.mc.hassium.network.handshake.ClientLoginNegotiation.clear();
-        io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.resetRequestDedupForReconnect();
-        io.github.limuqy.mc.hassium.network.seedgen.ShadowLightCompute.clearDiskPublishInFlight();
+        io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.resetRequestDedupForReconnect();
+        io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.clearDiskPublishInFlight();
         io.github.limuqy.mc.hassium.network.PullResponseDecodeQueue.discard();
 
         ChunkMeshCompileLog.reset();
@@ -339,8 +339,8 @@ public final class ClientLifecycleHelper {
     public static void finalizeDisconnect() {
         if (!finalized.compareAndSet(false, true)) return;
         disconnectCleanupArmed.set(false);
-        io.github.limuqy.mc.hassium.storage.ShadowStorageManager.resumeEncoding();
-        io.github.limuqy.mc.hassium.network.seedgen.ShadowServerRegistry.getInstance().parkForReuse();
+        io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager.resumeEncoding();
+        io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry.getInstance().parkForReuse();
         if (HassiumConfigService.getInstance().isMetricsAutoResetEnabled()) {
             io.github.limuqy.mc.hassium.metrics.NetworkStats.reset();
         }
