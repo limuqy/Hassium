@@ -117,10 +117,6 @@ public final class ScenarioEngine {
         // moveSeconds=0 时 fly 空操作，wait 必须为 0，避免 classic 每场白等 6s。
         vars.put("moveWaitMs", Long.toString(
                 moveSeconds <= 0L ? 0L : moveSeconds * 1000L + 6_000L));
-        // classic 真卸载：远离后需覆盖 ShadowTrackingSession.RECLAIM_GRACE_MS(6s)
-        // 才能把出生点柱 flush+摘注入表；默认 10s，可用 hassium.smokeTest.reclaimWaitMs 覆盖。
-        vars.put("reclaimWaitMs", Long.toString(parseLong(
-                System.getProperty("hassium.smokeTest.reclaimWaitMs"), 10_000L)));
         vars.put("host", host);
 
         steps = ScenarioStep.parse(lines, vars);
