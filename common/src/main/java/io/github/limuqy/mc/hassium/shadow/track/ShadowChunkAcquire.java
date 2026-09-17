@@ -21,7 +21,8 @@ import net.minecraft.world.level.ChunkPos;
  * 裁决顺序：
  * <ol>
  *   <li>窗外（非 OVD 本地）→ 跳过</li>
- *   <li>已物化（injected 非占位）→ 跳过（交付由 Deliver / redeliver 负责）</li>
+ *   <li>已物化（injected 非占位）且客户端仍持有 → 跳过（交付由 Deliver / redeliver 负责）</li>
+ *   <li>已物化但重入（无落地凭据 + 有基线）→ {@code PULL_COMPARE}（重入必 compare）</li>
  *   <li>SeedGen 门控开且无本地基线 → 本地生成，不发 pull</li>
  *   <li>已在 pull 在途 → 跳过（两种选柱来源互斥）</li>
  *   <li>有本地基线 → {@code requestFull}（compare-pull）</li>
@@ -41,7 +42,7 @@ public final class ShadowChunkAcquire {
     private ShadowChunkAcquire() {}
 
     /**
-     * 权威 enter 提示选柱：影子端无柱且非在途 → 发 §3.2 pull；已物化/在途/SeedGen 跳过。
+     * 权威 enter 提示选柱：影子端无柱且非在途 → 发 §3.2 pull；已物化且客户端仍持有/在途/SeedGen 跳过。
      *
      * @return 实际发出的 pull 动作；{@code null}=未发（已在途 / 已有柱 / 窗外等）
      */
@@ -82,13 +83,26 @@ public final class ShadowChunkAcquire {
             // OVD 冻结：窗外不 pull、不生成；本地源 publish 由 Deliver/材料化桥单独处理
             return SelectionAction.SKIP;
         }
+        ChunkPos pos = new ChunkPos(x, z);
         if (shadow != null) {
             LevelChunkHolder holder = injectedNonPlaceholder(shadow, dimension, x, z);
             if (holder.present()) {
-                return SelectionAction.SKIP;
+                // 重入必 compare：注入柱仍在但客户端无落地凭据 → 不得 SKIP 盲交付
+                if (!ShadowLightCompute.isReentryPendingCompare(dimension, pos)) {
+                    return SelectionAction.SKIP;
+                }
+                if (!ShadowLightCompute.tryRequestMiss(dimension, pos)) {
+                    return SelectionAction.SKIP;
+                }
+                if (markInFlight && !markPullInFlight(dimension, pos)) {
+                    return SelectionAction.SKIP;
+                }
+                DebugLogger.info(DebugLogger.LogType.NETWORK,
+                        "[SHADOW_TRACK] reentry-compare ({}, {}) dim={} baseline=true reason=acquire",
+                        x, z, dimension);
+                return SelectionAction.PULL_COMPARE;
             }
         }
-        ChunkPos pos = new ChunkPos(x, z);
         // 失败冷却：RANGE 等拒绝后短冷却，避免风暴；冷却内两种选柱来源都跳过
         if (!io.github.limuqy.mc.hassium.protocol.ShadowPullClient
                 .isPullRetryAllowed(dimension, pos)) {

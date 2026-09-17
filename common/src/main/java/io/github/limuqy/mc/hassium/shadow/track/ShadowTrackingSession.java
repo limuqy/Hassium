@@ -384,6 +384,11 @@ public final class ShadowTrackingSession {
                 net.minecraft.world.level.chunk.LevelChunk injected =
                         shadow.injectedChunk(currentDimension, x, z);
                 if (injected != null && !shadow.isPlaceholder(currentDimension, x, z)) {
+                    // 重入必 compare：无落地凭据时不得盲 deliverLocal（丢视距外方块更新）
+                    if (tryReentryCompare(currentDimension, pos, "window")) {
+                        acquired++;
+                        continue;
+                    }
                     if (ShadowChunkDeliver.deliverLocal(currentDimension, pos, false, false)) {
                         served++;
                     }
@@ -625,6 +630,10 @@ public final class ShadowTrackingSession {
             // 本会话网络路径已在途/已记账：redeliver 不得再记成缓存全命中
             if (ShadowLightCompute.wasNetworkIngress(currentDimension, pos)
                     && ShadowLightCompute.hasClientApplyEpoch(currentDimension, pos)) {
+                continue;
+            }
+            // 重入必 compare：窗内重投递也不得盲 publish 旧柱
+            if (tryReentryCompare(currentDimension, pos, "redeliver")) {
                 continue;
             }
             boolean ovd = !inVanillaVisibleShape(pos.x, pos.z) && inOvdWindow(pos.x, pos.z);
@@ -1049,7 +1058,14 @@ public final class ShadowTrackingSession {
             requestPullEligible(dimension, pos, false);
             return;
         }
-        // 本会话客户端尚未落地（重连后新 ClientChunkCache）：必须重新 publish。
+        // 重入（客户端无落地凭据 + 本地有基线）：必须先 compare，禁止盲 publish 当缓存命中。
+        // 覆盖注入表仍在（未 reclaim）与盘命中重载两条；UNCHANGED 由响应侧 publish+记全命中。
+        if (!ShadowLightCompute.hasClientApplyEpoch(dimension, pos)
+                && tryReentryCompare(dimension, pos,
+                        alreadyMaterialized ? "materialize" : "materialize-disk")) {
+            return;
+        }
+        // compare 路径不可用（原版服/未握手/窗外）或发射失败：回退本地 publish，避免黑洞。
         // 不得因 wasNetworkIngress（上一会话/generated 残留）改走 pull 而丢交付——
         // 实测 park 复用时 R1 1529 柱只回放 775，移动新区也不出现。
         if (alreadyMaterialized && !ShadowLightCompute.hasClientApplyEpoch(dimension, pos)) {
@@ -1061,9 +1077,6 @@ public final class ShadowTrackingSession {
                 ShadowLightCompute.clearRequestMiss(dimension, pos);
                 requestPullEligible(dimension, pos, true);
                 return;
-            }
-            if (ShadowLightCompute.tryRequestMiss(dimension, pos)) {
-                requestPullEligible(dimension, pos, false);
             }
             return;
         }
@@ -1119,6 +1132,35 @@ public final class ShadowTrackingSession {
         } else {
             ShadowPullClient.requestAuthoritativeFull(dimension, java.util.List.of(pos));
         }
+        return true;
+    }
+
+    /**
+     * 重入必 compare：本地有基线且客户端无落地凭据时，向真服发 compare-pull，
+     * 禁止盲 {@code publishCached} 当缓存命中。记账：
+     * UNCHANGED → 响应侧 publishCached → accountCacheFullHit；FULL/DELTA 走既有网络落地。
+     *
+     * @return true = compare 已发出/在途（调用方不得再本地盲交付）
+     */
+    public boolean tryReentryCompare(String dimension, ChunkPos pos, String reason) {
+        if (dimension == null || pos == null) {
+            return false;
+        }
+        if (!ShadowLightCompute.isReentryPendingCompare(dimension, pos)) {
+            return false;
+        }
+        boolean baseline = ShadowLightCompute.hasLocalPullBaseline(dimension, pos);
+        if (!ShadowLightCompute.tryRequestMiss(dimension, pos)) {
+            // 本会话已登记请求：在途/响应处理中视为已由 compare 接管
+            return isPullInFlight(dimension, pos);
+        }
+        if (!requestPullEligible(dimension, pos, !baseline)) {
+            ShadowLightCompute.clearRequestMiss(dimension, pos);
+            return false;
+        }
+        DebugLogger.info(DebugLogger.LogType.NETWORK,
+                "[SHADOW_TRACK] reentry-compare ({}, {}) dim={} baseline={} reason={}",
+                pos.x, pos.z, dimension, baseline, reason);
         return true;
     }
 

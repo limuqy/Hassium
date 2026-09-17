@@ -459,6 +459,41 @@ public final class ShadowLightCompute {
         return shadowApplyEpochs.containsKey(DimensionKey.key(dimension, pos.x, pos.z));
     }
 
+    /** ShadowPull compare 路径是否可用（引擎 + 客户端缓存门 + 协商 SHADOW_PULL）。 */
+    public static boolean isPullPathAvailable() {
+        if (!isEnabled()) {
+            return false;
+        }
+        if (!io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance().isClientCacheEnabled()) {
+            return false;
+        }
+        try {
+            return io.github.limuqy.mc.hassium.protocol.handshake.LoginCaps.has(
+                    io.github.limuqy.mc.hassium.protocol.handshake.ClientLoginNegotiation.current(),
+                    io.github.limuqy.mc.hassium.protocol.handshake.LoginCaps.SHADOW_PULL);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
+     * 重入待 compare：本地仍有基线（注入/盘 hash）且客户端已不持有落地凭据。
+     * 此时禁止把本地柱当缓存命中盲 publish，必须先向真服 compare-pull；
+     * 缓存全命中只在 UNCHANGED 响应后的 publishCached 路径记账。
+     */
+    public static boolean isReentryPendingCompare(String dimension, ChunkPos pos) {
+        if (dimension == null || pos == null) {
+            return false;
+        }
+        if (!isPullPathAvailable()) {
+            return false;
+        }
+        if (hasClientApplyEpoch(dimension, pos)) {
+            return false;
+        }
+        return hasLocalPullBaseline(dimension, pos);
+    }
+
     /**
      * redeliver 防循环：本地复用（publishCached）已在 generated 队列或在途光屏障 →
      * 跳过重发。drainRedeliver 在客户端无落地凭据时每拍重发同柱，若重发持续 put
