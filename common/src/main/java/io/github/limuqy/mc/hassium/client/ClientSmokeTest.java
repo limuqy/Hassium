@@ -31,7 +31,14 @@ public final class ClientSmokeTest {
     private ClientSmokeTest() {
     }
 
+    /**
+     * 双门控：必须在开发环境，且显式 {@code -Dhassium.smokeTest=true}。
+     * 生产 jar 即使被误注入该 JVM 属性也不会启动冒烟（自动连服/退出）。
+     */
     public static boolean isEnabled() {
+        if (!io.github.limuqy.mc.hassium.platform.Services.PLATFORM.isDevelopmentEnvironment()) {
+            return false;
+        }
         return Boolean.parseBoolean(System.getProperty("hassium.smokeTest", "false"));
     }
 

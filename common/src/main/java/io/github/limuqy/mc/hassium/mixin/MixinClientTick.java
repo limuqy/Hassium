@@ -35,10 +35,13 @@ public class MixinClientTick {
     @Inject(method = "tick", at = @At("TAIL"))
     private void hassium$onTick(CallbackInfo ci) {
         // 开发冒烟：进服等待后打印 getClientStatsMessage 并退出（仅 -Dhassium.smokeTest=true）
-        try {
-            ClientSmokeTest.onClientTick(Minecraft.getInstance());
-        } catch (Exception e) {
-            // 冒烟失败不阻断正常 tick
+        // 生产默认 false：先 isEnabled 早退，避免每 tick 进入 ScenarioEngine 调用链。
+        if (ClientSmokeTest.isEnabled()) {
+            try {
+                ClientSmokeTest.onClientTick(Minecraft.getInstance());
+            } catch (Exception e) {
+                // 冒烟失败不阻断正常 tick
+            }
         }
 
         // 1.20.1 Forge revert 窗口内 pauseEncoding 只挡新的 ChunkSerializer。

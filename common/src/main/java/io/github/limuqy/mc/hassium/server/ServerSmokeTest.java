@@ -66,7 +66,14 @@ public final class ServerSmokeTest {
     private ServerSmokeTest() {
     }
 
+    /**
+     * 双门控：必须在开发环境，且显式 {@code -Dhassium.serverSmokeTest=true}。
+     * 生产 jar 即使被误注入该 JVM 属性也不会切换视距/自动 OP。
+     */
     public static boolean isEnabled() {
+        if (!io.github.limuqy.mc.hassium.platform.Services.PLATFORM.isDevelopmentEnvironment()) {
+            return false;
+        }
         return Boolean.parseBoolean(System.getProperty("hassium.serverSmokeTest", "false"));
     }
 

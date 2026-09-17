@@ -46,9 +46,18 @@ afterEvaluate {
     }
 }
 
+// 生产 jar 剥离：benchmark（手工 java -cp 基准，无启动链）与 smoke 场景资源（harness 用）。
+// 仅排除 jar/remapJar 打包产物；processResources 与 runClient/runServer 仍保留场景文件，
+// 开发冒烟不受影响。Smoke *类*（ClientSmokeTest 等）被 mixin 引用，必须留在 jar 中，
+// 运行时由 isDevelopmentEnvironment + JVM 属性双门控。
 tasks.named('jar').configure {
     duplicatesStrategy = DuplicatesStrategy.EXCLUDE
-    from(project(':common').sourceSets.main.output)
+    exclude 'io/github/limuqy/mc/hassium/benchmark/**'
+    exclude 'hassium/smoke/**'
+    from(project(':common').sourceSets.main.output) {
+        exclude 'io/github/limuqy/mc/hassium/benchmark/**'
+        exclude 'hassium/smoke/**'
+    }
 }
 
 processResources {
