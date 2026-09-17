@@ -1,6 +1,6 @@
 # handoff — common 包迁移（影子端 + client 一期完成，后续 server/protocol）
 
-> 状态：2026-09-18 包迁移主线完成：0b SPI / 步0 测试 / client / server / protocol / mixin 子包；**12 版全 loader 编译矩阵 PASS**（§1.10）。
+> 状态：2026-09-18 包迁移主线完成：0b SPI / 步0 / client / server / protocol / mixin / **entity+metrics**；12 版全 loader 编译 PASS（§1.10）；common `network/` 已清空（§1.11）。
 > 本文是**包迁移**交接真相源；S0 架构/门禁见
 > [`handoff-shadow-as-dedicated-server-s0.md`](handoff-shadow-as-dedicated-server-s0.md)。
 
