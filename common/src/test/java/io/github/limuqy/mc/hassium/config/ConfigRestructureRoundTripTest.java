@@ -250,16 +250,16 @@ class ConfigRestructureRoundTripTest {
         // master.maxChunksPerTick 默认 5
         assertEquals(5, values.get(ConfigSchema.MASTER_MAX_CHUNKS_PER_TICK));
         assertEquals(false, values.get(ConfigSchema.MASTER_ENABLED_ON_LAN));
-        // master.entity* 实体网络优化默认（分层更新/密度节流开；实体四挡 3/6/10/20 刻；
-        // 物品流四挡 2/4/8/16 刻；阈值 50 / 倍率 4 / 帧预算 64）
+        // master.entity* 实体网络优化默认（分层更新/密度节流开；实体四挡 3/4/6/10 刻；
+        // 物品流四挡 2/4/8/16 刻；阈值 10,20,32,64 / 倍率 1.5–4.0 / 节流 5 / 帧预算 256）
         assertEquals(true, values.get(ConfigSchema.MASTER_ENTITY_TIERED_UPDATE));
-        assertEquals("3,6,10,20", values.get(ConfigSchema.MASTER_ENTITY_TIER_INTERVALS));
+        assertEquals("3,4,6,10", values.get(ConfigSchema.MASTER_ENTITY_TIER_INTERVALS));
         assertEquals("2,4,8,16", values.get(ConfigSchema.MASTER_ENTITY_ITEM_TIER_INTERVALS));
         assertEquals(true, values.get(ConfigSchema.MASTER_ENTITY_DENSITY_THROTTLE));
-        assertEquals("32,64,96,128", values.get(ConfigSchema.MASTER_ENTITY_DENSITY_TIER_COUNTS));
-        assertEquals("1.0,1.5,2.0,3.0", values.get(ConfigSchema.MASTER_ENTITY_DENSITY_TIER_FACTORS));
-        assertEquals(4, values.get(ConfigSchema.MASTER_ENTITY_MAX_THROTTLE_FACTOR));
-        assertEquals(128, values.get(ConfigSchema.MASTER_ENTITY_FRAME_BUDGET_PER_PLAYER));
+        assertEquals("10,20,32,64", values.get(ConfigSchema.MASTER_ENTITY_DENSITY_TIER_COUNTS));
+        assertEquals("1.5,2.0,3.0,4.0", values.get(ConfigSchema.MASTER_ENTITY_DENSITY_TIER_FACTORS));
+        assertEquals(5, values.get(ConfigSchema.MASTER_ENTITY_MAX_THROTTLE_FACTOR));
+        assertEquals(256, values.get(ConfigSchema.MASTER_ENTITY_FRAME_BUDGET_PER_PLAYER));
         assertEquals(true, values.get(ConfigSchema.MASTER_ENTITY_SMOOTH_PUSH));
         // storage.enabled 默认 false（REQ 决策 6 修正 lang 错误）
         assertEquals(false, values.get(ConfigSchema.STORAGE_ENABLED));

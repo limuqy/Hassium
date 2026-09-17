@@ -53,7 +53,7 @@ Hassium pairs a client and server mod to optimize Minecraft along **efficient co
   - **Distance tiers**: farther entities update less often (`master.entityTieredUpdateEnabled` + `entityTierIntervals`)
   - **Item-flow table**: dropped items / XP orbs use their own interval table (`entityItemTierIntervals`, default 2/4/8/16 ticks) so the vanilla 20-tick idle beat cannot flatten them into 1 packet/s flicker
   - **Hotspot density**: stretch intervals when the entity's own chunk is crowded (`entityDensityThrottleEnabled` + `entityDensityTierCounts/Factors`)
-  - **Packet-budget backpressure**: if a player keeps exceeding the per-tick entity packet budget, entities in their view become sparser (`entityFrameBudgetPerPlayer`, default 128)
+  - **Packet-budget backpressure**: if a player keeps exceeding the per-tick entity packet budget, entities in their view become sparser (`entityFrameBudgetPerPlayer`, default 256)
   - **Phase stagger**: same-interval entities are UUID-offset across ticks — total volume over an interval is unchanged, the same-tick burst is flattened (`entitySmoothPushEnabled`)
 - **Boundary**: only the replication (send) cadence; server entity ticks / pickup / hopper logic untouched; player self-motion is exempt
 - **Config**: `master.entity*` (follows the `master.enabled` master switch; all off = vanilla behavior)

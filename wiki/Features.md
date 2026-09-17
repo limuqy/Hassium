@@ -53,7 +53,7 @@ Hassium 用一套客户端 + 服务端配合，从**高效压缩、网络优化�
   - **距离分档降频**：离得越远更新越稀（`master.entityTieredUpdateEnabled` + `entityTierIntervals`）
   - **物品流独立档位**：掉落物/经验球单独一张表（`entityItemTierIntervals`，默认 2/4/8/16 刻），避免被原版 20 刻空闲节拍压平导致闪现
   - **热点密度降频**：实体所在 chunk 过密时按档放大间隔（`entityDensityThrottleEnabled` + `entityDensityTierCounts/Factors`）
-  - **包量反压**：某玩家持续超过每 tick 实体包预算时，他视野内实体自动变稀（`entityFrameBudgetPerPlayer`，默认 128）
+  - **包量反压**：某玩家持续超过每 tick 实体包预算时，他视野内实体自动变稀（`entityFrameBudgetPerPlayer`，默认 256）
   - **错峰推送**：同间隔实体按 UUID 错开发送时刻，3 刻总量不变、摊平齐发尖峰（`entitySmoothPushEnabled`）
 - **边界**：只改复制（下发）节拍，不碰服务端实体 tick / 拾取 / 漏斗判定；玩家自身位移豁免
 - **配置**：`master.entity*`（跟 `master.enabled` 总闸；全关 = 等同原版）

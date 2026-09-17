@@ -170,8 +170,8 @@ public record HassiumConfig(
                 true,              // entityDensityThrottleEnabled（实体密度节流总开关）
                 EntityUpdateTiering.DEFAULT_DENSITY_COUNTS,       // entityDensityTierCounts（每档热点阈值）
                 EntityUpdateTiering.DEFAULT_DENSITY_FACTORS,      // entityDensityTierFactors（每档热点倍率，支持小数）
-                4,                 // entityMaxThrottleFactor（密度×压力倍率总上限）
-                128,               // entityFrameBudgetPerPlayer（每玩家每 tick 实体包预算；0=不限）
+                5,                 // entityMaxThrottleFactor（密度×压力倍率总上限）
+                256,               // entityFrameBudgetPerPlayer（每玩家每 tick 实体包预算；0=不限）
                 true               // entitySmoothPushEnabled（UUID 相位错峰，总量不变）
         );
     }

@@ -32,23 +32,23 @@ class EntityUpdateTieringTest {
     }
 
     @Test
-    @DisplayName("非法项回落默认 {3,6,10,20}，越界值 clamp 到 [1,120]，元素个数不对整表回落")
+    @DisplayName("非法项回落默认 {3,4,6,10}，越界值 clamp 到 [1,120]，元素个数不对整表回落")
     void parseFallsBackAndClamps() {
         assertArrayEquals(new int[]{3, 6, 10, 20},
                 EntityUpdateTiering.parseIntervals("0,6,10,20", EntityUpdateTiering.DEFAULT_ENTITY_INTERVALS), "0 回落默认的 3");
-        assertArrayEquals(new int[]{3, 6, 10, 20},
+        assertArrayEquals(new int[]{3, 4, 6, 10},
                 EntityUpdateTiering.parseIntervals("-1,-6,-10,-20", EntityUpdateTiering.DEFAULT_ENTITY_INTERVALS), "负数为非法项");
         assertArrayEquals(new int[]{3, 6, 10, 120},
                 EntityUpdateTiering.parseIntervals("3,6,10,999", EntityUpdateTiering.DEFAULT_ENTITY_INTERVALS), "999 截到 120");
         assertArrayEquals(new int[]{120, 120, 120, 120},
                 EntityUpdateTiering.parseIntervals("999,0,10,20", EntityUpdateTiering.DEFAULT_ENTITY_INTERVALS), "回落与截断后仍须非降序");
-        assertArrayEquals(new int[]{3, 6, 10, 20},
+        assertArrayEquals(new int[]{3, 4, 6, 10},
                 EntityUpdateTiering.parseIntervals("3,6,10", EntityUpdateTiering.DEFAULT_ENTITY_INTERVALS), "少一档整表回落");
-        assertArrayEquals(new int[]{3, 6, 10, 20},
+        assertArrayEquals(new int[]{3, 4, 6, 10},
                 EntityUpdateTiering.parseIntervals("3,6,10,20,30", EntityUpdateTiering.DEFAULT_ENTITY_INTERVALS), "多一档整表回落");
-        assertArrayEquals(new int[]{3, 6, 10, 20},
+        assertArrayEquals(new int[]{3, 4, 6, 10},
                 EntityUpdateTiering.parseIntervals(null, EntityUpdateTiering.DEFAULT_ENTITY_INTERVALS));
-        assertArrayEquals(new int[]{3, 6, 10, 20},
+        assertArrayEquals(new int[]{3, 4, 6, 10},
                 EntityUpdateTiering.parseIntervals("   ", EntityUpdateTiering.DEFAULT_ENTITY_INTERVALS));
     }
 
@@ -61,8 +61,8 @@ class EntityUpdateTieringTest {
                 EntityUpdateTiering.parseIntervals("-1,-4,-8,-16", EntityUpdateTiering.DEFAULT_ITEM_INTERVALS));
         assertArrayEquals(new int[]{2, 4, 8, 16},
                 EntityUpdateTiering.parseIntervals(null, EntityUpdateTiering.DEFAULT_ITEM_INTERVALS));
-        // 同一份坏串在两张表上得到各自默认 20 刻 / 16 刻，互不影响
-        assertArrayEquals(new int[]{3, 6, 10, 20},
+        // 同一份坏串在两张表上得到各自默认 10 刻 / 16 刻，互不影响
+        assertArrayEquals(new int[]{3, 4, 6, 10},
                 EntityUpdateTiering.parseIntervals("1", EntityUpdateTiering.DEFAULT_ENTITY_INTERVALS));
         assertArrayEquals(new int[]{2, 4, 8, 16},
                 EntityUpdateTiering.parseIntervals("1", EntityUpdateTiering.DEFAULT_ITEM_INTERVALS));
@@ -134,11 +134,11 @@ class EntityUpdateTieringTest {
     void parseDensityCountsFallsBackPerElement() {
         assertArrayEquals(new int[]{50, 40, 30, 20}, EntityUpdateTiering.parseDensityCounts("50,40,30,20"));
         assertArrayEquals(new int[]{50, 40, 30, 20}, EntityUpdateTiering.parseDensityCounts(" 50 , 40,30,20 "), "容忍空白");
-        assertArrayEquals(new int[]{32, 40, 30, 20}, EntityUpdateTiering.parseDensityCounts("x,40,30,20"), "首元素坏 → 回落默认 32");
-        assertArrayEquals(new int[]{32, 64, 96, 128}, EntityUpdateTiering.parseDensityCounts("50,40,30"), "少一档 → 整表默认");
-        assertArrayEquals(new int[]{32, 64, 96, 128}, EntityUpdateTiering.parseDensityCounts("50,40,30,20,10"), "多一档 → 整表默认");
-        assertArrayEquals(new int[]{32, 64, 96, 128}, EntityUpdateTiering.parseDensityCounts(null));
-        assertArrayEquals(new int[]{32, 64, 96, 128}, EntityUpdateTiering.parseDensityCounts("   "));
+        assertArrayEquals(new int[]{10, 40, 30, 20}, EntityUpdateTiering.parseDensityCounts("x,40,30,20"), "首元素坏 → 回落默认 10");
+        assertArrayEquals(new int[]{10, 20, 32, 64}, EntityUpdateTiering.parseDensityCounts("50,40,30"), "少一档 → 整表默认");
+        assertArrayEquals(new int[]{10, 20, 32, 64}, EntityUpdateTiering.parseDensityCounts("50,40,30,20,10"), "多一档 → 整表默认");
+        assertArrayEquals(new int[]{10, 20, 32, 64}, EntityUpdateTiering.parseDensityCounts(null));
+        assertArrayEquals(new int[]{10, 20, 32, 64}, EntityUpdateTiering.parseDensityCounts("   "));
         assertArrayEquals(new int[]{1, 50, 50, 50}, EntityUpdateTiering.parseDensityCounts("0,50,50,50"), "阈值下限 1");
     }
 
@@ -147,10 +147,10 @@ class EntityUpdateTieringTest {
     void parseDensityFactorsSupportsDecimals() {
         assertArrayEquals(new double[]{1.5, 2.0, 2.5, 3.0}, EntityUpdateTiering.parseDensityFactors("1.5,2,2.5,3"));
         assertArrayEquals(new double[]{1.0, 1.0, 1.0, 1.0}, EntityUpdateTiering.parseDensityFactors("0,0.5,-2,1"), "小于 1 一律夹到 1");
-        assertArrayEquals(new double[]{1.0, 2.0, 2.0, 3.0}, EntityUpdateTiering.parseDensityFactors("NaN,2,2,3"), "NaN 回落默认 1.0");
-        assertArrayEquals(new double[]{1.0, 1.5, 2.0, 3.0}, EntityUpdateTiering.parseDensityFactors("1.5,2.0"), "元素个数不对 → 整表默认");
+        assertArrayEquals(new double[]{1.5, 2.0, 2.0, 3.0}, EntityUpdateTiering.parseDensityFactors("NaN,2,2,3"), "NaN 回落默认 1.5");
+        assertArrayEquals(new double[]{1.5, 2.0, 3.0, 4.0}, EntityUpdateTiering.parseDensityFactors("1.5,2.0"), "元素个数不对 → 整表默认");
         assertArrayEquals(new double[]{10.0, 10.0, 10.0, 10.0}, EntityUpdateTiering.parseDensityFactors("10,10,10,10"));
-        assertArrayEquals(new double[]{1.0, 1.5, 2.0, 3.0}, EntityUpdateTiering.parseDensityFactors(null));
+        assertArrayEquals(new double[]{1.5, 2.0, 3.0, 4.0}, EntityUpdateTiering.parseDensityFactors(null));
     }
 
     @Test

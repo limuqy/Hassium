@@ -20,16 +20,16 @@ public final class EntityUpdateTiering {
     public static final double[] TIER_FRACTIONS = {0.25, 0.5, 0.75, 1.0};
 
     /** 实体距离档间隔默认表（逗号分隔，近/中/远/边缘）；{@code ConfigSchema} 与 {@code HassiumConfig.DEFAULT} 共用同一份，避免默认值漂移。 */
-    public static final String DEFAULT_ENTITY_INTERVALS = "3,6,10,20";
+    public static final String DEFAULT_ENTITY_INTERVALS = "3,4,6,10";
 
     /** 物品流（掉落物/经验球）默认表；近档 2 刻仍在客户端 3 刻插值窗口内。 */
     public static final String DEFAULT_ITEM_INTERVALS = "2,4,8,16";
 
     /** 每档热点阈值默认表（近/中/远/边缘）。 */
-    public static final String DEFAULT_DENSITY_COUNTS = "32,64,96,128";
+    public static final String DEFAULT_DENSITY_COUNTS = "10,20,32,64";
 
     /** 每档热点倍率默认表（近/中/远/边缘）。 */
-    public static final String DEFAULT_DENSITY_FACTORS = "1.0,1.5,2.0,3.0";
+    public static final String DEFAULT_DENSITY_FACTORS = "1.5,2.0,3.0,4.0";
 
     /** 间隔下限：0 会让实体每 tick 都发，等价于没降帧。 */
     private static final int MIN_INTERVAL = 1;
@@ -50,7 +50,7 @@ public final class EntityUpdateTiering {
      * 少写一档会让「哪一档配的哪一段距离」整体错位，比单个数字写错危险得多。
      * 另外强制 **非降序**：远档比近档还勤既没省带宽又让画面错乱，直接把该元素抬到前一档的值。
      *
-     * @param raw      形如 {@code "3,6,10,20"}；{@code null}/空白/长度不符按 {@code fallback}
+     * @param raw      形如 {@code "3,4,6,10"}；{@code null}/空白/长度不符按 {@code fallback}
      * @param fallback 整表回落用的默认串（须与 ConfigSchema 的默认值一致）
      * @return 长度 {@link #TIER_COUNT} 的新数组，元素非降序且落在 [{@value #MIN_INTERVAL}, {@value #MAX_SANITIZED_INTERVAL}]
      */
@@ -84,7 +84,7 @@ public final class EntityUpdateTiering {
 
     /** 解析默认表串（回落串本身写坏了也不让调用方拿到空表）。 */
     private static int[] parseNumbers(String fallback) {
-        int[] out = {3, 6, 10, 20};
+        int[] out = {3, 4, 6, 10};
         String[] parts = split4(fallback);
         if (parts == null) {
             return out;
@@ -149,7 +149,7 @@ public final class EntityUpdateTiering {
      * 手写配置的容错口径与 {@link #parseIntervals} 一致：单个元素非法只回落该元素的默认值，
      * 元素个数不对（少写/多写一档）则整表回落默认——长度错会让档位与语义整体错位，比单个数字写错危险得多。
      *
-     * @param raw 形如 {@code "50,40,30,20"}；{@code null}/空白按默认
+     * @param raw 形如 {@code "10,20,32,64"}；{@code null}/空白按默认
      * @return 长度 {@link #TIER_COUNT} 的新数组，元素 ≥ 1
      */
     public static int[] parseDensityCounts(String raw) {
@@ -175,7 +175,7 @@ public final class EntityUpdateTiering {
      * 解析「每档热点倍率」配置串（逗号分隔，按近/中/远/边缘顺序）。倍率 &lt; 1 会被夹到 1，
      * 保持「只降速、永不提速」的不变式；小数受支持，最终间隔会四舍五入到整刻。
      *
-     * @param raw 形如 {@code "1.0,1.5,2.0,3.0"}；{@code null}/空白按默认
+     * @param raw 形如 {@code "1.5,2.0,3.0,4.0"}；{@code null}/空白按默认
      * @return 长度 {@link #TIER_COUNT} 的新数组，元素落在 [1.0, {@value #MAX_SANITIZED_FACTOR}]
      */
     public static double[] parseDensityFactors(String raw) {
@@ -202,7 +202,7 @@ public final class EntityUpdateTiering {
 
     /** 解析默认倍率串。 */
     private static double[] parseFactors(String fallback) {
-        double[] out = {1.0, 1.5, 2.0, 3.0};
+        double[] out = {1.5, 2.0, 3.0, 4.0};
         String[] parts = split4(fallback);
         if (parts == null) {
             return out;
