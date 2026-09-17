@@ -5,7 +5,7 @@ import io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry;
 import io.github.limuqy.mc.hassium.shadow.server.SeedGenExecutor;
 import io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute;
 
-import io.github.limuqy.mc.hassium.network.ShadowPullClient;
+import io.github.limuqy.mc.hassium.protocol.ShadowPullClient;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import io.github.limuqy.mc.hassium.utils.DimensionKey;
 import java.util.List;
@@ -90,7 +90,7 @@ public final class ShadowChunkAcquire {
         }
         ChunkPos pos = new ChunkPos(x, z);
         // 失败冷却：RANGE 等拒绝后短冷却，避免风暴；冷却内两种选柱来源都跳过
-        if (!io.github.limuqy.mc.hassium.network.ShadowPullClient
+        if (!io.github.limuqy.mc.hassium.protocol.ShadowPullClient
                 .isPullRetryAllowed(dimension, pos)) {
             return SelectionAction.SKIP;
         }

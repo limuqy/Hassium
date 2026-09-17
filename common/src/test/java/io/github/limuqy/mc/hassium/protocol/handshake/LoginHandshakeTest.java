@@ -1,0 +1,165 @@
+package io.github.limuqy.mc.hassium.protocol.handshake;
+
+import net.minecraft.network.FriendlyByteBuf;
+import org.junit.jupiter.api.Test;
+
+import java.nio.charset.StandardCharsets;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+/**
+ * 登录期能力握手线格式 L0 单测（编解码纯函数；无 MC 实例依赖）。
+ */
+class LoginHandshakeTest {
+
+    @Test
+    void helloAnswerRoundTrips() {
+        LoginHandshake.HelloAnswer original =
+                new LoginHandshake.HelloAnswer(0x1F3, "2.0.0+build.1", 2);
+        FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+        try {
+            original.encode(buf);
+            LoginHandshake.HelloAnswer decoded = LoginHandshake.HelloAnswer.decode(buf);
+            assertEquals(original.clientCaps(), decoded.clientCaps());
+            assertEquals(original.modVersion(), decoded.modVersion());
+            assertEquals(original.protocolVersion(), decoded.protocolVersion());
+        } finally {
+            buf.release();
+        }
+    }
+
+    @Test
+    void playInitPayloadRoundTripsWithStem() {
+        byte[] stem = "level-stem-nbt-bytes".getBytes(StandardCharsets.UTF_8);
+        LoginHandshake.PlayInitPayload original =
+                new LoginHandshake.PlayInitPayload(0b1011, 1234567890123456789L, stem, true);
+        LoginHandshake.PlayInitPayload decoded = encodeDecode(original);
+        assertEquals(original.negotiatedCaps(), decoded.negotiatedCaps());
+        assertEquals(original.worldSeed(), decoded.worldSeed());
+        assertTrue(java.util.Arrays.equals(stem, decoded.stemNbt()));
+        assertTrue(decoded.seedGenEnabled());
+        assertTrue(decoded.dimensionIds().isEmpty());
+    }
+
+    @Test
+    void playInitPayloadRoundTripsWithDimensionIds() {
+        byte[] stem = "stem".getBytes(StandardCharsets.UTF_8);
+        var dims = java.util.List.of(
+                "minecraft:overworld", "twilightforest:twilight_forest", "aoa3:abyss");
+        LoginHandshake.PlayInitPayload original =
+                new LoginHandshake.PlayInitPayload(0b111, 99L, stem, true, dims);
+        LoginHandshake.PlayInitPayload decoded = encodeDecode(original);
+        assertEquals(dims, decoded.dimensionIds());
+        assertTrue(decoded.seedGenEnabled());
+    }
+
+    @Test
+    void playInitPayloadDecodeToleratesMissingDimensionList() {
+        // 旧服务端不带维度清单段（append-only）：缺失按空表处理
+        FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+        try {
+            buf.writeVarInt(0b1);
+            buf.writeLong(7L);
+            buf.writeVarInt(0);
+            buf.writeBoolean(true);
+            LoginHandshake.PlayInitPayload decoded = LoginHandshake.PlayInitPayload.decode(buf);
+            assertTrue(decoded.seedGenEnabled());
+            assertTrue(decoded.dimensionIds().isEmpty());
+        } finally {
+            buf.release();
+        }
+    }
+
+    @Test
+    void playInitPayloadRoundTripsWithoutStem() {
+        LoginHandshake.PlayInitPayload original =
+                new LoginHandshake.PlayInitPayload(0, 0L, null, false);
+        LoginHandshake.PlayInitPayload decoded = encodeDecode(original);
+        assertEquals(0, decoded.negotiatedCaps());
+        assertEquals(0L, decoded.worldSeed());
+        assertEquals(null, decoded.stemNbt());
+        assertFalse(decoded.seedGenEnabled());
+    }
+
+    @Test
+    void playInitPayloadDecodeToleratesMissingTrailingFlag() {
+        // 旧服务端不带 seedGenEnabled 尾位（append-only 演进）：flag 缺失按 false 处理
+        FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+        try {
+            buf.writeVarInt(0b101);
+            buf.writeLong(42L);
+            buf.writeVarInt(0);
+            LoginHandshake.PlayInitPayload decoded = LoginHandshake.PlayInitPayload.decode(buf);
+            assertEquals(0b101, decoded.negotiatedCaps());
+            assertEquals(42L, decoded.worldSeed());
+            assertFalse(decoded.seedGenEnabled());
+        } finally {
+            buf.release();
+        }
+    }
+
+    @Test
+    void helloAnswerMissingProtocolIsRejected() {
+        FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+        try {
+            buf.writeVarInt(0x1F3);
+            buf.writeUtf("2.0.0", 128);
+            LoginHandshake.HelloAnswer decoded = LoginHandshake.HelloAnswer.decode(buf);
+            assertEquals(0, decoded.protocolVersion());
+            assertFalse(LoginHandshake.isProtocolVersionAccepted(
+                    decoded.protocolVersion(), 2));
+        } finally {
+            buf.release();
+        }
+    }
+
+    @Test
+    void protocolVersionBoundaries() {
+        assertTrue(LoginHandshake.isProtocolVersionAccepted(2, 2));
+        assertFalse(LoginHandshake.isProtocolVersionAccepted(1, 2));
+        assertFalse(LoginHandshake.isProtocolVersionAccepted(0, 2));
+        assertFalse(LoginHandshake.isProtocolVersionAccepted(3, 2));
+    }
+
+    @Test
+    void modVersionValidationBlocksLogInjection() {
+        assertTrue(LoginHandshake.isValidModVersion("2.0.0"));
+        assertTrue(LoginHandshake.isValidModVersion("2.0.0-beta.1+mc1.20.1"));
+        assertFalse(LoginHandshake.isValidModVersion(null));
+        assertFalse(LoginHandshake.isValidModVersion(""));
+        assertFalse(LoginHandshake.isValidModVersion("2.0.0\nINFO spoofed"));
+        assertFalse(LoginHandshake.isValidModVersion("2.0.0 path/../traversal"));
+        assertFalse(LoginHandshake.isValidModVersion("x".repeat(65)));
+    }
+
+    @Test
+    void describeCapsListsNegotiatedBitsStably() {
+        int caps = LoginCaps.AGGREGATION | LoginCaps.SEED_GEN | LoginCaps.SHADOW_PULL;
+        assertEquals("[agg,seed,pull]", LoginHandshake.describeCaps(caps));
+        int withPullMode = caps | LoginCaps.PULL_MODE;
+        assertEquals("[agg,seed,pull,pull_mode]", LoginHandshake.describeCaps(withPullMode));
+        assertEquals("[]", LoginHandshake.describeCaps(0));
+    }
+
+    @Test
+    void negotiateIntersectsAndHasQueriesBits() {
+        int server = LoginCaps.AGGREGATION | LoginCaps.SECTION_DELTA;
+        int client = LoginCaps.SECTION_DELTA | LoginCaps.SHADOW_PULL;
+        int negotiated = LoginCaps.negotiate(server, client);
+        assertEquals(LoginCaps.SECTION_DELTA, negotiated);
+        assertTrue(LoginCaps.has(negotiated, LoginCaps.SECTION_DELTA));
+        assertFalse(LoginCaps.has(negotiated, LoginCaps.AGGREGATION));
+    }
+
+    private static LoginHandshake.PlayInitPayload encodeDecode(LoginHandshake.PlayInitPayload payload) {
+        FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+        try {
+            payload.encode(buf);
+            return LoginHandshake.PlayInitPayload.decode(buf);
+        } finally {
+            buf.release();
+        }
+    }
+}

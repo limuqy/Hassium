@@ -2,7 +2,7 @@ package io.github.limuqy.mc.hassium.client;
 
 import io.github.limuqy.mc.hassium.metrics.HassiumMetricsImpl;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
-import io.github.limuqy.mc.hassium.network.ClientChunkPipeline;
+import io.github.limuqy.mc.hassium.client.ClientChunkPipeline;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -142,7 +142,7 @@ public final class SmokeProbeWriter {
         }
         try {
             net.minecraft.client.multiplayer.ClientChunkCache cache =
-                    ((io.github.limuqy.mc.hassium.mixin.ClientLevelAccessor) mc.level).hassium$getChunkSource();
+                    ((io.github.limuqy.mc.hassium.mixin.client.ClientLevelAccessor) mc.level).hassium$getChunkSource();
             return cache.getLoadedChunksCount();
         } catch (Throwable ignored) {
             return -1L;
@@ -160,7 +160,7 @@ public final class SmokeProbeWriter {
         if (mc != null && mc.level != null) {
             try {
                 net.minecraft.client.multiplayer.ClientChunkCache cache =
-                        ((io.github.limuqy.mc.hassium.mixin.ClientLevelAccessor) mc.level).hassium$getChunkSource();
+                        ((io.github.limuqy.mc.hassium.mixin.client.ClientLevelAccessor) mc.level).hassium$getChunkSource();
                 io.github.limuqy.mc.hassium.shadow.light.SmokeChunkTrace.Snapshot trace =
                         io.github.limuqy.mc.hassium.shadow.light.SmokeChunkTrace.snapshot(dimension);
                 java.util.List<net.minecraft.world.level.ChunkPos> candidates = trace.networkReceived();
@@ -222,7 +222,7 @@ public final class SmokeProbeWriter {
                 var level = mc.level;
                 int pcx = net.minecraft.core.SectionPos.blockToSectionCoord(player.getBlockX());
                 int pcz = net.minecraft.core.SectionPos.blockToSectionCoord(player.getBlockZ());
-                var cache = ((io.github.limuqy.mc.hassium.mixin.ClientLevelAccessor) level)
+                var cache = ((io.github.limuqy.mc.hassium.mixin.client.ClientLevelAccessor) level)
                         .hassium$getChunkSource();
                 for (int dx = -1; dx <= 1; dx++) {
                     for (int dz = -1; dz <= 1; dz++) {
@@ -320,11 +320,11 @@ public final class SmokeProbeWriter {
         //   clientDarkLightProbeChunks    —— 诊断时刻仍黑的柱数（观测）
         //   clientDarkLightProbeSamples   —— 全部即时 0 采样（含首次落地瞬态，观测用）
         field(sb, "clientDarkLightProbeSamples",
-                io.github.limuqy.mc.hassium.network.ClientChunkHandler.darkLightProbeSampleCount());
+                io.github.limuqy.mc.hassium.client.ClientChunkHandler.darkLightProbeSampleCount());
         field(sb, "clientDarkLightProbeChunks",
-                io.github.limuqy.mc.hassium.network.ClientChunkHandler.darkLightProbeChunkCount());
+                io.github.limuqy.mc.hassium.client.ClientChunkHandler.darkLightProbeChunkCount());
         field(sb, "clientDarkRegressionChunks",
-                io.github.limuqy.mc.hassium.network.ClientChunkHandler.darkRegressionChunkCount());
+                io.github.limuqy.mc.hassium.client.ClientChunkHandler.darkRegressionChunkCount());
         lastField(sb, "locallyGenerated", m.getLocallyGeneratedChunkCount());
         sb.append("  },\n");
     }

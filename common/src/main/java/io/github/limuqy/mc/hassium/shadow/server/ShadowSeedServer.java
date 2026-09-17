@@ -20,12 +20,12 @@ import io.github.limuqy.mc.hassium.compat.LevelCompat;
 import io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat;
 import io.github.limuqy.mc.hassium.compat.ShadowServerCompat;
 import io.github.limuqy.mc.hassium.compat.LevelChunkSectionCompat;
-import io.github.limuqy.mc.hassium.mixin.ThreadedLevelLightEngineAccessor;
-import io.github.limuqy.mc.hassium.network.SectionDeltaS2CPacket;
-import io.github.limuqy.mc.hassium.network.sectiondelta.SectionDeltaSnapshot;
-import io.github.limuqy.mc.hassium.network.sectiondelta.SectionDeltaSnapshots;
+import io.github.limuqy.mc.hassium.mixin.shadow.ThreadedLevelLightEngineAccessor;
+import io.github.limuqy.mc.hassium.protocol.SectionDeltaS2CPacket;
+import io.github.limuqy.mc.hassium.protocol.sectiondelta.SectionDeltaSnapshot;
+import io.github.limuqy.mc.hassium.protocol.sectiondelta.SectionDeltaSnapshots;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
-import io.github.limuqy.mc.hassium.network.sectiondelta.SectionPlaneSyndrome;
+import io.github.limuqy.mc.hassium.protocol.sectiondelta.SectionPlaneSyndrome;
 import io.github.limuqy.mc.hassium.utils.DimensionKey;
 import java.net.Proxy;
 import java.util.ArrayList;
@@ -323,7 +323,7 @@ public class ShadowSeedServer extends MinecraftServer {
             level.getChunkSource().addRegionTicket(
                     net.minecraft.server.level.TicketType.FORCED, pos, 0, pos);
 #else
-            ((io.github.limuqy.mc.hassium.mixin.ServerChunkCacheAccessor) (Object) level.getChunkSource())
+            ((io.github.limuqy.mc.hassium.mixin.shadow.ServerChunkCacheAccessor) (Object) level.getChunkSource())
                     .hassium$getTicketStorage()
                     .addTicketWithRadius(net.minecraft.server.level.TicketType.FORCED, pos, 0);
 #endif
@@ -344,7 +344,7 @@ public class ShadowSeedServer extends MinecraftServer {
             level.getChunkSource().removeRegionTicket(
                     net.minecraft.server.level.TicketType.FORCED, pos, 0, pos);
 #else
-            ((io.github.limuqy.mc.hassium.mixin.ServerChunkCacheAccessor) (Object) level.getChunkSource())
+            ((io.github.limuqy.mc.hassium.mixin.shadow.ServerChunkCacheAccessor) (Object) level.getChunkSource())
                     .hassium$getTicketStorage()
                     .removeTicketWithRadius(net.minecraft.server.level.TicketType.FORCED, pos, 0);
 #endif
@@ -2139,12 +2139,12 @@ public class ShadowSeedServer extends MinecraftServer {
                 net.minecraft.server.level.ServerChunkCache cache =
                         (net.minecraft.server.level.ServerChunkCache) level.getChunkSource();
                 // chunk 存储：ChunkMap extends SimpleRegionStorage(≥1.21.2)/ChunkStorage(<1.21.2)
-                refreshRegionStorageFromHop((io.github.limuqy.mc.hassium.mixin.SimpleRegionStorageAccessor)
+                refreshRegionStorageFromHop((io.github.limuqy.mc.hassium.mixin.shadow.SimpleRegionStorageAccessor)
                         (Object) cache.chunkMap);
                 // POI 存储：PoiManager extends SectionStorage
-                io.github.limuqy.mc.hassium.mixin.ChunkMapAccessor cm =
-                        (io.github.limuqy.mc.hassium.mixin.ChunkMapAccessor) (Object) cache.chunkMap;
-                refreshRegionStorageFromHop((io.github.limuqy.mc.hassium.mixin.SectionStorageAccessor)
+                io.github.limuqy.mc.hassium.mixin.shadow.ChunkMapAccessor cm =
+                        (io.github.limuqy.mc.hassium.mixin.shadow.ChunkMapAccessor) (Object) cache.chunkMap;
+                refreshRegionStorageFromHop((io.github.limuqy.mc.hassium.mixin.shadow.SectionStorageAccessor)
                         (Object) cm.hassium$getPoiManager());
             }
         } catch (Throwable t) {
@@ -2154,15 +2154,15 @@ public class ShadowSeedServer extends MinecraftServer {
 
     /** 经带 #if 的 accessor 取到下一跳存储对象（SimpleRegionStorage / IOWorker）后统一刷新。 */
     private static void refreshRegionStorageFromHop(Object hop) {
-        if (hop instanceof io.github.limuqy.mc.hassium.mixin.SimpleRegionStorageAccessor acc) {
-            refreshRegionStorage((io.github.limuqy.mc.hassium.mixin.IOWorkerAccessor)
+        if (hop instanceof io.github.limuqy.mc.hassium.mixin.shadow.SimpleRegionStorageAccessor acc) {
+            refreshRegionStorage((io.github.limuqy.mc.hassium.mixin.shadow.IOWorkerAccessor)
                     (Object) acc.hassium$getWorker());
-        } else if (hop instanceof io.github.limuqy.mc.hassium.mixin.IOWorkerAccessor worker) {
+        } else if (hop instanceof io.github.limuqy.mc.hassium.mixin.shadow.IOWorkerAccessor worker) {
             refreshRegionStorage(worker);
         }
     }
 
-    private static void refreshRegionStorage(io.github.limuqy.mc.hassium.mixin.IOWorkerAccessor worker) {
+    private static void refreshRegionStorage(io.github.limuqy.mc.hassium.mixin.shadow.IOWorkerAccessor worker) {
         Object storage = worker.hassium$getStorage();
         try {
             // RegionFileStorage 是 final 类：接口型 accessor 无法注入（"target type mismatch

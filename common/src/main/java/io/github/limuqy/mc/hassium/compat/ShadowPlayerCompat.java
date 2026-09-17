@@ -1,7 +1,7 @@
 package io.github.limuqy.mc.hassium.compat;
 
 import com.mojang.authlib.GameProfile;
-import io.github.limuqy.mc.hassium.mixin.MixinShadowConnectionAccessor;
+import io.github.limuqy.mc.hassium.mixin.shadow.MixinShadowConnectionAccessor;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelOutboundHandlerAdapter;
 import io.netty.channel.embedded.EmbeddedChannel;
@@ -148,7 +148,7 @@ public final class ShadowPlayerCompat {
             return;
         }
         from.removePlayerImmediately(player, net.minecraft.world.entity.Entity.RemovalReason.CHANGED_DIMENSION);
-        ((io.github.limuqy.mc.hassium.mixin.EntityAccessor) player).hassium$unsetRemoved();
+        ((io.github.limuqy.mc.hassium.mixin.server.EntityAccessor) player).hassium$unsetRemoved();
         player.setPosRaw(x, y, z);
         player.setYRot(yRot);
         player.setXRot(xRot);

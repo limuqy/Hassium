@@ -1,12 +1,12 @@
 package io.github.limuqy.mc.hassium;
 
-import io.github.limuqy.mc.hassium.cache.client.ClientLifecycleHelper;
+import io.github.limuqy.mc.hassium.client.ClientLifecycleHelper;
 import io.github.limuqy.mc.hassium.client.ClientSmokeTest;
 import io.github.limuqy.mc.hassium.command.FabricHassiumCommand;
-import io.github.limuqy.mc.hassium.network.AggregationDecodeQueue;
-import io.github.limuqy.mc.hassium.network.ClientActivation;
-import io.github.limuqy.mc.hassium.network.DictionaryManager;
-import io.github.limuqy.mc.hassium.network.PayloadHandlers;
+import io.github.limuqy.mc.hassium.protocol.AggregationDecodeQueue;
+import io.github.limuqy.mc.hassium.client.ClientActivation;
+import io.github.limuqy.mc.hassium.protocol.DictionaryManager;
+import io.github.limuqy.mc.hassium.protocol.PayloadHandlers;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
 #if MC_VER >= MC_1_21_1
@@ -34,7 +34,7 @@ public class HassiumClientMod implements ClientModInitializer {
 #if MC_VER >= MC_1_21_1
         ClientConfigurationConnectionEvents.START.register((handler, client) ->
                 ClientConfigurationNetworking.send(
-                        io.github.limuqy.mc.hassium.network.PreHandshakePayload.create()));
+                        io.github.limuqy.mc.hassium.protocol.PreHandshakePayload.create()));
 #endif
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
             ClientLifecycleHelper.cleanupOnDisconnect();

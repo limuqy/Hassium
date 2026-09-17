@@ -728,11 +728,11 @@ public final class ScenarioEngine {
             //   clientDarkLightProbeChunks —— 诊断时刻仍黑的柱数（观测）
             //   clientDarkLightProbeSamples —— 全部即时 0 采样（含首次落地瞬态，观测用）
             case "counters.clientDarkLightProbeSamples" ->
-                    io.github.limuqy.mc.hassium.network.ClientChunkHandler.darkLightProbeSampleCount();
+                    io.github.limuqy.mc.hassium.client.ClientChunkHandler.darkLightProbeSampleCount();
             case "counters.clientDarkLightProbeChunks" ->
-                    io.github.limuqy.mc.hassium.network.ClientChunkHandler.darkLightProbeChunkCount();
+                    io.github.limuqy.mc.hassium.client.ClientChunkHandler.darkLightProbeChunkCount();
             case "counters.clientDarkRegressionChunks" ->
-                    io.github.limuqy.mc.hassium.network.ClientChunkHandler.darkRegressionChunkCount();
+                    io.github.limuqy.mc.hassium.client.ClientChunkHandler.darkRegressionChunkCount();
             // stats.*（appendStats 同名）
             case "stats.vanillaBytesReceived" -> m.getVanillaBytesReceived();
             case "stats.actualBytesReceived" -> m.getActualBytesReceived();

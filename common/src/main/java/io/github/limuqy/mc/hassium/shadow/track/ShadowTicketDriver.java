@@ -200,7 +200,7 @@ public final class ShadowTicketDriver {
                     DebugLogger.warn(DebugLogger.LogType.NETWORK,
                             "[SHADOW_TICKET] local gen failed ({}, {}) -> network FULL (dimension={})",
                             pos.x, pos.z, dim);
-                    io.github.limuqy.mc.hassium.network.ShadowPullClient.requestAuthoritativeFull(
+                    io.github.limuqy.mc.hassium.protocol.ShadowPullClient.requestAuthoritativeFull(
                             dim, java.util.List.of(pos));
                     return;
                 }
@@ -376,7 +376,7 @@ public final class ShadowTicketDriver {
             level.getChunkSource().addRegionTicket(
                     net.minecraft.server.level.TicketType.FORCED, pos, 0, pos);
 #else
-            ((io.github.limuqy.mc.hassium.mixin.ServerChunkCacheAccessor) (Object) level.getChunkSource())
+            ((io.github.limuqy.mc.hassium.mixin.shadow.ServerChunkCacheAccessor) (Object) level.getChunkSource())
                     .hassium$getTicketStorage()
                     .addTicketWithRadius(net.minecraft.server.level.TicketType.FORCED, pos, 0);
 #endif
@@ -398,7 +398,7 @@ public final class ShadowTicketDriver {
             level.getChunkSource().removeRegionTicket(
                     net.minecraft.server.level.TicketType.FORCED, pos, 0, pos);
 #else
-            ((io.github.limuqy.mc.hassium.mixin.ServerChunkCacheAccessor) (Object) level.getChunkSource())
+            ((io.github.limuqy.mc.hassium.mixin.shadow.ServerChunkCacheAccessor) (Object) level.getChunkSource())
                     .hassium$getTicketStorage()
                     .removeTicketWithRadius(net.minecraft.server.level.TicketType.FORCED, pos, 0);
 #endif

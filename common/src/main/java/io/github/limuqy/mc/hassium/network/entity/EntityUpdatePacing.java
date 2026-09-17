@@ -2,7 +2,7 @@ package io.github.limuqy.mc.hassium.network.entity;
 
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
-import io.github.limuqy.mc.hassium.network.ServerNetworkGate;
+import io.github.limuqy.mc.hassium.server.ServerNetworkGate;
 import io.github.limuqy.mc.hassium.server.RuntimeServerContext;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;

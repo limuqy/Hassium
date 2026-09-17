@@ -1,6 +1,6 @@
 package io.github.limuqy.mc.hassium.metrics;
 
-import io.github.limuqy.mc.hassium.network.sectiondelta.SectionPlaneSyndrome;
+import io.github.limuqy.mc.hassium.protocol.sectiondelta.SectionPlaneSyndrome;
 
 /**
  * 网络统计轻量门面

@@ -1,0 +1,494 @@
+package io.github.limuqy.mc.hassium.client;
+
+import io.github.limuqy.mc.hassium.Constants;
+import io.github.limuqy.mc.hassium.platform.client.ShadowClientApi;
+import io.github.limuqy.mc.hassium.platform.client.ShadowClientBridge;
+import io.github.limuqy.mc.hassium.platform.client.TraceOrigin;
+import io.github.limuqy.mc.hassium.utils.DimensionKey;
+
+import java.nio.file.Path;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import net.minecraft.client.multiplayer.ClientLevel;
+import net.minecraft.world.level.ChunkPos;
+
+/**
+ * 客户端区块摄入管线的状态容器（Phase 0 隔离重构产物）。
+ * <p>
+ * 原 {@link ClientChunkHandler} 的全 static 状态（storage、pending hash 表、apply 重入标志）
+ * 收拢为本类实例字段，由 {@link #getInstance()} 单例访问；{@link ClientChunkHandler}
+ * 退化为兼容门面（Phase 4 后删除）。
+ * <p>
+ * 生命周期：{@link #initStorage} / {@link #resetStorage} 由 {@code ClientLifecycleHelper}
+ * 经门面调用，本类不持有 Minecraft 生命周期引用。
+ * <p>
+ * 同时实现 {@link ShadowClientApi} 并在 {@link #getInstance()} 注册进
+ * {@link ShadowClientBridge}——shadow 只依赖 SPI，不 import 本类。
+ */
+public final class ClientChunkPipeline implements ShadowClientApi {
+
+    private static volatile ClientChunkPipeline INSTANCE;
+
+    /** 影子端世界根定位（initStorage 记录；hassium_cache/<serverId>/world）。 */
+    private volatile java.nio.file.Path gameDir;
+    private volatile String serverId;
+
+    /** 元数据 contentHash 暂存：DimensionKey 复合键 -> (hash, timestamp)，用于收到数据后写入缓存 */
+    private final Map<Long, PendingHash> pendingContentHashes = new ConcurrentHashMap<>();
+
+    /** section 哈希暂存：DimensionKey 复合键 -> (sectionHashes, timestamp)，用于 persist 时一起写入 */
+    private final Map<Long, PendingSectionHashes> pendingSectionHashes = new ConcurrentHashMap<>();
+
+    /** 条目过期时间（30秒） */
+    private static final long PENDING_HASH_TTL_MS = 30_000;
+
+    /** 上次清理时间 */
+    private volatile long lastPendingCleanupTime = 0;
+
+    /** 清理间隔（5秒） */
+    private static final long PENDING_CLEANUP_INTERVAL_MS = 5_000;
+
+    // === SeedGen 握手信息（服务端 S2C 下发；断连清空） ===
+    private volatile long serverSeed = 0L;
+    private volatile byte[] serverLevelStemNbt = null;
+    private volatile boolean serverSeedGenEnabled = false;
+    private volatile boolean serverSeedAvailable = false;
+    /** 服务端维度 id 清单（play_init 下发；客户端本地 resolve LevelStem 装配）。 */
+    private volatile List<String> serverDimensionIds = List.of();
+    /** 主世界 LevelStem 解码失败等硬关 SeedGen（仅缓存；不本地生成）。 */
+    private volatile boolean seedGenHardDisabled = false;
+    // === 影子端状态（非网络向功能总开关） ===
+    /** 服务端已装 Hassium MOD（能力握手响应到达；setServerSeedInfo 调用点 = 三加载器握手解码）。 */
+    private volatile boolean hassiumHandshakeDone = false;
+    /** 影子服务端创建成功（启用态：客户端不计算光照，统一投递影子端）。 */
+    private volatile boolean shadowServerReady = false;
+    /** 影子服务端创建失败（降级态：缓存/OVD/SeedGen 全关 + 游戏内报错）。 */
+    private volatile boolean shadowServerFailed = false;
+
+    private record PendingHash(long hash, long timestamp) {}
+    private record PendingSectionHashes(long[] hashes, long timestamp) {}
+
+    /**
+     * Hassium 内部 apply 进行中标志（缓存读回 / OVD / 压缩通道）。
+     * <p>
+     * Hassium 的区块应用（{@code ClientChunkHandler.applyShadowPullFull} 等）内部会调用
+     * 官方区块应用路径（vanilla {@code ClientPacketListener.handleLevelChunkWithLight}），
+     * 而调用方（processQueueUntil / HANDLE_COMPRESSED 回调）本身已在主线程预算内——置位此标志
+     * 供区块应用路径识别「Hassium 预算内 apply」，避免重入冲突（入队后立即 hasChunk
+     * 校验失败 → 假失败 → 缓存路径重请求风暴、OVD 全量失败）。
+     */
+    private final ThreadLocal<Boolean> hassiumApplyInProgress =
+            ThreadLocal.withInitial(() -> Boolean.FALSE);
+
+
+    private ClientChunkPipeline() {
+    }
+
+    /**
+     * 获取单例（进程内仅一份；断连不清实例，只清状态）。
+     */
+    public static ClientChunkPipeline getInstance() {
+        if (INSTANCE == null) {
+            synchronized (ClientChunkPipeline.class) {
+                if (INSTANCE == null) {
+                    INSTANCE = new ClientChunkPipeline();
+                    ShadowClientBridge.register(INSTANCE);
+                }
+            }
+        }
+        return INSTANCE;
+    }
+
+    /**
+     * 初始化客户端缓存存储
+     *
+     * @param gameDir     游戏目录
+     * @param serverId    服务器标识（如 server_127.0.0.1_25565）
+     * @param dimension   维度标识（如 minecraft:overworld）
+     */
+    /**
+     * 仅记录目录定位（gameDir/serverId；影子端世界根定位用，不创建任何存储）。
+     * 与 {@link #setCacheLocation} 共用字段。
+     */
+    public void setCacheLocation(Path gameDir, String serverId) {
+        this.gameDir = gameDir;
+        this.serverId = serverId;
+    }
+
+    /** 游戏目录（影子端世界根定位用；未初始化返回 null）。 */
+    public java.nio.file.Path getGameDir() {
+        return gameDir;
+    }
+
+    /** 服务器标识（如 server_127.0.0.1_25565；未初始化返回 null）。 */
+    public String getServerId() {
+        return serverId;
+    }
+
+    /**
+     * 重置客户端缓存存储（断开连接时调用）
+     */
+    public void resetStorage() {
+        pendingContentHashes.clear();
+        pendingSectionHashes.clear();
+        serverSeed = 0L;
+        serverLevelStemNbt = null;
+        serverSeedGenEnabled = false;
+        serverSeedAvailable = false; // review-fix: 断连重置漏清脏标志，防先连 Hassium+SeedGen 服再连非 SeedGen 服时消费方读到旧值（review §2.1）
+        serverDimensionIds = List.of();
+        seedGenHardDisabled = false;
+        hassiumHandshakeDone = false;
+        shadowServerReady = false;
+        shadowServerFailed = false;
+        DimensionKey.resetCacheable();
+    }
+
+    /**
+     * 握手 S2C 下发 SeedGen 信息后调用（客户端）。
+     */
+    public void setServerSeedInfo(long seed, byte[] levelStemNbt, boolean enabled) {
+        setServerSeedInfo(seed, levelStemNbt, enabled, List.of());
+    }
+
+    /**
+     * 握手 S2C 下发 SeedGen 信息 + 服务端维度清单后调用（客户端）。
+     * 维度清单用于影子端装配：客户端本地 registry 能 resolve 的自定义维度进缓存/SeedGen。
+     */
+    public void setServerSeedInfo(long seed, byte[] levelStemNbt, boolean enabled,
+                                  List<String> dimensionIds) {
+        this.serverSeed = seed;
+        this.serverLevelStemNbt = levelStemNbt;
+        this.serverSeedGenEnabled = enabled;
+        this.serverSeedAvailable = enabled && levelStemNbt != null && levelStemNbt.length > 0;
+        this.serverDimensionIds = dimensionIds != null ? List.copyOf(dimensionIds) : List.of();
+        this.seedGenHardDisabled = false;
+        this.hassiumHandshakeDone = true; // 握手响应到达 = 服务端已装 Hassium MOD
+        if (enabled && !this.serverSeedAvailable) {
+            Constants.LOG.warn("Hassium: SeedGen enabled but LevelStem missing; local worldgen gated off");
+        }
+        try {
+            io.github.limuqy.mc.hassium.client.ClientLifecycleHelper.startShadowIfConfigured();
+        } catch (Throwable t) {
+            Constants.LOG.debug("Hassium: post-handshake shadow start skipped", t);
+        }
+        try {
+            // 真实 seed 到达：若影子是投机创建的 seed=0 装配 → 关停重建（复用分支
+            // 永不重进 seed 等待，必须在此主动判定）。
+            io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry.getInstance()
+                    .onServerSeedArrived(seed);
+            // 维度清单到达：投机影子常早于 play_init（seedGen 关时 seed=0 不触发 seed 重建），
+            // 自定义维未装配则关停重建，使缓存/SeedGen 覆盖 TF/AoA 等维度。
+            io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry.getInstance()
+                    .onServerDimensionIdsArrived(this.serverDimensionIds);
+        } catch (Throwable ignored) {
+        }
+        // 握手完成后按当前影子 storage 再刷一次 cacheable（覆盖 park 复用、
+        // 或本方法内刚完成的重建——resetStorage 已把集合复位为三维）。
+        try {
+            var shadow = io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry
+                    .getInstance().get();
+            if (shadow != null) {
+                for (String dim : shadow.storageDimensions()) {
+                    DimensionKey.markCacheable(dim);
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        if (enabled) {
+            Constants.LOG.info("Hassium: Server SeedGen enabled; world seed will be saved in shadow level.dat");
+        }
+    }
+
+    // === 影子端状态访问 ===
+
+    /** 服务端是否已装 Hassium MOD（能力握手响应到达）。 */
+    public boolean isHassiumHandshakeDone() {
+        return hassiumHandshakeDone;
+    }
+
+    /** 影子服务端创建成功标记（ShadowLightCompute 启动任务回填）。 */
+    public void setShadowServerReady(boolean ready) {
+        this.shadowServerReady = ready;
+    }
+
+    /** 影子服务端创建成功 / park 复用已 unpark。 */
+    public boolean isShadowServerReady() {
+        return shadowServerReady;
+    }
+
+    /** 影子服务端创建失败标记（ShadowLightCompute 启动任务回填）。 */
+    public void setShadowServerFailed(boolean failed) {
+        this.shadowServerFailed = failed;
+    }
+
+    /**
+     * 影子端启用态（影子端负责权威光照回传，客户端光照引擎保持 vanilla 默认开启）：
+     * 配置开启 && 服务端已装 MOD && 影子服务端创建成功。
+     */
+    public boolean isShadowEngineAvailable() {
+        return hassiumHandshakeDone && shadowServerReady && !shadowServerFailed;
+    }
+
+    /**
+     * 影子端激活（投递/分支判定用）：配置开（调用方另查）&& 握手完成 && 未失败。
+     * 创建进行中（shadowServerReady=false）也激活——投递入队等创建完成，
+     * 避免首波 chunk 落回客户端重算。
+     */
+    public boolean isShadowEngineActive() {
+        return hassiumHandshakeDone && !shadowServerFailed;
+    }
+
+    /** 影子端创建失败（降级态全关判定；配置关时由 HassiumConfigService 短路）。 */
+    public boolean isShadowServerFailed() {
+        return shadowServerFailed;
+    }
+
+    /** 服务端主世界 seed（握手下发；未下发为 0）。 */
+    public long getServerSeed() {
+        return serverSeed;
+    }
+
+    /** 服务端主世界 LevelStem NBT（握手下发；未下发为 null）。 */
+    public byte[] getServerLevelStemNbt() {
+        return serverLevelStemNbt;
+    }
+
+    /** 服务端明确下发真实 seed 与 LevelStem 后才允许本地生成。 */
+    /** 服务端是否启用 SeedGen（握手下发）。 */
+    public boolean isServerSeedGenEnabled() {
+        return serverSeedGenEnabled;
+    }
+    public boolean isServerSeedAvailable() {
+        return serverSeedAvailable && !seedGenHardDisabled;
+    }
+
+    /** 服务端维度 id 清单（play_init 下发；未握手为空表）。 */
+    public List<String> getServerDimensionIds() {
+        return serverDimensionIds;
+    }
+
+    /**
+     * 硬关 SeedGen（仍可缓存）：主世界 LevelStem 解码失败等场景，
+     * 避免客户端缺生成器 mod 时静默用错误 preset 本地生成。
+     */
+    public void disableSeedGen(String reason) {
+        this.seedGenHardDisabled = true;
+        this.serverSeedAvailable = false;
+        Constants.LOG.warn("Hassium: SeedGen disabled (cache-only): {}", reason);
+    }
+
+    public boolean isSeedGenHardDisabled() {
+        return seedGenHardDisabled;
+    }
+
+    /**
+     * 暂存 contentHash，供后续收到区块数据时使用（指定维度）。
+     */
+    public void storePendingContentHash(String dimension, int chunkX, int chunkZ, long contentHash) {
+        evictExpiredEntries();
+        pendingContentHashes.put(DimensionKey.key(dimension, chunkX, chunkZ),
+                new PendingHash(contentHash, System.currentTimeMillis()));
+    }
+
+    /** 暂存 contentHash（主世界；过渡期兼容签名，语义 = OVERWORLD）。 */
+    public void storePendingContentHash(int chunkX, int chunkZ, long contentHash) {
+        storePendingContentHash(DimensionKey.OVERWORLD, chunkX, chunkZ, contentHash);
+    }
+
+    /**
+     * 取出并移除暂存的 contentHash（指定维度）。
+     */
+    public long consumePendingContentHash(String dimension, int chunkX, int chunkZ) {
+        PendingHash entry = pendingContentHashes.remove(DimensionKey.key(dimension, chunkX, chunkZ));
+        return entry != null ? entry.hash() : 0L;
+    }
+
+    /** 取出并移除暂存的 contentHash（主世界；过渡期兼容签名）。 */
+    public long consumePendingContentHash(int chunkX, int chunkZ) {
+        return consumePendingContentHash(DimensionKey.OVERWORLD, chunkX, chunkZ);
+    }
+
+    /**
+     * 窥视暂存 contentHash（不移除），供异步入库与 apply 共用（指定维度）。
+     */
+    public long peekPendingContentHash(String dimension, int chunkX, int chunkZ) {
+        PendingHash entry = pendingContentHashes.get(DimensionKey.key(dimension, chunkX, chunkZ));
+        return entry != null ? entry.hash() : 0L;
+    }
+
+    /** 窥视暂存 contentHash（主世界；过渡期兼容签名）。 */
+    public long peekPendingContentHash(int chunkX, int chunkZ) {
+        return peekPendingContentHash(DimensionKey.OVERWORLD, chunkX, chunkZ);
+    }
+
+    /**
+     * 取出并移除暂存的 section 哈希（指定维度）。
+     */
+    public long[] consumePendingSectionHashes(String dimension, int chunkX, int chunkZ) {
+        PendingSectionHashes entry =
+                pendingSectionHashes.remove(DimensionKey.key(dimension, chunkX, chunkZ));
+        return entry != null ? entry.hashes() : null;
+    }
+
+    /** 取出并移除暂存的 section 哈希（主世界；过渡期兼容签名）。 */
+    public long[] consumePendingSectionHashes(int chunkX, int chunkZ) {
+        return consumePendingSectionHashes(DimensionKey.OVERWORLD, chunkX, chunkZ);
+    }
+
+    /** 窥视暂存 section 哈希（指定维度；不移除）。 */
+    public long[] peekPendingSectionHashes(String dimension, int chunkX, int chunkZ) {
+        PendingSectionHashes entry =
+                pendingSectionHashes.get(DimensionKey.key(dimension, chunkX, chunkZ));
+        return entry != null ? entry.hashes() : null;
+    }
+
+    /** 窥视暂存 section 哈希（主世界；过渡期兼容签名）。 */
+    public long[] peekPendingSectionHashes(int chunkX, int chunkZ) {
+        return peekPendingSectionHashes(DimensionKey.OVERWORLD, chunkX, chunkZ);
+    }
+
+    /** 是否正在 Hassium 预算内的 apply（重入标志，供区块应用路径识别）。 */
+    public boolean isApplyInProgress() {
+        return hassiumApplyInProgress.get();
+    }
+
+    /** 设置 Hassium 预算内 apply 重入标志（apply 前后配对调用）。 */
+    public void setApplyInProgress(boolean inProgress) {
+        hassiumApplyInProgress.set(inProgress);
+    }
+
+    // === ShadowClientApi 委托（budget / focus / handler / lifecycle）===
+
+    @Override
+    public String currentServerIp() {
+        return io.github.limuqy.mc.hassium.client.ClientLifecycleHelper.currentServerIp();
+    }
+
+    @Override
+    public boolean tryAcquireCacheRead() {
+        return io.github.limuqy.mc.hassium.client.ClientMainThreadBudget.tryAcquireCacheRead();
+    }
+
+    @Override
+    public void refundCacheRead() {
+        io.github.limuqy.mc.hassium.client.ClientMainThreadBudget.refundCacheRead();
+    }
+
+    @Override
+    public boolean isJoinBoostActive() {
+        return io.github.limuqy.mc.hassium.client.ClientMainThreadBudget.isJoinBoostActive();
+    }
+
+    @Override
+    public long joinBoostRemainingMs() {
+        return io.github.limuqy.mc.hassium.client.ClientMainThreadBudget.joinBoostRemainingMs();
+    }
+
+    @Override
+    public long getBudgetNs() {
+        return io.github.limuqy.mc.hassium.client.ClientMainThreadBudget.getBudgetNs();
+    }
+
+    @Override
+    public void noteChunkApplyActivity() {
+        io.github.limuqy.mc.hassium.client.ClientMainThreadBudget.noteChunkApplyActivity();
+    }
+
+    @Override
+    public void updateFocusFromClient() {
+        io.github.limuqy.mc.hassium.client.JoinWorldFocus.updateFromClient();
+    }
+
+    @Override
+    public boolean shouldDeferFarChunk(int chunkX, int chunkZ, boolean loadingScreenVisible) {
+        return io.github.limuqy.mc.hassium.client.JoinWorldFocus
+                .shouldDeferFarChunk(chunkX, chunkZ, loadingScreenVisible);
+    }
+
+    @Override
+    public double chunkApplyPriority(int chunkX, int chunkZ, double fifo) {
+        return io.github.limuqy.mc.hassium.client.JoinWorldFocus.chunkApplyPriority(chunkX, chunkZ, fifo);
+    }
+
+    @Override
+    public <T> Long findStandingKey(ConcurrentHashMap<Long, T> source) {
+        return io.github.limuqy.mc.hassium.client.JoinWorldFocus.findStandingKey(source);
+    }
+
+    @Override
+    public <T> void fillDistanceFirst(ConcurrentHashMap<Long, T> source,
+                                      List<Map.Entry<Long, T>> batch, int limit) {
+        io.github.limuqy.mc.hassium.client.JoinWorldFocus.fillDistanceFirst(source, batch, limit);
+    }
+
+    @Override
+    public void logShadowChunkApplyEvent(String phase, ChunkPos pos, boolean renderOnly, TraceOrigin origin) {
+        ClientChunkHandler.logShadowChunkApplyEvent(phase, pos, renderOnly, origin);
+    }
+
+    @Override
+    public void onDimensionChanged() {
+        ClientChunkHandler.onDimensionChanged();
+    }
+
+    @Override
+    public void markChunkSectionsDirty(ClientLevel level, int chunkX, int chunkZ) {
+        ClientChunkHandler.markChunkSectionsDirty(level, chunkX, chunkZ);
+    }
+
+    @Override
+    public void onProbeChunkUnloaded(ChunkPos pos) {
+        ClientChunkHandler.onProbeChunkUnloaded(pos);
+    }
+
+    @Override
+    public void scheduleProbeRecheck(ChunkPos pos) {
+        ClientChunkHandler.scheduleProbeRecheck(pos);
+    }
+
+    @Override
+    public void runProbeRecheck(ClientLevel level) {
+        ClientChunkHandler.runProbeRecheck(level);
+    }
+
+    @Override
+    public void probeChunkState(ChunkPos pos, ClientLevel level, String source) {
+        ClientChunkHandler.probeChunkState(pos, level, source);
+    }
+
+    @Override
+    public void probeShadowLightState(ChunkPos pos, ClientLevel level, TraceOrigin fullOrigin,
+                                      boolean fullRenderOnly, long fullApplySequence, long fullApplyAgeMs,
+                                      long lightQueueDelayMs, boolean fullAppliedAfterLightQueued,
+                                      boolean chunkPresent) {
+        ClientChunkHandler.probeShadowLightState(pos, level, fullOrigin, fullRenderOnly,
+                fullApplySequence, fullApplyAgeMs, lightQueueDelayMs, fullAppliedAfterLightQueued,
+                chunkPresent);
+    }
+
+    @Override
+    public String stallSnapshot() {
+        return ClientMetadataHandler.stallSnapshot();
+    }
+
+    @Override
+    public void resetMeshCompileLog() {
+        io.github.limuqy.mc.hassium.client.ChunkMeshCompileLog.reset();
+    }
+
+
+    /**
+     * 懒清理过期条目（定期调用，避免无限增长）
+     */
+    private void evictExpiredEntries() {
+        long now = System.currentTimeMillis();
+        if (now - lastPendingCleanupTime < PENDING_CLEANUP_INTERVAL_MS) {
+            return;
+        }
+        lastPendingCleanupTime = now;
+        pendingContentHashes.entrySet().removeIf(e -> now - e.getValue().timestamp() > PENDING_HASH_TTL_MS);
+        pendingSectionHashes.entrySet().removeIf(e -> now - e.getValue().timestamp() > PENDING_HASH_TTL_MS);
+    }
+
+}

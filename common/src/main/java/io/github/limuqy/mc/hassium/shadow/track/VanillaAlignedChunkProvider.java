@@ -73,10 +73,10 @@ public final class VanillaAlignedChunkProvider implements ShadowChunkProvider {
                     pos.x, pos.z, dimension);
             return future;
         }
-        if (!io.github.limuqy.mc.hassium.network.ShadowPullClient
+        if (!io.github.limuqy.mc.hassium.protocol.ShadowPullClient
                 .isPullRetryAllowed(dimension, pos)) {
             // 冷却：清失败戳后立刻允许本轮（重连窗口不得整窗饿死）
-            io.github.limuqy.mc.hassium.network.ShadowPullClient.clearPullFailure(dimension, pos);
+            io.github.limuqy.mc.hassium.protocol.ShadowPullClient.clearPullFailure(dimension, pos);
         }
         boolean hasBaseline = ShadowLightCompute.hasLocalPullBaseline(dimension, pos);
         if (session != null && !session.markPullInFlightForAcquire(dimension, pos, System.currentTimeMillis())) {
@@ -111,7 +111,7 @@ public final class VanillaAlignedChunkProvider implements ShadowChunkProvider {
         }
         ShadowTrackingSession.getInstance().clearPullInFlight(dimension, pos);
         if (chunk != null) {
-            io.github.limuqy.mc.hassium.network.ShadowPullClient.clearPullFailure(dimension, pos);
+            io.github.limuqy.mc.hassium.protocol.ShadowPullClient.clearPullFailure(dimension, pos);
         }
     }
 

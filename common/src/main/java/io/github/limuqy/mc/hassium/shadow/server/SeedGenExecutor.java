@@ -1,7 +1,9 @@
 package io.github.limuqy.mc.hassium.shadow.server;
 
+import io.github.limuqy.mc.hassium.platform.client.ShadowClientApi;
+import io.github.limuqy.mc.hassium.platform.client.ShadowClientBridge;
+
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
-import io.github.limuqy.mc.hassium.network.ClientChunkPipeline;
 
 /**
  * SeedGen 本地生成门控（SeedRef 推送路径已退役）。
@@ -15,6 +17,10 @@ import io.github.limuqy.mc.hassium.network.ClientChunkPipeline;
  * 服务端 SeedRef / PristineRegistry / SeedGen 工作队列均已删除。
  */
 public final class SeedGenExecutor {
+
+    private static ShadowClientApi client() {
+        return ShadowClientBridge.get();
+    }
 
     private static final SeedGenExecutor INSTANCE = new SeedGenExecutor();
 
@@ -32,7 +38,7 @@ public final class SeedGenExecutor {
         if (!HassiumConfigService.getInstance().isClientSeedGenEnabled()) {
             return false;
         }
-        ClientChunkPipeline pipeline = ClientChunkPipeline.getInstance();
+        ShadowClientApi pipeline = client();
         return pipeline.isServerSeedGenEnabled() && pipeline.isServerSeedAvailable();
     }
 

@@ -1,6 +1,7 @@
 package io.github.limuqy.mc.hassium.network;
 
 import io.github.limuqy.mc.hassium.Constants;
+import io.github.limuqy.mc.hassium.client.ClientActivation;
 import io.github.limuqy.mc.hassium.compat.HassiumChannels;
 import io.github.limuqy.mc.hassium.compat.PacketId;
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
@@ -22,11 +23,19 @@ import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 import net.neoforged.neoforge.network.handling.IPayloadContext;
 
 import java.util.UUID;
-import io.github.limuqy.mc.hassium.network.HassiumConnectionRegistry;
-import io.github.limuqy.mc.hassium.network.HassiumAggregationManager;
-import io.github.limuqy.mc.hassium.network.handshake.LoginHandshake;
-import io.github.limuqy.mc.hassium.network.handshake.PlayInitClient;
-import io.github.limuqy.mc.hassium.network.handshake.ServerHandshakeActivation;
+import io.github.limuqy.mc.hassium.protocol.AggregationDecodeQueue;
+import io.github.limuqy.mc.hassium.protocol.DictionaryManager;
+import io.github.limuqy.mc.hassium.protocol.HassiumConnectionRegistry;
+import io.github.limuqy.mc.hassium.protocol.HassiumAggregationManager;
+import io.github.limuqy.mc.hassium.protocol.PayloadHandlers;
+import io.github.limuqy.mc.hassium.protocol.PreHandshakeHelloPayload;
+import io.github.limuqy.mc.hassium.protocol.PreHandshakePayload;
+import io.github.limuqy.mc.hassium.protocol.PreHandshakeProtocol;
+import io.github.limuqy.mc.hassium.protocol.ShadowPullHandler;
+import io.github.limuqy.mc.hassium.protocol.ShadowPullRequestLedger;
+import io.github.limuqy.mc.hassium.protocol.handshake.LoginHandshake;
+import io.github.limuqy.mc.hassium.protocol.handshake.PlayInitClient;
+import io.github.limuqy.mc.hassium.server.ServerHandshakeActivation;
 
 /**
  * NeoForge 平台网络管理器实现。
@@ -165,7 +174,7 @@ public class NeoForgeNetworkManager implements INetworkManagerService {
      */
     @SubscribeEvent
     public static void onRegisterConfigurationTasks(RegisterConfigurationTasksEvent event) {
-        if (!io.github.limuqy.mc.hassium.network.ServerNetworkGate.isNetworkServerActive()) {
+        if (!io.github.limuqy.mc.hassium.server.ServerNetworkGate.isNetworkServerActive()) {
             return;
         }
         net.minecraft.network.protocol.configuration.ServerConfigurationPacketListener listener = event.getListener();
@@ -214,7 +223,7 @@ public class NeoForgeNetworkManager implements INetworkManagerService {
 
         // 聚合帧发送器：fabric 在 registerChannels 设置；neoforge 无对应调用点，
         // 在 payload 注册事件（服务端/客户端都触发，sender 仅服务端连接生效）设置。
-        io.github.limuqy.mc.hassium.network.HassiumAggregationManager.setSender((connection, buf) -> {
+        io.github.limuqy.mc.hassium.protocol.HassiumAggregationManager.setSender((connection, buf) -> {
             if (connection.getPacketListener() instanceof net.minecraft.server.network.ServerGamePacketListenerImpl handler) {
                 ServerPlayer player = handler.getPlayer();
                 sendServerPayload(player, new ByteArrayPayload(AGGREGATION_TYPE, PayloadHandlers.drain(buf)));

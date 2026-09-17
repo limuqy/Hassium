@@ -1,8 +1,8 @@
 package io.github.limuqy.mc.hassium;
 
-import io.github.limuqy.mc.hassium.cache.client.ClientLifecycleHelper;
+import io.github.limuqy.mc.hassium.client.ClientLifecycleHelper;
 import io.github.limuqy.mc.hassium.client.ClientSmokeTest;
-import io.github.limuqy.mc.hassium.network.DictionaryManager;
+import io.github.limuqy.mc.hassium.protocol.DictionaryManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

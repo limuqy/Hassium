@@ -1,6 +1,6 @@
 package io.github.limuqy.mc.hassium.compat;
 
-import io.github.limuqy.mc.hassium.mixin.ChunkMapAccessor;
+import io.github.limuqy.mc.hassium.mixin.shadow.ChunkMapAccessor;
 import io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer;
 import io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry;
 import io.github.limuqy.mc.hassium.server.RuntimeServerContext;

@@ -1,10 +1,13 @@
 package io.github.limuqy.mc.hassium.shadow.server;
 
+import io.github.limuqy.mc.hassium.platform.client.ShadowClientApi;
+import io.github.limuqy.mc.hassium.platform.client.ShadowClientBridge;
+import io.github.limuqy.mc.hassium.platform.client.TraceOrigin;
+
 import io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute;
 import io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager;
 
 import io.github.limuqy.mc.hassium.Constants;
-import io.github.limuqy.mc.hassium.network.ClientChunkPipeline;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import net.minecraft.client.Minecraft;
 
@@ -26,6 +29,10 @@ import java.util.concurrent.atomic.AtomicLong;
  * 再走 {@link #shutdown()}。
  */
 public final class ShadowServerRegistry {
+
+    private static ShadowClientApi client() {
+        return ShadowClientBridge.get();
+    }
 
     private static final ShadowServerRegistry INSTANCE = new ShadowServerRegistry();
 
@@ -111,7 +118,7 @@ public final class ShadowServerRegistry {
      * 无握手亦可创建（seed 可为 0）；消费仍需握手。
      */
     public ShadowSeedServer getOrCreate() {
-        String wantId = ClientChunkPipeline.getInstance().getServerId();
+        String wantId = client().getServerId();
         ShadowSeedServer existing = server;
         if (existing != null) {
             if (shouldReuseParkedInstance(boundServerId, wantId, true)) {
@@ -126,7 +133,7 @@ public final class ShadowServerRegistry {
         if (failed) {
             return null;
         }
-        if (ClientChunkPipeline.getInstance().getGameDir() == null) {
+        if (client().getGameDir() == null) {
             return null;
         }
         awaitPreviousShutdownComplete();
@@ -134,7 +141,7 @@ public final class ShadowServerRegistry {
         synchronized (lock) {
             existing = server;
             if (existing != null) {
-                wantId = ClientChunkPipeline.getInstance().getServerId();
+                wantId = client().getServerId();
                 if (shouldReuseParkedInstance(boundServerId, wantId, true)) {
                     return unparkIfNeeded(existing);
                 }
@@ -142,24 +149,24 @@ public final class ShadowServerRegistry {
             if (failed) {
                 return null;
             }
-            if (ClientChunkPipeline.getInstance().getGameDir() == null) {
+            if (client().getGameDir() == null) {
                 return null;
             }
-            long seed = ClientChunkPipeline.getInstance().getServerSeed();
+            long seed = client().getServerSeed();
             long createStartNs = System.nanoTime();
             DebugLogger.info(DebugLogger.LogType.ASYNC,
                     "[SHADOW] Creating shadow server (seed={}, handshakeDone={})",
-                    seed, ClientChunkPipeline.getInstance().isHassiumHandshakeDone());
+                    seed, client().isHassiumHandshakeDone());
             try {
                 creating = true;
                 ShadowSeedServer created = createShadowServerWithLockRetry(seed);
                 server = created;
                 assembledSeed = seed;
                 parked = false;
-                boundServerId = ClientChunkPipeline.getInstance().getServerId();
+                boundServerId = client().getServerId();
                 cancelIdleTimeout();
                 io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager.resumeEncoding();
-                ClientChunkPipeline.getInstance().setShadowServerReady(true);
+                client().setShadowServerReady(true);
                 ShadowLightCompute.onShadowServerReady();
                 DebugLogger.info(DebugLogger.LogType.ASYNC,
                         "[SHADOW] Shadow server ready (seed={}) (+{}ms)",
@@ -214,7 +221,7 @@ public final class ShadowServerRegistry {
                 .isClientSeedGenEnabled()) {
             return;
         }
-        ClientChunkPipeline pipeline = ClientChunkPipeline.getInstance();
+        ShadowClientApi pipeline = client();
         long deadline = System.currentTimeMillis() + SEED_WAIT_TIMEOUT_MS;
         while (pipeline.getServerSeed() == 0L
                 && !pipeline.isHassiumHandshakeDone()
@@ -361,10 +368,10 @@ public final class ShadowServerRegistry {
             parked = false;
             cancelIdleTimeout();
             io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager.resumeEncoding();
-            ClientChunkPipeline.getInstance().setShadowServerReady(true);
+            client().setShadowServerReady(true);
             // 会话级降级随重进清除：R1 单柱失败/误置 failed 会让 R2 OVD publish 恒 false
             // （test1 实证 ovdLoaded=0），park 复用不得继承上一会话的 failed。
-            ClientChunkPipeline.getInstance().setShadowServerFailed(false);
+            client().setShadowServerFailed(false);
             // resetStorage 会 resetCacheable()；park 实例仍持有自定义维 storage，
             // 必须重新 markCacheable，否则 R2 该维退回原版透传、缓存全 miss。
             for (String dim : s.storageDimensions()) {
@@ -385,7 +392,7 @@ public final class ShadowServerRegistry {
     public void failShadowServer() {
         synchronized (lock) {
             failed = true;
-            ClientChunkPipeline.getInstance().setShadowServerFailed(true);
+            client().setShadowServerFailed(true);
         }
         try {
             Minecraft mc = Minecraft.getInstance();
@@ -423,7 +430,7 @@ public final class ShadowServerRegistry {
             parked = true;
             unparkPermitted = false;
             epoch = parkEpoch.incrementAndGet();
-            ClientChunkPipeline.getInstance().setShadowServerReady(false);
+            client().setShadowServerReady(false);
         }
         DebugLogger.info(DebugLogger.LogType.ASYNC,
                 "[SHADOW] Parking shadow server for reuse (serverId={})", boundServerId);
@@ -492,7 +499,7 @@ public final class ShadowServerRegistry {
                 return;
             }
             previousShutdownComplete = false;
-            ClientChunkPipeline.getInstance().setShadowServerReady(false);
+            client().setShadowServerReady(false);
         }
         DebugLogger.info(DebugLogger.LogType.ASYNC, "[SHADOW] Shutting down shadow server (async save)");
         java.util.concurrent.CompletableFuture<Void> future = new java.util.concurrent.CompletableFuture<>();

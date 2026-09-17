@@ -1,5 +1,9 @@
 package io.github.limuqy.mc.hassium.shadow.server;
 
+import io.github.limuqy.mc.hassium.platform.client.ShadowClientApi;
+import io.github.limuqy.mc.hassium.platform.client.ShadowClientBridge;
+import io.github.limuqy.mc.hassium.platform.client.TraceOrigin;
+
 import io.github.limuqy.mc.hassium.shadow.storage.ShadowCacheEviction;
 import io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes;
 
@@ -80,6 +84,10 @@ import net.minecraft.util.Util;
  * </ul>
  */
 public final class SeedGenLevelCompat {
+
+    private static ShadowClientApi client() {
+        return ShadowClientBridge.get();
+    }
 
     private SeedGenLevelCompat() {}
 
@@ -264,8 +272,7 @@ public final class SeedGenLevelCompat {
 
     /** 解析主世界 stem：服务端 NBT 优先；失败回落 NORMAL 并硬关 SeedGen。 */
     private static LevelStem resolveOverworldStem(WorldLoader.DataLoadContext dataLoadContext) {
-        byte[] stemNbt = io.github.limuqy.mc.hassium.network.ClientChunkPipeline
-                .getInstance().getServerLevelStemNbt();
+        byte[] stemNbt = client().getServerLevelStemNbt();
         if (stemNbt != null && stemNbt.length > 0) {
             try {
                 FriendlyByteBuf buf = new FriendlyByteBuf(
@@ -363,8 +370,7 @@ public final class SeedGenLevelCompat {
     /** SeedGen 已协商开启时硬关（仍可缓存）；未开启则无事。 */
     private static void disableSeedGenIfEnabled(String reason) {
         try {
-            io.github.limuqy.mc.hassium.network.ClientChunkPipeline pipeline =
-                    io.github.limuqy.mc.hassium.network.ClientChunkPipeline.getInstance();
+            ShadowClientApi pipeline = client();
             if (pipeline.isServerSeedGenEnabled() && !pipeline.isSeedGenHardDisabled()) {
                 pipeline.disableSeedGen(reason);
             }
@@ -433,8 +439,7 @@ public final class SeedGenLevelCompat {
         java.util.LinkedHashMap<ResourceKey<LevelStem>, LevelStem> extra = new java.util.LinkedHashMap<>();
         java.util.List<String> serverDims;
         try {
-            serverDims = io.github.limuqy.mc.hassium.network.ClientChunkPipeline
-                    .getInstance().getServerDimensionIds();
+            serverDims = client().getServerDimensionIds();
         } catch (Throwable t) {
             return extra;
         }
@@ -525,8 +530,7 @@ public final class SeedGenLevelCompat {
      * 存档名固定为 "world"，最终目录 = {@code hassium_cache/<serverId>/world}。
      */
     static Path resolveShadowWorldRoot() {
-        io.github.limuqy.mc.hassium.network.ClientChunkPipeline pipeline =
-                io.github.limuqy.mc.hassium.network.ClientChunkPipeline.getInstance();
+        ShadowClientApi pipeline = client();
         java.nio.file.Path gameDir = pipeline.getGameDir();
         String serverId = pipeline.getServerId();
         if (gameDir == null) {
@@ -538,7 +542,7 @@ public final class SeedGenLevelCompat {
             migratePendingWorld(cacheRoot, serverId);
             return cacheRoot.resolve(serverId);
         }
-        String serverIp = io.github.limuqy.mc.hassium.cache.client.ClientLifecycleHelper.currentServerIp();
+        String serverIp = client().currentServerIp();
         if (serverIp != null && !serverIp.isBlank()) {
             return cacheRoot.resolve(
                     "pending-" + io.github.limuqy.mc.hassium.utils.ServerIdUtil.sanitize(serverIp));
@@ -699,7 +703,7 @@ public final class SeedGenLevelCompat {
             io.github.limuqy.mc.hassium.server.RuntimeServerContext
                     .clearShadowServerIfCurrentGeneration(shadowGeneration);
             io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes.clear();
-            io.github.limuqy.mc.hassium.network.sectiondelta.SectionDeltaSnapshots.clear();
+            io.github.limuqy.mc.hassium.protocol.sectiondelta.SectionDeltaSnapshots.clear();
             // 热度索引内存态清空（磁盘 heat.idx 已随 saveAll 落盘，重连装配时重新加载）
             ShadowCacheEviction.reset();
         }

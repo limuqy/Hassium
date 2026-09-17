@@ -1,5 +1,9 @@
 package io.github.limuqy.mc.hassium.shadow.track;
 
+import io.github.limuqy.mc.hassium.platform.client.ShadowClientApi;
+import io.github.limuqy.mc.hassium.platform.client.ShadowClientBridge;
+import io.github.limuqy.mc.hassium.platform.client.TraceOrigin;
+
 import io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer;
 import io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry;
 import io.github.limuqy.mc.hassium.shadow.server.ShadowWorldgenExecutor;
@@ -14,7 +18,7 @@ import io.github.limuqy.mc.hassium.compat.LevelCompat;
 import io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat;
 import io.github.limuqy.mc.hassium.compat.ShadowPlayerCompat;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
-import io.github.limuqy.mc.hassium.network.ShadowPullClient;
+import io.github.limuqy.mc.hassium.protocol.ShadowPullClient;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import io.github.limuqy.mc.hassium.utils.DimensionKey;
 import net.minecraft.client.Minecraft;
@@ -38,6 +42,10 @@ import net.minecraft.world.level.ChunkPos;
  * ChunkMap 语义一致）。
  */
 public final class ShadowTrackingSession {
+
+    private static ShadowClientApi client() {
+        return ShadowClientBridge.get();
+    }
 
     private static final ShadowTrackingSession INSTANCE = new ShadowTrackingSession();
 
@@ -704,10 +712,10 @@ public final class ShadowTrackingSession {
         lastChunkTickMs = 0L;
         appliedViewDistance = -1;
         SmokeChunkTrace.reset();
-        io.github.limuqy.mc.hassium.cache.client.ChunkMeshCompileLog.reset();
+        client().resetMeshCompileLog();
         ShadowLightCompute.onClientDimensionChanged();
         ShadowPullClient.onClientDimensionChanged();
-        io.github.limuqy.mc.hassium.network.ClientChunkHandler.onDimensionChanged();
+        client().onDimensionChanged();
     }
 
     /** teleport 失败时拆掉旧虚拟玩家，按 {@link #ensureVirtualPlayer} 在目标维度重坐。 */
@@ -1191,7 +1199,7 @@ public final class ShadowTrackingSession {
         // scheduleChunkLoad 悬置 holder 永不完成（R2 landed 只有 71 的根因之一）。
         VanillaAlignedChunkProvider.clearAll();
         ShadowChunkMapCompat.clearSuspendedLoads();
-        io.github.limuqy.mc.hassium.network.ShadowPullClient.clearPullFailure(null, null);
+        io.github.limuqy.mc.hassium.protocol.ShadowPullClient.clearPullFailure(null, null);
         ShadowTicketDriver.requestClear();
         s.ovdCounted.clear();
         s.ovdMissCounted.clear();

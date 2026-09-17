@@ -1,11 +1,28 @@
 package io.github.limuqy.mc.hassium.network;
 
 import io.github.limuqy.mc.hassium.Constants;
+import io.github.limuqy.mc.hassium.client.ClientActivation;
 import io.github.limuqy.mc.hassium.compat.HassiumChannels;
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
-import io.github.limuqy.mc.hassium.network.handshake.LoginHandshake;
-import io.github.limuqy.mc.hassium.network.handshake.PlayInitClient;
+import io.github.limuqy.mc.hassium.protocol.AggregationDecodeQueue;
+import io.github.limuqy.mc.hassium.protocol.AggregationReadyPayload;
+import io.github.limuqy.mc.hassium.protocol.DictionaryManager;
+import io.github.limuqy.mc.hassium.protocol.HassiumAggregationManager;
+import io.github.limuqy.mc.hassium.protocol.HassiumConnectionRegistry;
+import io.github.limuqy.mc.hassium.protocol.IndexSyncManager;
+import io.github.limuqy.mc.hassium.protocol.PayloadHandlers;
+import io.github.limuqy.mc.hassium.protocol.PreHandshakeHelloPayload;
+import io.github.limuqy.mc.hassium.protocol.PreHandshakePayload;
+import io.github.limuqy.mc.hassium.protocol.PreHandshakeProtocol;
+import io.github.limuqy.mc.hassium.protocol.ShadowPullHandler;
+import io.github.limuqy.mc.hassium.protocol.ShadowPullRequestC2SPacket;
+import io.github.limuqy.mc.hassium.protocol.ShadowPullRequestLedger;
+import io.github.limuqy.mc.hassium.protocol.ShadowPullResponseS2CPacket;
+import io.github.limuqy.mc.hassium.protocol.ShadowPullServer;
+import io.github.limuqy.mc.hassium.protocol.handshake.LoginHandshake;
+import io.github.limuqy.mc.hassium.protocol.handshake.PlayInitClient;
+import io.github.limuqy.mc.hassium.server.ServerHandshakeActivation;
 import io.github.limuqy.mc.hassium.platform.services.INetworkManagerService;
 import net.minecraft.network.Connection;
 import net.minecraft.network.FriendlyByteBuf;
@@ -299,7 +316,7 @@ public class ForgeNetworkManager implements INetworkManagerService {
                 instanceof net.minecraft.server.network.ServerConfigurationPacketListenerImpl configListener) {
             playerId = io.github.limuqy.mc.hassium.compat.PlayerCompat.getProfileId(configListener.getOwner());
         }
-        io.github.limuqy.mc.hassium.network.PreHandshakeProtocol.handlePreHandshake(playerId, msg, ctx.getConnection());
+        io.github.limuqy.mc.hassium.protocol.PreHandshakeProtocol.handlePreHandshake(playerId, msg, ctx.getConnection());
     }
 
     private static void sendToPlayer(ServerPlayer player, Object msg) {
@@ -360,7 +377,7 @@ public class ForgeNetworkManager implements INetworkManagerService {
         if (!ready || player == null) {
             return;
         }
-        io.github.limuqy.mc.hassium.network.handshake.ServerHandshakeActivation.handleActivationReady(player);
+        io.github.limuqy.mc.hassium.server.ServerHandshakeActivation.handleActivationReady(player);
     }
 
 #if MC_VER >= MC_1_21_1
@@ -688,7 +705,7 @@ public class ForgeNetworkManager implements INetworkManagerService {
 #endif
             LOGGER.info("Hassium: Sent play init to {} (caps={}, dims={})",
                     player.getName().getString(),
-                    io.github.limuqy.mc.hassium.network.handshake.LoginHandshake.describeCaps(negotiatedCaps),
+                    io.github.limuqy.mc.hassium.protocol.handshake.LoginHandshake.describeCaps(negotiatedCaps),
                     dimensionIds != null ? dimensionIds.size() : 0);
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to send play init to {}", player.getName().getString(), e);

@@ -236,8 +236,8 @@ public class HassiumConfigService {
         if (!isHassiumEngineEnabled()) {
             return false;
         }
-        io.github.limuqy.mc.hassium.network.ClientChunkPipeline pipeline =
-                io.github.limuqy.mc.hassium.network.ClientChunkPipeline.getInstance();
+        io.github.limuqy.mc.hassium.client.ClientChunkPipeline pipeline =
+                io.github.limuqy.mc.hassium.client.ClientChunkPipeline.getInstance();
         return pipeline.isHassiumHandshakeDone() && !pipeline.isShadowServerFailed();
     }
     public int getCompressionLevel() {

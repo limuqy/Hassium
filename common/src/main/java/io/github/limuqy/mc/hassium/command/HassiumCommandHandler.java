@@ -264,7 +264,7 @@ public class HassiumCommandHandler {
         if (serverIp != null && !serverIp.isEmpty()) {
             cacheId = sanitizeServerIp(serverIp);
         } else {
-            String serverId = io.github.limuqy.mc.hassium.network.ClientChunkPipeline.getInstance().getServerId();
+            String serverId = io.github.limuqy.mc.hassium.client.ClientChunkPipeline.getInstance().getServerId();
             if (serverId == null) {
                 return Component.translatable("hassium.command.export.no_connection");
             }

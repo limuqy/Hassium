@@ -6,7 +6,7 @@ import io.github.limuqy.mc.hassium.shadow.server.ShadowChunkPersistenceRole;
 import io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession;
 import io.github.limuqy.mc.hassium.shadow.track.ShadowChunkSource;
 
-import io.github.limuqy.mc.hassium.network.ClientChunkHandler.TraceOrigin;
+import io.github.limuqy.mc.hassium.platform.client.TraceOrigin;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import net.minecraft.world.level.ChunkPos;
 
