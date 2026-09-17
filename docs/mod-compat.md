@@ -12,6 +12,7 @@
 | Immersive Portals | **不兼容** |
 | 同类压缩 / 协议替换（改 Netty Zlib 等） | **不兼容**；Hassium 通道压缩虽不触碰 vanilla 压缩层，但同类 mod 若替换原版压缩管线仍有冲突面 |
 | Starlight / ScalableLux | **主动兼容**（见 §7b）：光照引擎被整体替换，影子端 4 处控制面已适配 |
+| Twilight Forest | **主动兼容**（见 §7c）：自定义维装配 + 影子端写入全局 `currentServer` 供 TF `getOverworldSeed` |
 | 包聚合导致第三方包异常 | 关 `master.enablePacketAggregation`，或把**第三方**包 ID 加入 `master.compressionBlacklist`（Hassium 控制面已硬编码排除，与本列表无关） |
 | 反透视（改 chunk 发包内容） | **希望兼容**（miss 路径复用已构建包字节，见 §3） |
 | Distant Horizons / Voxy | **希望兼容**（独立 LOD 通道；见 §4） |
@@ -154,6 +155,22 @@ C2ME 与 Hassium 是「加速器与用户」关系：Hassium 影子端的 worldg
 ScalableLux 另引入 FlowSched 多线程算光，批处理多柱时收益更明显。
 
 **逃生：** `chunk.enabled = false`（全程原版路径，含原版光照）。
+
+## 7c. Twilight Forest
+
+TF 自定义维 `twilightforest:twilight_forest` 经 `SeedGenLevelCompat.resolveCustomDimensionStems`
+本地 LEVEL_STEM 装配进影子端；`ModResourcePackCreator` 挂载见 chunk-cache 手记。
+
+**seedGen 本地生成与 `WorldUtil.getOverworldSeed`**：TF Fabric 经 Porting Lib
+`ServerLifecycleHooks.getCurrentServer()`（NeoForge 同名 hooks）取主世界种子。原版集成服由
+`SERVER_STARTING` / `handleServerAboutToStart` 写入该静态槽；影子端 `initServer` 直接调用、
+不走 `runServer`，多人客户端槽位恒为 null → `requireNonNull` NPE（HollowTree 等结构生成）。
+
+Hassium 在 `SeedGenLevelCompat.assembleShadowServer` / `shutdown` 经
+`compat.ServerLifecycleHooksCompat` **只写/清**该槽（空槽才写，不覆盖真服；不 fire 生命周期
+事件）。冒烟：`tf` 场景 + `chunk.seedGenEnabled=true`，见 `1.21.1_fabric_I_tf_seedgen_re1`。
+
+**逃生：** `chunk.seedGenEnabled = false`（TF 维退化为 pull，不本地生成）。
 
 ## 8. 服务端备份
 

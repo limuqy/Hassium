@@ -205,6 +205,10 @@ public final class SeedGenLevelCompat {
         ShadowSeedServer server = ShadowSeedServer.create(
                 Thread.currentThread(), access, repo, stem, seed, worldRoot);
         server.initServer();
+        // 镜像集成服：把影子实例写入加载器全局 currentServer 槽（仅空槽）。
+        // TF 等 mod 的 getOverworldSeed() 经 requireNonNull(getCurrentServer()) 取种子，
+        // 多人客户端无真服时槽为 null → 影子 worldgen NPE（见 ServerLifecycleHooksCompat）。
+        io.github.limuqy.mc.hassium.compat.ServerLifecycleHooksCompat.adoptCurrentServer(server);
         // 装配成功的维度进缓存白名单（三主维度 + 本地 resolve 的自定义维度）
         for (net.minecraft.server.level.ServerLevel lvl : server.getAllLevels()) {
             String dim = ShadowSeedServer.dimensionId(lvl);
@@ -684,6 +688,9 @@ public final class SeedGenLevelCompat {
         // 持久世界目录保留（重连复用）；复位影子上下文与 hash 桥——仅当代际未变
         // （关停期间无新影子端接管）时执行，防止异步关停清掉新会话的存储 gate /
         // hash 表 / 热度索引（T5cShadowReady 并发创建设计下的数据损坏根因）。
+        // 与 NeoForge expectServerStopped 对齐：槽仍指向本影子实例时清空；
+        // 不覆盖集成服/专用服真服。放在代际复位之外——新会话接管前旧槽必须让出。
+        io.github.limuqy.mc.hassium.compat.ServerLifecycleHooksCompat.releaseCurrentServer(server);
         if (io.github.limuqy.mc.hassium.server.RuntimeServerContext
                 .getShadowGeneration() == shadowGeneration) {
             io.github.limuqy.mc.hassium.server.RuntimeServerContext
