@@ -63,7 +63,7 @@ public class MixinMinecraftServer {
      */
     @Inject(method = "tickServer", at = @At("HEAD"))
     private void hassium$onServerTickStart(BooleanSupplier hasTimeLeft, CallbackInfo ci) {
-        io.github.limuqy.mc.hassium.network.entity.EntityUpdatePacing.onServerTickStart((MinecraftServer) (Object) this);
+        io.github.limuqy.mc.hassium.server.entity.EntityUpdatePacing.onServerTickStart((MinecraftServer) (Object) this);
     }
 
     // review-fix: T7-59: handler 统一加 hassium$ 前缀（Mixin 惯例，避免与目标类未来同名成员 merge 冲突）
@@ -122,7 +122,7 @@ public class MixinMinecraftServer {
         PlayerCompressionTracker.clear();
         Constants.LOG.info("Hassium: PlayerCompressionTracker cleared");
         // 清理实体降帧引擎状态（密度索引 / 每连接实体包计数）
-        io.github.limuqy.mc.hassium.network.entity.EntityUpdatePacing.clear();
+        io.github.limuqy.mc.hassium.server.entity.EntityUpdatePacing.clear();
         RuntimeServerContext.setActiveServer(null);
     }
 }

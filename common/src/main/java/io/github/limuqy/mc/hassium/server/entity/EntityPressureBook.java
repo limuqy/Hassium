@@ -1,4 +1,4 @@
-package io.github.limuqy.mc.hassium.network.entity;
+package io.github.limuqy.mc.hassium.server.entity;
 
 import java.util.Collection;
 import java.util.HashMap;

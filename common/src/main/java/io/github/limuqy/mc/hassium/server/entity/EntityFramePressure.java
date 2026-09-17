@@ -1,4 +1,4 @@
-package io.github.limuqy.mc.hassium.network.entity;
+package io.github.limuqy.mc.hassium.server.entity;
 
 /**
  * 实体包背压的纯逻辑（无 Minecraft 类型）：按「最忙玩家当帧的实体包数 / 配额」闭环调整降帧压力档。

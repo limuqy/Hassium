@@ -1,4 +1,4 @@
-package io.github.limuqy.mc.hassium.network;
+package io.github.limuqy.mc.hassium.metrics;
 
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import org.junit.jupiter.api.Test;

@@ -1,4 +1,4 @@
-package io.github.limuqy.mc.hassium.network.entity;
+package io.github.limuqy.mc.hassium.server.entity;
 
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;

@@ -1,4 +1,4 @@
-package io.github.limuqy.mc.hassium.network.entity;
+package io.github.limuqy.mc.hassium.server.entity;
 
 /**
  * 实体更新降帧的纯逻辑（无 Minecraft 类型）：把「每实体每 tick 每连接」的实体包按观察距离分档，

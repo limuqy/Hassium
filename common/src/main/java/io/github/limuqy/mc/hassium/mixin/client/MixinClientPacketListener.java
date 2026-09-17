@@ -83,8 +83,8 @@ public class MixinClientPacketListener {
             return;
         }
         this.hassium$recordNativeChunk = false;
-        io.github.limuqy.mc.hassium.network.NativeChunkMetrics.recordAppliedFullChunk(
-                io.github.limuqy.mc.hassium.network.NativeChunkMetrics.currentDimension(),
+        io.github.limuqy.mc.hassium.metrics.NativeChunkMetrics.recordAppliedFullChunk(
+                io.github.limuqy.mc.hassium.metrics.NativeChunkMetrics.currentDimension(),
                 this.hassium$nativeChunkX, this.hassium$nativeChunkZ, this.hassium$nativeChunkPayloadBytes);
     }
 

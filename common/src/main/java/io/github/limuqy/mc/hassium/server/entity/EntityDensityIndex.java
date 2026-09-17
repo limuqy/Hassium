@@ -1,4 +1,4 @@
-package io.github.limuqy.mc.hassium.network.entity;
+package io.github.limuqy.mc.hassium.server.entity;
 
 import it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 

@@ -180,6 +180,19 @@ io.github.limuqy.mc.hassium.shadow
 
 `scripts/tmp_*.py` **已删除**（glob 0）【已验证】。
 
+### 1.11 entity / NativeChunkMetrics 归属（2026-09-18）
+
+| 类 | 目标包 | 依据 |
+|----|--------|------|
+| `NativeChunkMetrics` | `hassium.metrics` | 原版路径指标收口，写 `NetworkStats`/`SmokeChunkTrace`；调用方仅 client mixin |
+| `network.entity.*`（6） | `hassium.server.entity` | `master.entity*` 服务端降帧；依赖 `server.ServerNetworkGate` / `RuntimeServerContext`；mixin.server 调用 |
+
+测试：`NativeChunkMetricsTest` → `metrics`；`Entity*Test` → `server.entity`。common `network/` **空删**。
+
+【已验证】`common`+`fabric`+`common:test`+`forge` `@1.20.1` BUILD SUCCESSFUL；`common`+`fabric`+`neoforge` `@1.21.11` BUILD SUCCESSFUL。
+
+**未验证**：entity 降帧运行时冒烟（classic 不覆盖 `master.entity*` 行为）。
+
 ## 2. 建议后续包结构（主线迁包已完成）
 
 ```text
@@ -229,11 +242,11 @@ mixin 子包变更必须同步：
 
 **主线状态**：shadow / client / server / protocol / mixin 子包 **均已落地**（§1.4–§1.9）。
 
-### 2.3 network 顶层未归类（迁 protocol 前需定归属）
+### 2.3 network 顶层未归类（主线已清空）
 
-`NativeChunkMetrics` + `network.entity.*`（6）
+**已完成（§1.11）**：`NativeChunkMetrics` → `hassium.metrics`；`network.entity.*` → `hassium.server.entity`。
 
-（协议类已在 `hassium.protocol`；`Server*` 在 `server`；`Client*` 在 `client`。）
+common 下 **无** `network` 源码目录（loader 侧仍有 `fabric/forge/neoforge` 的 `network` 包装 `*NetworkManager`）。
 
 ### 2.4 脚本残留
 

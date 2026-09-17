@@ -1,6 +1,6 @@
 package io.github.limuqy.mc.hassium.mixin.server;
 
-import io.github.limuqy.mc.hassium.network.entity.EntityUpdatePacing;
+import io.github.limuqy.mc.hassium.server.entity.EntityUpdatePacing;
 import net.minecraft.server.level.ServerEntity;
 import net.minecraft.world.entity.Entity;
 import org.objectweb.asm.Opcodes;

@@ -1,6 +1,6 @@
 package io.github.limuqy.mc.hassium.config;
 
-import io.github.limuqy.mc.hassium.network.entity.EntityUpdateTiering;
+import io.github.limuqy.mc.hassium.server.entity.EntityUpdateTiering;
 
 import java.util.ArrayList;
 import java.util.List;
