@@ -666,9 +666,11 @@ public final class ShadowLightCompute {
     }
 
     /**
-     * 可复用引擎光：{@code isLightCorrect} 且引擎层已安装。
-     * {@code isLightCorrect} 可能先于异步层安装；单独用它会打出空光整柱，
-     * 把客户端已亮打回 {@code skyTop=0}（飞行黑块）。
+     * 可复用引擎光：{@code isLightCorrect} + 层已安装 + 引擎有非 0 光。
+     * <p>
+     * <b>不得</b>用「地表 sky≥15」作 REUSE 门：那会把大量本可复用的柱打成重算，
+     * 齐套门控下 gen 队列只增不减 → 回程整片不落地（align5 loaded 612 vs 正常 ~1530）。
+     * 地表 ≥15 只用于**落盘 isLightOn**（{@code persistAfterClientLightPush}）。
      */
     static boolean isLightReusable(ShadowSeedServer server, ChunkPos pos,
                                    net.minecraft.world.level.chunk.LevelChunk chunk) {
@@ -681,8 +683,6 @@ public final class ShadowLightCompute {
         if (!server.isChunkLightComplete(pos, chunk)) {
             return false;
         }
-        // 空 DataLayer（INITIALIZE_LIGHT 全 0）也会通过 isChunkLightComplete；
-        // 必须再验引擎里确实有非 0 光，否则 REUSE 打出 skyTop=0 黑柱。
         return server.hasUsableEngineLight(pos, chunk);
     }
 
@@ -1589,8 +1589,8 @@ public final class ShadowLightCompute {
         try {
             // 整柱交付收敛停车门（与 pushReady 同一语义，见 shouldParkFullDelivery）。
             long publishKey = DimensionKey.key(dimension, pos.x, pos.z);
-            if (shouldParkFullDelivery(publishKey, level)) {
-                parkFullDelivery(publishKey, chunk, level, true, false, origin);
+            if (shouldParkFullDelivery(publishKey, chunk, level)) {
+                parkFullDelivery(publishKey, chunk, level, true, false, origin, 0);
                 return;
             }
             runBuildOnShadowMain(pos, () -> {
@@ -2334,8 +2334,8 @@ public final class ShadowLightCompute {
         // 收敛停车门（flyrt7 实证）：引擎仍有在途光工作时不打包整柱——重算/邻柱收紧窗口里的
         // 半成品层会被 wire 掩码放行（「有非 0 值但整体偏暗」）当权威值下发，正是已持柱被打黑的
         // 整柱路径。standing 首包豁免（进服加载屏不等待）。
-        if (!standingPreview && shouldParkFullDelivery(key, level)) {
-            parkFullDelivery(key, chunk, level, converged, renderOnly, traceOrigin);
+        if (!standingPreview && shouldParkFullDelivery(key, chunk, level)) {
+            parkFullDelivery(key, chunk, level, converged, renderOnly, traceOrigin, 0);
             return;
         }
         // P1（T7）：buildPacket 读注入 chunk section 容器（extractChunkData →
@@ -2470,12 +2470,15 @@ public final class ShadowLightCompute {
 
     /** 停车时长上限：引擎持续忙时超时照旧打包（= 现状行为 + ≤1s 延迟），防饿死。 */
     private static final long FULL_DELIVERY_PARK_TIMEOUT_MS = 1_000L;
+    /** 收敛后地表仍未就绪时的续停次数上限（每次 kick relight + 1s），超出强制打包防饿死。 */
+    private static final int MAX_SURFACE_PARK_ATTEMPTS = 3;
+    private static final long SURFACE_PARK_EXTEND_MS = 1_000L;
 
     private record ParkedFullDelivery(long key,
                                       net.minecraft.world.level.chunk.LevelChunk chunk,
                                       net.minecraft.server.level.ServerLevel level,
                                       boolean converged, boolean renderOnly, TraceOrigin traceOrigin,
-                                      Long applyEpochAtPark, long deadlineMs) {
+                                      Long applyEpochAtPark, long deadlineMs, int surfaceAttempts) {
     }
 
     /**
@@ -2486,8 +2489,15 @@ public final class ShadowLightCompute {
     private static final ConcurrentHashMap<Long, ParkedFullDelivery> PARKED_FULL_DELIVERIES =
             new ConcurrentHashMap<>();
 
-    /** 引擎有在途光工作时整柱包不得打包（半成品层会被当权威值下发）。 */
+    /**
+     * 引擎有在途光工作时整柱包不得打包（半成品层会被当权威值下发）。
+     * <p>
+     * <b>不要</b>在此叠加「地表 sky≥15」：会与齐套门控/recompute 叠加把 gen 堵死，
+     * 回程大片空洞。地表门只管落盘；交付只等 {@code isLightConverged}（对齐原版
+     * light() future），假收敛残余由光桥 no-downgrade + 后续整柱兜底。
+     */
     private static boolean shouldParkFullDelivery(long key,
+                                                  net.minecraft.world.level.chunk.LevelChunk chunk,
                                                   net.minecraft.server.level.ServerLevel level) {
         ShadowSeedServer server = ShadowServerRegistry.getInstance().get();
         if (server == null || level == null) {
@@ -2500,16 +2510,20 @@ public final class ShadowLightCompute {
                                          net.minecraft.world.level.chunk.LevelChunk chunk,
                                          net.minecraft.server.level.ServerLevel level,
                                          boolean converged, boolean renderOnly,
-                                         TraceOrigin traceOrigin) {
+                                         TraceOrigin traceOrigin, int surfaceAttempts) {
+        long deadline = System.currentTimeMillis()
+                + Math.max(FULL_DELIVERY_PARK_TIMEOUT_MS, SURFACE_PARK_EXTEND_MS);
         PARKED_FULL_DELIVERIES.put(key, new ParkedFullDelivery(key, chunk, level, converged,
-                renderOnly, traceOrigin, shadowApplyEpochs.get(key),
-                System.currentTimeMillis() + FULL_DELIVERY_PARK_TIMEOUT_MS));
+                renderOnly, traceOrigin, shadowApplyEpochs.get(key), deadline, surfaceAttempts));
         noteFullDeliveryParked(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
     }
 
     /**
-     * 帧首冲刷：收敛或超时的条目打包交付；停车期间该柱已有更新的整柱包落地
+     * 帧首冲刷：收敛且地表就绪、或超时的条目打包交付；停车期间该柱已有更新的整柱包落地
      * （apply epoch 变化）则丢弃防倒替。仍忙且未超时的条目留在表里下一帧再看。
+     * <p>
+     * 收敛后地表仍黑：在影子主循环 kick {@code relightChunk} 并续停（有上限），避免
+     * 「队列空 + 空层」的假收敛直接 emptyYMask 落地（flyroundtrip 回程 46 柱）。
      */
     private static void flushParkedFullDeliveries(ShadowSeedServer server) {
         if (PARKED_FULL_DELIVERIES.isEmpty()) {
@@ -2518,7 +2532,8 @@ public final class ShadowLightCompute {
         long now = System.currentTimeMillis();
         for (ParkedFullDelivery parked : List.copyOf(PARKED_FULL_DELIVERIES.values())) {
             boolean convergedNow = server != null && server.isLightConverged(parked.level());
-            if (!convergedNow && now < parked.deadlineMs()) {
+            boolean timedOut = now >= parked.deadlineMs();
+            if (!convergedNow && !timedOut) {
                 continue; // 引擎仍忙且未超时：留表待下帧
             }
             if (!PARKED_FULL_DELIVERIES.remove(parked.key(), parked)) {
@@ -2535,6 +2550,7 @@ public final class ShadowLightCompute {
             ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(parked.key()),
                     DimensionKey.chunkZOf(parked.key()));
             runBuildOnShadowMain(pos, () -> {
+                // 交付侧不再用 sky≥15 卡整柱（会造成 gen 堵塞空洞）；超时/收敛即打包。
                 ClientboundLevelChunkWithLightPacket packet = withChunkLock(pos,
                         () -> SeedGenChunkCodec.buildPacket(parked.chunk(), parked.level()));
                 offerReady(parked.key(), pos, packet, parked.converged(),
@@ -2565,9 +2581,25 @@ public final class ShadowLightCompute {
 
     private static void noteFullDeliveryTimedOut(long key) {
         timedOutFullDeliveries.incrementAndGet();
+        ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
         DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
                 "[SHADOW_LIGHT] Parked full delivery timed out ({}, {})",
-                DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
+                pos.x, pos.z);
+    }
+
+    /** 收敛后地表仍黑：kick relight 并续停（有上限）。 */
+    private static void noteFullDeliverySurfaceRepark(int x, int z, int attempt) {
+        DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+                "[SHADOW_LIGHT] Surface not ready, repark+relight ({}, {}) attempt={}",
+                x, z, attempt);
+    }
+
+    /** 续停次数用尽仍无地表光：强制打包（防饿死；可能仍黑，靠光桥/后续整柱）。 */
+    private static void noteFullDeliverySurfaceForced(int x, int z) {
+        timedOutFullDeliveries.incrementAndGet();
+        DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+                "[SHADOW_LIGHT] Surface light never ready, force pack ({}, {})",
+                x, z);
     }
 
     private static void noteFullDeliveryStaleDropped(long key) {
@@ -2779,6 +2811,9 @@ public final class ShadowLightCompute {
                 ClientChunkHandler.markChunkSectionsDirty(mc.level, chunkX, chunkZ);
             }
             ClientChunkHandler.probeChunkState(chunkPos, mc.level, "shadow");
+            // 整柱包自带光、通常无后续 LightUpdate：必须排队 post-apply 复检，
+            // 否则 darkRegression 只盯 source=light，回程空光整柱在门禁里不可见。
+            ClientChunkHandler.scheduleProbeRecheck(chunkPos);
             return true;
         }
         ClientChunkHandler.logShadowChunkApplyEvent("shadow_ignored", chunkPos, false, item.traceOrigin());

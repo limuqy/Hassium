@@ -114,7 +114,13 @@ public final class ScenarioEngine {
         // fly 是**非阻塞**原语（爬升 2s + 平飞 Ns 由 tick 泵推进，步骤立即 DONE）：
         // 紧跟其后的步骤会立刻执行并覆盖飞行。要真正飞完再走下一步，必须显式 wait 这段：
         // moveWaitMs = 爬升 2s + 平飞 Ns + 4s 余量（flyroundtrip 等移动场景用）。
-        vars.put("moveWaitMs", Long.toString(moveSeconds * 1000L + 6_000L));
+        // moveSeconds=0 时 fly 空操作，wait 必须为 0，避免 classic 每场白等 6s。
+        vars.put("moveWaitMs", Long.toString(
+                moveSeconds <= 0L ? 0L : moveSeconds * 1000L + 6_000L));
+        // classic 真卸载：远离后需覆盖 ShadowTrackingSession.RECLAIM_GRACE_MS(6s)
+        // 才能把出生点柱 flush+摘注入表；默认 10s，可用 hassium.smokeTest.reclaimWaitMs 覆盖。
+        vars.put("reclaimWaitMs", Long.toString(parseLong(
+                System.getProperty("hassium.smokeTest.reclaimWaitMs"), 10_000L)));
         vars.put("host", host);
 
         steps = ScenarioStep.parse(lines, vars);

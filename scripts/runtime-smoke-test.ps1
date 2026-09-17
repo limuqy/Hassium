@@ -531,6 +531,14 @@ if ($CleanWorld) {
     New-Item -ItemType Directory -Force -Path (Join-Path $serverLevelDir "serverconfig") -ErrorAction SilentlyContinue | Out-Null
 } else {
     Write-Host "[$SessionId] [3/9] 跳过存档清理（复用已有 $serverLevelName）"
+    # 复用存档上的 random_sequences.dat 可能是残缺/异版本写入：1.20.1 RandomSequences.load
+    # 对 Optional.get 抛 NoSuchElementException 并打 4 条 ERROR（可恢复，vanilla 继续用空序列）。
+    # 删掉该文件让服务端重建，避免 log audit 把可恢复噪音判成 PROCESS_FATAL。
+    $randSeq = Join-Path $serverLevelDir "data/random_sequences.dat"
+    if (Test-Path $randSeq) {
+        Remove-Item -Force $randSeq -ErrorAction SilentlyContinue
+        Write-Host "[$SessionId] 已删除陈旧 data/random_sequences.dat（避免 RandomSequences.load ERROR）"
+    }
 }
 
 # 4. 释放 $ServerPort 端口：只杀「本工程 loom 服务端」占用者；他人进程（其他会话/项目）
@@ -854,6 +862,11 @@ $logAuditAllow = @(
     # 环境性网络噪音（外网不可达时的拉取失败，与模组功能无关）
     "Yggdrasil Key Fetcher.*Failed to request yggdrasil public key",
     "Mod Menu/Update Checker.*Error checking for "   # updates / versions 等消息变体（外网不可达，环境噪音）
+    # 1.20.1 复用存档：RandomSequences.load Optional.get 失败可恢复（空序列继续跑）；
+    # 脚本已删陈旧 dat，此处兜底防竞态/多 loader 并行。
+    "Failed to load random sequence",
+    # 复用存档可能残留 1.21+ structure id（trial_chambers）：1.20.1 打 ERROR 后跳过该 start，可恢复。
+    "Unknown structure start: minecraft:trial_chambers"
 ) + @($AllowErrorPatterns)
 $logAuditFailures = @()
 foreach ($auditLog in @($serverLog, $clientLog)) {

@@ -223,10 +223,13 @@ public class ClientChunkHandler {
             new java.util.concurrent.ConcurrentHashMap<>();
     private static final java.util.Set<Long> PROBE_EVER_LIT =
             java.util.concurrent.ConcurrentHashMap.newKeySet();
-    /** 待复检柱（去重）：光包探针即时读数是光队列 flush 前的旧值，只排队；下一帧 drainReady
-     *  首部 {@link #runProbeRecheck} 按 post-apply 真值采样并写判定状态。 */
-    private static final java.util.Map<Long, ChunkPos> PROBE_PENDING_RECHECK =
+    /**
+     * 待复检柱：光/整柱落地后客户端光队列可能仍要 1～数帧才 flush，单帧复检会把
+     * 「尚未点亮」误判成回归。值 = 剩余复检帧数；仍黑则续排，亮了立即定稿。
+     */
+    private static final java.util.Map<Long, Integer> PROBE_PENDING_RECHECK =
             new java.util.concurrent.ConcurrentHashMap<>();
+    private static final int PROBE_RECHECK_MAX_FRAMES = 8;
 
     /** 「skyTop==0」采样总数（含「首次落地瞬态」，仅诊断）。 */
     public static long darkLightProbeSampleCount() {
@@ -269,21 +272,19 @@ public class ClientChunkHandler {
         }
     }
 
-    /** 光包探针后排队复检（去重）：判定状态（LAST_SKY / EVER_LIT 最终值）由复检写入。 */
-    static void scheduleProbeRecheck(ChunkPos pos) {
+    /** 光包/整柱 apply 后排队复检（去重续期）：判定状态由 {@link #runProbeRecheck} 写入。 */
+    public static void scheduleProbeRecheck(ChunkPos pos) {
         if (pos != null) {
-            PROBE_PENDING_RECHECK.put(pos.toLong(), pos);
+            PROBE_PENDING_RECHECK.put(pos.toLong(), PROBE_RECHECK_MAX_FRAMES);
         }
     }
 
     /**
-     * 帧首复检（{@code ShadowLightCompute.drainReady} 调用，客户端主线程）：对上一帧排队的柱
-     * 按 **post-apply** 真值采样并写判定状态。
+     * 帧首复检（{@code ShadowLightCompute.drainReady} 调用，客户端主线程）。
      * <p>
-     * vanilla {@code handleLightUpdatePacket} 只把光入队，队列出队在后续 client tick——探针
-     * 即时读数是旧值，首落地柱必然先采到一次 0（2026-09-16 flyrt11 的 3 个假阳性全属此类，
-     * 详见 handoff §7.1）。判定状态只由本方法写入：即时读数只用于观测计数
-     * （{@link #darkLightProbeSamples}）与「曾亮」标记（读到 >0 说明此刻或此前真亮过）。
+     * vanilla 光队列可能在 apply 后 1～数帧才 flush：单帧复检会把「尚未点亮」
+     * 记成回归。仍黑且还有剩余帧则续排；亮了立即写入 {@link #PROBE_EVER_LIT}
+     * 并定稿 {@link #PROBE_LAST_SKY}。
      */
     public static void runProbeRecheck(ClientLevel level) {
         if (PROBE_PENDING_RECHECK.isEmpty()) {
@@ -293,11 +294,14 @@ public class ClientChunkHandler {
             PROBE_PENDING_RECHECK.clear(); // 断连/切维竞态：旧维度的待复检全部作废
             return;
         }
-        for (java.util.Iterator<java.util.Map.Entry<Long, ChunkPos>> it =
+        for (java.util.Iterator<java.util.Map.Entry<Long, Integer>> it =
                 PROBE_PENDING_RECHECK.entrySet().iterator(); it.hasNext(); ) {
-            ChunkPos pos = it.next().getValue();
-            it.remove();
+            java.util.Map.Entry<Long, Integer> e = it.next();
+            long key = e.getKey();
+            int remaining = e.getValue();
+            ChunkPos pos = new ChunkPos(key);
             if (!level.getChunkSource().hasChunk(pos.x, pos.z)) {
+                it.remove();
                 continue; // 已卸载：由 onProbeChunkUnloaded 收口，不判
             }
             int bx = (pos.x << 4) + 8;
@@ -305,18 +309,35 @@ public class ClientChunkHandler {
             int minY = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinBlockY(level);
             int topY = level.getHeight(Heightmap.Types.WORLD_SURFACE, bx, bz);
             if (topY <= minY) {
-                continue; // 取样点无效（地表未就绪 / 基岩柱）
+                e.setValue(remaining - 1);
+                if (remaining - 1 <= 0) {
+                    it.remove();
+                }
+                continue; // 取样点无效：续排或放弃
             }
             String topBlock = level.getBlockState(new BlockPos(bx, topY, bz))
                     .getBlock().getDescriptionId();
             if (!"block.minecraft.air".equals(topBlock)) {
-                continue; // 高度图过期（topY 落在地面内）：不是黑块，是取样点错
+                e.setValue(remaining - 1);
+                if (remaining - 1 <= 0) {
+                    it.remove();
+                }
+                continue; // 高度图过期：续排
             }
             int skyTop = level.getBrightness(LightLayer.SKY,
                     new BlockPos(bx, topY + 1, bz));
-            PROBE_LAST_SKY.put(pos.toLong(), skyTop);
             if (skyTop > 0) {
-                PROBE_EVER_LIT.add(pos.toLong());
+                PROBE_LAST_SKY.put(key, skyTop);
+                PROBE_EVER_LIT.add(key);
+                it.remove();
+                continue;
+            }
+            // 仍黑：还有帧则续等光队列，否则定稿为黑
+            if (remaining - 1 > 0) {
+                e.setValue(remaining - 1);
+            } else {
+                PROBE_LAST_SKY.put(key, 0);
+                it.remove();
             }
         }
     }

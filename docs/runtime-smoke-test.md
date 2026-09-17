@@ -240,7 +240,7 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 
 | 场景文件 | 内容 | 门禁 |
 |----------|------|------|
-| `classic.scenario` | 两轮连服 VD 切换（join → R1 dump → disconnect → reconnect → R2 dump → exit），行为不变迁移自旧状态机 | classic 门禁（analyzer 全集）+ validateStats |
+| `classic.scenario` | 两轮连服 + **有基线真卸载**（join → settle → R1 dump → `tp ~400` → wait reclaim → disconnect → reconnect → `tp 0` → R2 dump → exit）。R1 后强制离开视距并覆盖 `RECLAIM_GRACE_MS`（默认 wait 10s，`hassium.smokeTest.reclaimWaitMs` 可调），使 R2 走「客户端卸载 + 注入表回收落盘 + 回出生点读缓存」而非 park 内存命中。`-MoveSeconds>0` 时在 tp 前仍可附加 fly | classic 门禁（analyzer 全集）+ validateStats |
 | `seedgen.scenario` | 单轮原版区块流冒烟（join → R1 dump → exit rounds=1）。需 profile=`seedgen` 覆盖影子端兼容配置 + 干净世界；门禁不再把已裁剪的 SeedGen 回退当必经路径 | `stats.clientAppliedChunkCount > 0`；`stats.clientLandedChunkCount > 0` |
 | `dimension.scenario` | 四轮切维冒烟：主世界 → 下界 → 末地 → 回主世界（单连接不断开）；中段轮 `gate=false`；整体 PASS 只看 R1 统计 + 各轮 assertProbe | 每轮 `joined` 且 `dimension` 正确；harness 另加 post-exit 三维度磁盘门禁 |
 | `modcompat.scenario` | 单轮，与 seedgen 同形。锚点刻意 **mod 无关**，供「带外部 mod」与「不带」两组对照跑分 | `stats.clientAppliedChunkCount > 0`、`stats.clientLandedChunkCount > 0` |

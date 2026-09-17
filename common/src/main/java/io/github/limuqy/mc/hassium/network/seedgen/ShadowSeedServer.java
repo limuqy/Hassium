@@ -757,6 +757,61 @@ public class ShadowSeedServer extends MinecraftServer {
     }
 
     /**
+     * 整柱包交付前的**列级地表光就绪**（对齐原版 {@code light()}：{@code setLightOn(true)}
+     * 只在 propagate 完成后才置位，从不把半成品当权威值发出）。
+     * <p>
+     * 判据 = 地表探针点（与客户端 skyTop 同点）**天光 ≥15**（开阔地表原版终值）
+     * 且 section 线上确有非 0；无天光维 block 光 &gt;0。不得只判 &gt;0——半成品
+     * 天光（3/8）会被当权威整柱发出，回程呈大片过暗/斑马纹。
+     * <p>
+     * 探针异常时返回 {@code false}（fail-closed：宁可停车也不发空光整柱）。
+     */
+    public boolean isColumnSurfaceLightReady(ChunkPos pos, LevelChunk chunk,
+                                             ServerLevel levelOverride) {
+        if (chunk == null || pos == null) {
+            return false;
+        }
+        try {
+            ServerLevel level = levelOverride != null ? levelOverride : chunkLevel(chunk);
+            if (level == null) {
+                return false;
+            }
+            net.minecraft.world.level.lighting.LevelLightEngine lightEngine =
+                    level.getChunkSource().getLightEngine();
+            int minBlockY = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinBlockY(level);
+            int highY = io.github.limuqy.mc.hassium.compat.LevelHeightCompat
+                    .getMaxBlockYExclusive(level) - 2;
+            int top;
+            net.minecraft.world.level.LightLayer layer;
+            if (level.dimensionType().hasSkyLight()) {
+                top = chunk.getHeight(Heightmap.Types.WORLD_SURFACE, 8, 8);
+                layer = net.minecraft.world.level.LightLayer.SKY;
+            } else {
+                top = chunk.getHeight(Heightmap.Types.MOTION_BLOCKING, 8, 8);
+                layer = net.minecraft.world.level.LightLayer.BLOCK;
+            }
+            int y = Math.min(Math.max(top + 1, minBlockY + 1), highY);
+            int sectionY = net.minecraft.core.SectionPos.blockToSectionCoord(y);
+            net.minecraft.world.level.chunk.DataLayer data =
+                    lightEngine.getLayerListener(layer)
+                            .getDataLayerData(net.minecraft.core.SectionPos.of(pos, sectionY));
+            // 与客户端探针同一点：地表上一格中心。
+            // 天光维：开阔地表原版必为 15；只判 >0 会把传播中间态（3/8/11…）
+            // 当权威整柱发出 → 回程「大片过暗 + 斑马纹」（邻柱收敛时刻交错）。
+            // 无天光维：block 光按 >0（火把/岩浆亮度本就不固定）。
+            int probe = lightEngine.getLayerListener(layer)
+                    .getLightValue(new BlockPos(
+                            pos.getMinBlockX() + 8, y, pos.getMinBlockZ() + 8));
+            if (level.dimensionType().hasSkyLight()) {
+                return probe >= 15 && SeedGenChunkCodec.hasWireLight(data);
+            }
+            return probe > 0 && SeedGenChunkCodec.hasWireLight(data);
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
      * 检查非空 section 的 block 光层，以及有天空光源 section 的 sky 光层。
      * {@code isLightCorrect} 可能先于异步 light engine 层安装完成，不能单独作为
      * R2 缓存光照复用条件。
@@ -1585,7 +1640,11 @@ public class ShadowSeedServer extends MinecraftServer {
      * @param unmountIdle 为 false 时不扫 region（卸载扫描应在整批结束后 {@link #unmountIdleStorage} 一次）
      */
     public boolean unloadChunk(String dimension, ChunkPos pos, LevelChunk chunk, boolean unmountIdle) {
-        if (!isLightConverged()) {
+        // 对齐原版 light()：propagate 未完成不得把 isLightOn 固化进 NBT。
+        // 全局 isLightConverged 不够——假收敛时队列空但地表仍 0，会写出 isLightOn=1+空光。
+        ServerLevel unloadLevel = level(dimension);
+        if (!isLightConverged(unloadLevel)
+                || !isColumnSurfaceLightReady(pos, chunk, unloadLevel)) {
             chunk.setLightCorrect(false);
             io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markLightDirty(dimension, pos);
         }
@@ -1708,20 +1767,19 @@ public class ShadowSeedServer extends MinecraftServer {
         io.github.limuqy.mc.hassium.storage.ShadowStorageHashes.markLightDirty(dimension, pos);
     }
 
-    /** 可见柱回传后的存储：收敛且引擎确有非 0 光 → {@code isLightOn}；否则半成品层。 */
+    /** 可见柱回传后的存储：收敛且地表确有非 0 光 → {@code isLightOn}；否则半成品层。 */
     public void persistAfterClientLightPush(LevelChunk chunk, boolean converged) {
         if (chunk == null) {
             return;
         }
         ChunkPos pos = chunk.getPos();
-        // hasCompleteLightLayers 只判 DataLayer 非 null：INITIALIZE 装上的全 0 空层
-        // 也会过。lightChunk future 完成 ≠ 有光；标 lightReady 会让 flush 写出
-        // isLightOn=1+空光，回程 diskNeedRelight=false 永不重算 = 出生点黑块。
-        if (converged && hasCompleteLightLayers(pos, chunk) && hasUsableEngineLight(pos, chunk)) {
+        // 对齐原版：isLightOn 只在 light() 完成后置位。地表未就绪（含高空短路误判）
+        // 绝不能写 isLightOn=1，否则回程 diskNeedRelight=false 永不续算 = 出生点黑块。
+        if (converged && hasCompleteLightLayers(pos, chunk)
+                && isColumnSurfaceLightReady(pos, chunk, null)) {
             syncLightCorrect(chunk, true);
             return;
         }
-        // future 完成不等于所有 section DataLayer 已安装；半成品绝不能写 isLightOn。
         persistPartialLight(chunk);
     }
 
@@ -1769,9 +1827,9 @@ public class ShadowSeedServer extends MinecraftServer {
         }
     }
     /**
-     * 已确认引擎收敛后，把所有可见且**引擎确有非 0 光**的柱标记为可安全复用。
+     * 已确认引擎收敛后，把所有可见且**地表确有非 0 光**的柱标记为可安全复用。
      * 这是异步 LIGHT future 回调之外的最终持久化收口。
-     * 不得只靠 hasCompleteLightLayers（空层非 null 也会过）——会把空光写成 isLightOn。
+     * 与原版 light() 完成语义对齐：不得用高空短路/空层判「已点亮」。
      */
     public void confirmLightsCorrectIfConverged() {
         for (Map.Entry<Long, LevelChunk> entry : injectedChunks.entrySet()) {
@@ -1783,7 +1841,7 @@ public class ShadowSeedServer extends MinecraftServer {
             }
             ChunkPos pos = chunk.getPos();
             boolean complete = hasCompleteLightLayers(pos, chunk)
-                    && hasUsableEngineLight(pos, chunk);
+                    && isColumnSurfaceLightReady(pos, chunk, null);
             if (complete && !chunk.isLightCorrect()) {
                 syncLightCorrect(chunk, true);
             } else if (!complete && chunk.isLightCorrect()) {
