@@ -321,7 +321,9 @@ public class ForgeNetworkManager implements INetworkManagerService {
 
     @Override
     public void sendShadowPullRequest(FriendlyByteBuf buf) {
-        LOGGER.info("[DIAG] sendShadowPullRequest called, CHANNEL={}, readable={}", CHANNEL != null ? "set" : "null",
+        io.github.limuqy.mc.hassium.utils.DebugLogger.info(
+                io.github.limuqy.mc.hassium.utils.DebugLogger.LogType.NETWORK,
+                "[DIAG] sendShadowPullRequest called, CHANNEL={}, readable={}", CHANNEL != null ? "set" : "null",
                 buf == null ? -1 : buf.readableBytes());
         if (buf == null) {
             return;

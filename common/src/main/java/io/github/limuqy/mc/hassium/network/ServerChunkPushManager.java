@@ -41,8 +41,6 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicLongArray;
 
 /**
  * 服务端区块推送管理器
@@ -599,32 +597,6 @@ public class ServerChunkPushManager {
 
     public static ServerChunkPushManager getInstance() {
         return INSTANCE;
-    }
-
-    /**
-     * 服务端推送管线计时诊断（R1 供给版本差异排查：1.20.1 80/s vs 1.21.x 32/s）。
-     * 每 256 块打印一次各段均值（build=主线程重建 packet / hash=pushPool 哈希 /
-     * encode=线格式编码 / send=压缩+发送），打印后清零。热路径仅加 Atomic 累加。
-     */
-    private static final int D_BUILD = 0, D_HASH = 1, D_ENCODE = 2, D_SEND = 3;
-    private static final AtomicLongArray DIAG_NS = new AtomicLongArray(4);
-    private static final AtomicLong DIAG_COUNT = new AtomicLong();
-
-    private static void diag(int slot, long ns) {
-        DIAG_NS.addAndGet(slot, ns);
-        long c = DIAG_COUNT.incrementAndGet();
-        if ((c & 0xFF) == 0L) {
-            Constants.LOG.info(
-                    "[SERVE-DIAG] chunks={} build={}ms hash={}ms encode={}ms send={}ms",
-                    c,
-                    String.format("%.2f", DIAG_NS.get(D_BUILD) / 1e6 / 256.0),
-                    String.format("%.2f", DIAG_NS.get(D_HASH) / 1e6 / 256.0),
-                    String.format("%.2f", DIAG_NS.get(D_ENCODE) / 1e6 / 256.0),
-                    String.format("%.2f", DIAG_NS.get(D_SEND) / 1e6 / 256.0));
-            for (int i = 0; i < 4; i++) {
-                DIAG_NS.set(i, 0L);
-            }
-        }
     }
 
     /**

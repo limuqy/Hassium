@@ -386,7 +386,8 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
             try {
                 ShadowPullRequestC2SPacket request = ShadowPullRequestC2SPacket.decode(buf);
                 server.execute(() -> {
-                    LOGGER.info("[SHADOW_PULL] server request player={} count={} epoch={}", player.getUUID(),
+                    DebugLogger.info(LogType.NETWORK,
+                            "[SHADOW_PULL] server request player={} count={} epoch={}", player.getUUID(),
                             request.entries().size(), request.epoch());
                     ShadowPullResponseS2CPacket response = ShadowPullServer.handleRequest(SHADOW_PULL_HANDLER, player, request);
                     FriendlyByteBuf out = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());

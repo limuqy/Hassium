@@ -229,7 +229,9 @@ public final class ShadowPullClient {
                 ? LevelCompat.getDimensionId(minecraft.level) : null;
         if (minecraft == null || minecraft.level == null
                 || !response.dimension().equals(clientDim)) {
-            Constants.LOG.info("[SHADOW_PULL] drop response dim={} client={}",
+            io.github.limuqy.mc.hassium.utils.DebugLogger.info(
+                    io.github.limuqy.mc.hassium.utils.DebugLogger.LogType.NETWORK,
+                    "[SHADOW_PULL] drop response dim={} client={}",
                     response.dimension(), clientDim);
             return;
         }
