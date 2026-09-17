@@ -40,7 +40,7 @@ A1-③ seedGen 开 + 有缓存
 **约束**
 
 1. compare **不得挡首投**：本地/真服数据一旦可交付，先交付；compare 仅作已交付后保鲜（S0 与本 handoff 对 A4 的合并口径）。  
-2. 「权威柱交付」= **含可用光的官方柱包**（与 B1 绑定；lightStrip 默认退出主路径后）。  
+2. 「权威柱交付」= **含可用光的官方柱包**（lightStrip 开：真服剥光 → 影子 LightEngine 算光后打包）。  
 3. 客户端 `hasClientApplyEpoch` **不作**选柱/是否交付的控制输入（A3）。
 
 ## 2. 审计清单（业务无关脱节点摘要）
@@ -65,13 +65,13 @@ A1-③ seedGen 开 + 有缓存
 
 | ID | 脱节点 | 本 handoff 动作 |
 |----|--------|-----------------|
-| B1 | lightStrip + 影子独占算光 | **改走原版职责**（M2） |
+| B1 | lightStrip + 影子算光 | **保留 lightStrip（核心，默认开）**；原版化=交付时序，不关剥光 |
 | B2 | 打包前空光/地表 park | 柱级 light 完成即打包（M2） |
 | B3 | 光桥等全局收敛 | 柱级就绪即发光包（M2） |
 | B4 | placeholder 空气壳 | 删除 |
 | B5 | `awaitEngineTaskDrain` 主线程风险 | 清理 |
 | B6 | 交付门口径不一 | 统一 `isDeliverableToClient` = ServerVD+余量（已部分落地） |
-| B7 | 客户端 shadow 光收集 | 与 B1 绑定：光随包，客户端原版光引擎 |
+| B7 | 客户端 shadow 光收集 | **保留** collectLightUpdate 配合 strip；首包光在官方柱包内 |
 
 ## 3. 本会话已落地代码（实现起点，非终态）
 
@@ -100,14 +100,14 @@ A1-③ seedGen 开 + 有缓存
 | A5 | 清理干净（与 A1 绑定） |
 | A6 | 清无用注释 |
 | A9 | 生命周期：**load 走 Hassium，unload 仍原版 Forget**；供给侧由 A1 保证对称，不 cancel Forget |
-| B1 | 光照 **走原版逻辑** |
+| B1 | **保留 lightStrip**（核心省带宽）；原版化 = 打包/交付时序，不是关剥光 |
 | B2/B3 | 打包/光桥 **改原版节奏**（柱级完成即发） |
 | B4 | placeholder **不要** |
 | B5 | 清理 `awaitEngineTaskDrain` |
 | B6 | 统一交付门口径 |
-| B7 | 原版职责：光随包，客户端原版光 |
+| B7 | **保留**影子 light 收集以配合 strip；官方柱包内带光 |
 
-**对 S0 的修订**：S0 写「继续 lightStrip」；**本 handoff 以用户 B1 为准**，M2 默认光走原版、strip 退出主路径（可留配置开关，默认关/对齐原版）。
+**对 S0 的修订**：S0「继续 lightStrip」**仍然有效**；本 handoff 曾误读 B1 为关剥光，已更正——**lightStrip 默认开**，原版化只作用于交付时序（B2/B3）与占位/排水清理（B4/B5）。
 
 ## 5. 优先级与里程碑
 
@@ -128,7 +128,7 @@ A1-③ seedGen 开 + 有缓存
 |----|------|------|
 | P1.1 | B2：柱级 light 完成即打包 | 无空光长期 requeue 挡首包 |
 | P1.2 | B3：柱级光就绪即发光包 | `Withheld/Deferred` 显著下降 |
-| P1.3 | B1+B7：光随权威柱；客户端原版光；弱化 strip/collectLightUpdate | 进服/飞行无长黑柱；不依赖影子 mask 才亮 |
+| P1.3 | **保留 lightStrip**；柱包内带影子算光；collectLightUpdate 作增量光 | 进服/飞行无长黑柱；带宽统计仍体现 strip |
 | P1.4 | B4 删 placeholder + B5 清 awaitEngineTaskDrain | 无 SHADOW_PLACEHOLDER 路径 |
 
 ### P2 — 接口收窄与文档
@@ -144,7 +144,7 @@ A1-③ seedGen 开 + 有缓存
 - cancel 原版 Forget（A9）  
 - M1 未完成先只删交付路径  
 - M2 未完成先只删 placeholder 而包内无光  
-- lightStrip 与「光走原版」同时作默认  
+- 禁止把 lightStrip 默认改成关（核心省带宽）  
 
 ## 6. 关键代码索引
 
@@ -189,7 +189,7 @@ A1-③ seedGen 开 + 有缓存
 |----|------|------|
 | M1 未实现 | 高 | 当前为补丁态；飞行回归未在 A1 完整实现后跑过 |
 | WINDOW_PUMP 删除后交付覆盖 | 高 | 【推断】inject/盘命中路径可能无人投递，见 §3 残留风险 |
-| B1 与 lightStrip 配置迁移 | 中 | 默认行为变更需 config-audit / 版本说明 |
+| lightStrip 保留 | 低 | 默认开；toml 可选关，但 `isServerLightStrip` 读配置 |
 | seedGen 开路径 | 中 | 本轮实测均为 seedGen=false；A1-③ 需单独冒烟 |
 | 多 loader（forge/neoforge） | 低 | M1/M2 至少 fabric 1.20.1 验证后再扫 loader |
 

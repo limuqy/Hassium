@@ -113,7 +113,8 @@ public final class ConfigSchema {
             "是否启用 SeedGen（服务端开启下发世界种子；客户端门控开时影子 tracking 触发 vanilla worldgen 本地生成，再 compare-pull；需双端同版本，默认关）。警告：开启会向客户端下发世界种子，等同泄露服务端种子",
             "Enable SeedGen (server sends world seed; client gates local worldgen via shadow tracking then compare-pull; both sides same version; default off). WARNING: this leaks the server world seed to clients");
     public static final ConfigKey<Boolean> CHUNK_LIGHT_STRIP = bool("chunk.lightStrip", ConfigScope.SERVER, Domain.CHUNK_CORE, true,
-            "是否启用光照剥离", "Enable light stripping");
+            "是否启用光照剥离（核心省带宽：真服剥光，影子端算光后打官方柱包；默认开）",
+            "Enable light stripping (core bandwidth saver: server strips light, shadow packs official chunk packets; default on)");
 
     // === 兼容性（SERVER）===
     public static final ConfigKey<Boolean> COMPAT_REQUIRE_CLIENT_MOD = bool("compat.requireClientMod", ConfigScope.SERVER, Domain.COMPAT, false,

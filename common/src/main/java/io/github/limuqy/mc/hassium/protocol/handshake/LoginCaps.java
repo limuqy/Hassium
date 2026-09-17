@@ -80,6 +80,7 @@ public final class LoginCaps {
             caps |= SEED_GEN;
         }
         if (cfg.isHassiumEngineEnabled()) {
+            // 客户端支持影子算光路径（配合服务端 lightStrip 省带宽）
             caps |= LIGHT_STRIP;
             caps |= PULL_MODE;
             // AUTHORITY_NOTIFY 整族降级：不声明

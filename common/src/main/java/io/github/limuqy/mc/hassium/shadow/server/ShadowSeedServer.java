@@ -902,15 +902,9 @@ public class ShadowSeedServer extends MinecraftServer {
         clearChunkLight(pos, chunk);
         awaitLightTaskDrain(chunkLevel(chunk));
     }
-    /** 清光投递后的引擎任务水位控制，避免批量 relight 越过原版 sorter 阈值。 */
+    /** B5：清光后不再同步等 lightTasks 排水（原版柱级交付节奏）。 */
     private void awaitLightTaskDrain(ServerLevel level) {
-        try {
-            ThreadedLevelLightEngine lightEngine =
-                    (ThreadedLevelLightEngine) level.getChunkSource().getLightEngine();
-            ShadowLightCompute.awaitEngineTaskDrain(lightEngine);
-        } catch (Throwable ignored) {
-            // 引擎不可用时跳过排水，不阻塞影子端。
-        }
+        // no-op
     }
 
     /** 上次异步排水投递时刻（节流去重：间隔内不重复投递；无「任务被取消后标志位卡死」的失败模式）。 */
@@ -1289,46 +1283,17 @@ public class ShadowSeedServer extends MinecraftServer {
         return injectedChunks.get(DimensionKey.key(dimension, x, z));
     }
 
-    /** 该柱是否为空气空壳占位（权威范围外邻柱的光照齐套占位）。 */
+    /** B4：空气空壳占位已退役；任何柱都不得以 placeholder 参与交付判定。 */
     public boolean isPlaceholder(String dimension, int x, int z) {
-        return placeholderChunks.contains(DimensionKey.key(dimension, x, z));
+        return false;
     }
 
     /**
-     * 注入空气空壳占位柱：全空气 LevelChunk，供光照齐套门控在权威范围外邻柱上「立即就绪」。
-     * <p>
-     * 语义：天光从上方灌入、水平透过（等价原版 {@code NEG_INF} 哨兵）——地表屋檐正确，
-     * 洞穴边缘偏亮（原版视距边缘同样不准，可接受）。不写 hash、不写快照、不进交付集；
-     * 真实数据到达时 {@link #injectChunk} REPLACE 覆盖并从占位集合移除。
-     * <p>
-     * 幂等：已有非占位柱时 no-op；已有占位柱时 no-op（不重复创建）。
+     * B4：不再注入空气空壳占位（原光照齐套邻柱门）。保留签名兼容调用方，恒 no-op。
+     * 权威数据只来自 pull/seedGen/盘；缺邻柱由原版光引擎自行传播，不造假空气柱。
      */
     public boolean injectPlaceholder(String dimension, int x, int z) {
-        long key = DimensionKey.key(dimension, x, z);
-        if (injectedChunks.containsKey(key)) {
-            return true; // 已有柱（真实或占位）：齐套条件已满足
-        }
-        ServerLevel level = level(dimension);
-        if (level == null) {
-            return false;
-        }
-        ChunkPos pos = new ChunkPos(x, z);
-        LevelChunk placeholder = new LevelChunk(level, pos);
-        // 空壳 = 全空气 section，无需 replaceWithPacketData；heightmap 由引擎按需重建
-        LevelChunk previous = injectedChunks.putIfAbsent(key, placeholder);
-        if (previous != null) {
-            return true; // 竞态：另一线程先注入
-        }
-        placeholderChunks.add(key);
-        // 占位柱标 lightCorrect=true：全空气 = 开天空，天光从上方灌入、水平透过，
-        // 对齐原版 NEG_INF 哨兵语义。邻柱算光读到的是「开天空」而非空层基岩。
-        placeholder.setLightCorrect(true);
-        // 必须过 INITIALIZE_LIGHT：只 put 进表时引擎无 section 状态/空层，
-        // 中心柱 lightChunk 的 propagate 读邻柱会缺数据 → 空 DataLayer → skyTop=0。
-        ShadowLightCompute.initializeLightImmediately(this, key, placeholder, level);
-        DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
-                "[SHADOW_PLACEHOLDER] Injected air placeholder ({}, {}) dim={}", x, z, dimension);
-        return true;
+        return false;
     }
 
     /**

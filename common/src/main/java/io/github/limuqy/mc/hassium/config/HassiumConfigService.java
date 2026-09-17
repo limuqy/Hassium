@@ -298,6 +298,10 @@ public class HassiumConfigService {
         return config.master().aggregationMaxSize();
     }
 
+    /**
+     * 服务端是否剥光（**核心省带宽，默认开**）。
+     * 剥光后由影子端 LightEngine 算光并打进官方柱包交付。
+     */
     public boolean isServerLightStrip() {
         return config.chunk().lightStrip();
     }

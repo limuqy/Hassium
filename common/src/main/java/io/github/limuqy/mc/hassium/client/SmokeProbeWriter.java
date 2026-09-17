@@ -152,6 +152,11 @@ public final class SmokeProbeWriter {
     /**
      * `loadedChunks` is the ClientChunkCache's complete resident count. `actualPresent` samples only
      * trace candidates, so its cardinality must never be used as the world's loaded count.
+     * <p>
+     * Candidate order: {@code networkReceived} → {@code clientApplied} → {@code shadowReady}.
+     * R2 cache-hit rounds have {@code networkReceived=0}; falling back to {@code shadowReady}
+     * under-samples (e.g. 477) while {@code loadedChunks} still holds every applied column
+     * (1074) — {@code actualPresent} then looks like a false “applied gap”.
      */
     private static void appendClientCache(StringBuilder sb, net.minecraft.client.Minecraft mc, String dimension) {
         long loaded = currentLoadedChunkCount(mc);
@@ -164,8 +169,8 @@ public final class SmokeProbeWriter {
                 io.github.limuqy.mc.hassium.shadow.light.SmokeChunkTrace.Snapshot trace =
                         io.github.limuqy.mc.hassium.shadow.light.SmokeChunkTrace.snapshot(dimension);
                 java.util.List<net.minecraft.world.level.ChunkPos> candidates = trace.networkReceived();
-                if (candidates.isEmpty()) candidates = trace.shadowReady();
                 if (candidates.isEmpty()) candidates = trace.clientApplied();
+                if (candidates.isEmpty()) candidates = trace.shadowReady();
                 trackedCandidates = candidates.size();
                 java.util.ArrayList<net.minecraft.world.level.ChunkPos> present =
                         new java.util.ArrayList<>(candidates.size());

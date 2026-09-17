@@ -87,7 +87,7 @@ public record HassiumConfig(
                 6,       // maxChunksPerFrame
                 15,      // mainThreadChunkBudgetMs
                 false,   // seedGenEnabled
-                true     // lightStrip（仅服务端消费）
+                true     // lightStrip（仅服务端消费；核心省带宽，默认开）
         );
 
         public long maxCacheSizeBytes() {

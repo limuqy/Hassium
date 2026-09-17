@@ -595,43 +595,18 @@ public final class ShadowLightCompute {
      * 清光会一次性向原版 sorter 投递大量 PRE 任务；在下一柱前把队列压回低水位，
      * 避免超过 vanilla sorter 的并发阈值后出现任务错序与空光层。
      */
+    /**
+     * B5：原版节奏不在此阻塞等 lightTasks 排水（历史上主线程 5s/柱会卡死）。
+     * 清光后的 sorter 水位由引擎任务调度自行消化；保留签名兼容调用方，恒 no-op。
+     */
     public static void awaitEngineTaskDrain(net.minecraft.server.level.ThreadedLevelLightEngine engine) {
-        awaitEngineTaskDrain(engine, CONVERGENCE_WAIT_TIMEOUT_MS);
+        // no-op
     }
 
-    /**
-     * @param timeoutMs 排水时长上限。后台同步调用方沿用 5s 全额；主线程的**异步**排水
-     *                 必须用远小于关机窗口的上限（flyrt16/17 实证：cancelAll 扫描之后才
-     *                 投递的排水无人取消，park 满 5s > smoke 强退 2s / executor 等待 3s，
-     *                 挂住优雅关机 → force exit + 非零退出码）。
-     */
+    /** @param timeoutMs 已忽略；见 {@link #awaitEngineTaskDrain(ThreadedLevelLightEngine)}。 */
     public static void awaitEngineTaskDrain(net.minecraft.server.level.ThreadedLevelLightEngine engine,
                                      long timeoutMs) {
-        if (!io.github.limuqy.mc.hassium.compat.mods.ForeignLightEngine.usesLightTaskWatermark(engine)) {
-            // 外部光照引擎（Starlight / ScalableLux）从不填充 lightTasks，水位控制无意义；
-            // 该柱随后以 RECOMPUTE（lit=false）提交，收敛由 isLightConverged 的
-            // hasLightWork()（= 对方自己的 LightQueue）承担。
-            return;
-        }
-        try {
-            io.github.limuqy.mc.hassium.mixin.shadow.ThreadedLevelLightEngineAccessor acc =
-                    (io.github.limuqy.mc.hassium.mixin.shadow.ThreadedLevelLightEngineAccessor) engine;
-            long deadline = System.currentTimeMillis() + timeoutMs;
-            // 中断即退出（executor cancelAll / JVM 关闭时不得继续 park——flyrt16 实证：
-            // 关机窗口里 park 满 5s 会卡住优雅停止，逼出 force System.exit 与非零退出码）。
-            while (acc.hassium$getLightTasks().size() > ENGINE_TASK_LOW_WATER
-                    && System.currentTimeMillis() < deadline
-                    && !Thread.currentThread().isInterrupted()) {
-                try {
-                    engine.tryScheduleUpdate();
-                } catch (Throwable ignored) {
-                    // 引擎关闭/断连竞态：由超时兜底退出。
-                }
-                LockSupport.parkNanos(200_000L);
-            }
-        } catch (Throwable ignored) {
-            // accessor 或版本差异：跳过水位控制，保留正常光照链路。
-        }
+        // no-op
     }
 
 
@@ -2297,54 +2272,21 @@ public final class ShadowLightCompute {
             if (task.source == LightSource.LIGHT_ONLY) {
                 LightWork work = task.token instanceof LightWork w ? w : null;
                 pushLightReady(pos, task.level, task.chunk, converged, work);
-            } else if (shouldSkipEmptyReuseRepush(task.metric,
-                    isLightReusable(server, pos, task.chunk))) {
-                // 空 REUSE 一律改重算：卸载后 epoch 已清，不能只护「已落地」。
-                DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
-                        "[SHADOW_LIGHT] Skip empty-reuse pack ({}, {}): requeue RECOMPUTE",
-                        pos.x, pos.z);
-                generated.put(task.key, new GenEntry(task.chunk, task.level, false,
-                        task.renderOnly, task.traceOrigin));
-                pump();
             } else {
-                // lightChunk future 只保证「本批 task 跑完」，不保证 sky/block 层非空
-                // （邻柱未齐 / 占位未过引擎时 POST_UPDATE 仍 setLightCorrect=true）。
-                // 打包前必须验引擎非 0 光；否则 empty-mask 客户端显式置 0 = 黑柱。
-                // inject 恒 setLightCorrect(false)，而 completeNativeLight 只写 ProtoChunk。
-                // correct 只对齐 hasUsable（含高空短路）——若再叠地表≥15，isLightReusable
-                // 长期为假 → requeue 堆 lightTasks → awaitEngineTaskDrain 5s/柱主线程卡死
-                //（2026-09-17 20:09:26–20:10:05 实测 40s 无日志 + Light timeout 爆发）。
-                // 地表未亮不打包，走停车门（shouldPark / flush 超时冲刷），不在这里阻塞。
+                // B2 原版节奏：本柱 light 任务完成即打包交付；空光/欠光不 requeue 挡首包，
+                // 余量走光桥后补（与 docs/chunk-load-optimization.md d 锚点一致）。
                 if (server != null && task.chunk != null && !task.chunk.isLightCorrect()
                         && server.hasCompleteLightLayers(pos, task.chunk)
                         && server.hasUsableEngineLight(pos, task.chunk)) {
                     server.syncLightCorrect(task.chunk, true);
                 }
-                boolean lightUsable = isLightReusable(server, pos, task.chunk);
-                boolean surfaceReady = server == null
-                        || server.isColumnSurfaceLightReady(pos, task.chunk, task.level);
-                boolean willRequeue = false;
-                if (!lightUsable) {
-                    Integer prior = lightFollowUps.get(task.key);
-                    int priorN = prior == null ? 0 : prior;
-                    noteEmptyLightEvidence(task, server, priorN < MAX_LIGHT_FOLLOW_UPS);
-                    willRequeue = requeueLightFollowUp(task.key);
-                }
-                if (!lightUsable && willRequeue) {
+                if (server != null && !isLightReusable(server, pos, task.chunk)) {
                     DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
-                            "[SHADOW_LIGHT] Empty engine light after {} ({}, {}): requeue before pack",
-                            task.metric, pos.x, pos.z);
-                    generated.put(task.key, new GenEntry(task.chunk, task.level, false,
-                            task.renderOnly, task.traceOrigin));
-                    pump();
-                } else {
-                    // S3：原版光——引擎算完即交付，不因地表探针 park。
-                    if (lightUsable) {
-                        lightFollowUps.remove(task.key);
-                    }
-                    pushReady(task.key, task.chunk, task.level, converged, task.renderOnly,
-                            task.traceOrigin);
+                            "[SHADOW_LIGHT] pack after light task (non-ideal light) ({}, {}) metric={}",
+                            pos.x, pos.z, task.metric);
                 }
+                pushReady(task.key, task.chunk, task.level, converged, task.renderOnly,
+                        task.traceOrigin);
             }
         } catch (Throwable t) {
             DebugLogger.warn(DebugLogger.LogType.ASYNC,
@@ -3051,34 +2993,13 @@ public final class ShadowLightCompute {
                 lightUpdates.remove(key); // 维度未装配：收集作废
                 continue;
             }
-            // 客户端已持有该柱：只在影子光照引擎**无在途工作**时回传。重算/邻柱收紧会把该柱
-            // 层先打成空层再逐步传播（实测客户端依次收到 0 → 3 → 8 …），中间态写进客户端就是
-            // 「已亮柱被打黑」，且不会自愈：整柱包对已落地柱被抑制（hasClientApplyEpoch），
-            // 客户端只会继续收后续中间态。此处不清掩码 → 收敛后的那一帧打包的就是收敛值。
-            // <p>
-            // 判据只读引擎队列是否为空（ShadowSeedServer#isLightConverged(ServerLevel)）：
-            // 不读引擎数据层（与光照 worker 并发读 fastutil 会自旋），不排新光任务
-            // （推高 lightTasks 水位 → 主线程 injectChunk 5s 忙等 → 整卡死，2026-09-16 实测）。
-            if (hasClientApplyEpoch(DimensionKey.dimensionOf(key), pos)
-                    && !server.isLightConverged(level)) {
-                long nowMs = System.currentTimeMillis();
-                Long deferSince = bridgeDeferSinceMs.get(key);
-                if (deferSince == null) {
-                    bridgeDeferSinceMs.put(key, nowMs);
-                    noteBridgeDeferHeld(pos);
-                    continue;
-                }
-                boolean deferExpired = nowMs - deferSince >= LIGHT_BRIDGE_DEFER_TIMEOUT_MS;
-                // 中间态（INIT 空层 / 在途 light barrier）仍扣：空层下发 = 黑柱且难自愈。
-                if (!deferExpired || isLightMidCompute(key)) {
-                    noteBridgeDeferHeld(pos);
-                    continue;
-                }
-                // 超时放行：对齐原版「单柱算完即可发」，不再死等全世界收敛。
-                bridgeDeferSinceMs.remove(key);
-            } else {
-                bridgeDeferSinceMs.remove(key);
+            // B3 原版节奏：单柱算光完成即可发 light 包；不等待全世界 isLightConverged。
+            // 仅本柱仍在 mid-compute（INIT 空层 / 在途 barrier）时扣一帧，避免空层黑柱。
+            if (isLightMidCompute(key)) {
+                noteBridgeDeferHeld(pos);
+                continue;
             }
+            bridgeDeferSinceMs.remove(key);
             LevelLightEngine engine = level.getLightEngine();
             int minLightSection = engine.getMinLightSection();
             int lightSectionCount = engine.getLightSectionCount();
@@ -3303,6 +3224,14 @@ public final class ShadowLightCompute {
      * <p>
      * 键维度 = 客户端当前维度（mixin 入口无维度上下文；影子端只装配三主维度）。
      */
+    /**
+     * 影子端光照更新收集（light 线程入口；MixinServerChunkCache.onLightUpdate HEAD，
+     * 仅影子上下文）：配合 **lightStrip**（真服剥光）——影子 LightEngine 算完 section
+     * 后收集绝对 sectionY，主线程可打包官方光/柱包交付客户端。
+     * <p>
+     * 首包主路径仍是：柱级 light 任务完成 → {@code pushReady} 打包官方柱包（含光）。
+     * 本收集用于增量光更新；线程安全：ConcurrentHashMap + synchronized(mask)。
+     */
     public static void collectLightUpdate(LightLayer layer, SectionPos sectionPos) {
         if (layer == null || sectionPos == null || !isEnabled()) {
             return;
@@ -3319,6 +3248,7 @@ public final class ShadowLightCompute {
             }
         }
     }
+
     /**
      * 客户端原版 unload 钩子：**只**作废光桥凭据（epoch / 未发 light 掩码依赖）。
      * <p>
