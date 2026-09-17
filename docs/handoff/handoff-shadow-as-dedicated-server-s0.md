@@ -150,7 +150,7 @@ public final class ShadowColumnStore {
 - `sweepVisibleShape` / `sweepOvdRing`（OVD 已冻结）
 - 权威声明作为采集驱动（`ChunkAuthorityClient` 可留 no-op）
 - `pendingSelections` 自 pull、`ShadowChunkAcquire` 批发射
-- `LightNeighborhoodGate` / `parkFullDelivery` **主交付门**（探针可留）
+- `LightNeighborhoodGate` / `parkFullDelivery` **主交付门**（探针可留）→ **2026-09-18 已物理删除**
 - 客户端 reclaim 定时器作主路径
 
 **必须保留**
@@ -220,7 +220,8 @@ public final class ShadowColumnStore {
   - **门禁**【已验证】编译矩阵绿；classic `1.20.1_fabric_I_s3classic` **PASS**；flyrt `1.20.1_fabric_s3flyrt2` **PASS**（`clientDarkRegressionChunks=0`；exit 0）。首飞光照缓存 **22.2%**（命中 371 / 重算 1297——scheduleChunkLoad 口径：读盘完整光 vs 重算）。  
   - **并发修复**：`playerLoadedChunk` 桥内 `ClientboundLevelChunkWithLightPacket` 构造改持 `chunkLock`（与 flush `ChunkSerializer.pack` 互斥；s3flyrt 首轮 ThreadingDetector FAIL 已消失）。  
   - **未验证**：R2 cache-only 的光照缓存可能为 0/0（重连路径未必再进 `scheduleChunkLoad`）；1.21.1 classic/flyrt 未跑。  
-  - **记账完善（2026-09-18）**：统一 `accountLightFromChunk`（`isLightCorrect` → 命中 / 否则重算），挂到 `scheduleChunkLoad` / `injectChunk` / `injectLoadedChunk` / `publishCachedChunk`（含异步读盘）；按柱首记去重。classic `1.20.1_fabric_I_s3lightacct` **PASS**【已验证】：R1 光照 **0%**（命中 0 / 重算 1671——网络注入路径，符合「光未完成=重算」）；R2 光照 **100%**（命中 **486** / 重算 0——缓存回放完整光，R2 不再 0/0）。
+  - **记账完善（2026-09-18）**：统一 `accountLightFromChunk`（`isLightCorrect` → 命中 / 否则重算），挂到 `scheduleChunkLoad` / `injectChunk` / `injectLoadedChunk` / `publishCachedChunk`（含异步读盘）；按柱首记去重。classic `1.20.1_fabric_I_s3lightacct` **PASS**【已验证】：R1 光照 **0%**（命中 0 / 重算 1671）；R2 光照 **100%**（命中 **486** / 重算 0）。  
+  - **物理删除（2026-09-18）**：`LightNeighborhoodGate.java`、`GateContext`/`pumpGateReady`、park 一族及单测门控用例；`common` 内无引用【已验证】。classic `1.20.1_fabric_I_s3strip` **PASS**；flyrt `1.20.1_fabric_s3stripflyrt` **PASS**（darkRegression=0）。
 - [ ] S5 可选：Provider 内 compare 优化、连接转发接法 A、client/server 包迁移  
 
 **S0 修订记录**

@@ -2,7 +2,6 @@ package io.github.limuqy.mc.hassium.network.seedgen;
 
 import io.github.limuqy.mc.hassium.shadow.light.ShadowVanillaLightPipeline;
 import io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute;
-import io.github.limuqy.mc.hassium.shadow.light.LightNeighborhoodGate;
 import io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.network.ClientChunkHandler;
@@ -59,32 +58,6 @@ class ShadowLightComputeTimingRegressionTest {
         assertFalse(ShadowLightCompute.shouldSkipEmptyReuseRepush(
                 ShadowLightCompute.LightMetric.RECOMPUTE, false),
                 "RECOMPUTE 路径不拦（首包要交方块）");
-    }
-
-    @Test
-    @DisplayName("齐套门控：enqueue 后 pendingCount 增加，cancel 后减少")
-    void neighborhoodGateEnqueueCancel() {
-        ChunkPos pos = new ChunkPos(5, 5);
-        LightNeighborhoodGate.enqueue(
-                DimensionKey.key(DimensionKey.OVERWORLD, 5, 5),
-                DimensionKey.OVERWORLD, pos, new Object());
-        assertEquals(1, LightNeighborhoodGate.pendingCount());
-        LightNeighborhoodGate.cancel(DimensionKey.key(DimensionKey.OVERWORLD, 5, 5));
-        assertEquals(0, LightNeighborhoodGate.pendingCount());
-    }
-
-    @Test
-    @DisplayName("齐套门控：clear 清空全部待齐套")
-    void neighborhoodGateClear() {
-        LightNeighborhoodGate.enqueue(
-                DimensionKey.key(DimensionKey.OVERWORLD, 1, 1),
-                DimensionKey.OVERWORLD, new ChunkPos(1, 1), new Object());
-        LightNeighborhoodGate.enqueue(
-                DimensionKey.key(DimensionKey.OVERWORLD, 2, 2),
-                DimensionKey.OVERWORLD, new ChunkPos(2, 2), new Object());
-        assertEquals(2, LightNeighborhoodGate.pendingCount());
-        LightNeighborhoodGate.clear();
-        assertEquals(0, LightNeighborhoodGate.pendingCount());
     }
 
 

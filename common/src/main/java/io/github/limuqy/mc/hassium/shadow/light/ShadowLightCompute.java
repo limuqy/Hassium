@@ -467,12 +467,9 @@ public final class ShadowLightCompute {
             return false;
         }
         long key = DimensionKey.key(dimension, pos.x, pos.z);
-        // 必须含齐套门与整柱停车：否则 halo->visible / redeliver 每泵重复 submitPreLight，
-        // 会 REPLACE park 条目、deadline 永远到不了 10s → 虚空/黑柱不自愈（2026-09-17 实测）。
+        // S3：只看 generated / 在途光屏障；门控与整柱停车表已退役。
         return generated.containsKey(key)
-                || inflightLight.containsKey(key)
-                || PARKED_FULL_DELIVERIES.containsKey(key)
-                || LightNeighborhoodGate.isAwaiting(key);
+                || inflightLight.containsKey(key);
     }
 
     /**
@@ -512,7 +509,6 @@ public final class ShadowLightCompute {
         accountedIngress.clear();
         shadowApplyEpochs.clear();
         fullApplyTraces.clear();
-        PARKED_FULL_DELIVERIES.clear(); // 旧维度的停车交付全部作废
         lightFollowUps.clear();
         EMPTY_LIGHT_EVIDENCE_DUMPED.clear();
         bridgeDeferSinceMs.clear();
@@ -1877,22 +1873,12 @@ public final class ShadowLightCompute {
                     lightBatch.add(e);
                 }
                 if (batch.isEmpty() && genBatch.isEmpty() && deltaBatch.isEmpty() && lightBatch.isEmpty()) {
-                    // 仍需扫描齐套队列：邻柱后到可能让等待中的柱齐套；超时条目强制降级
-                    if (LightNeighborhoodGate.pendingCount() > 0) {
-                        List<LightTask> gateTasks = new ArrayList<>();
-                        pumpGateReady(server, gateTasks);
-                        if (!gateTasks.isEmpty()) {
-                            submitLightBatch(server, gateTasks);
-                        }
-                    }
                     return;
                 }
                 org.slf4j.LoggerFactory.getLogger("Hassium/ShadowDisk")
                         .debug("consumeLoop batch={} gen={} delta={} light={}",
                                 batch.size(), genBatch.size(), deltaBatch.size(), lightBatch.size());
                 List<LightTask> lightTasks = new ArrayList<>();
-                // 先扫描齐套队列：邻柱后到可能让等待中的柱齐套
-                pumpGateReady(server, lightTasks);
                 drainPlaceholderNeighborRelight(server, lightTasks);
                 for (Map.Entry<Long, PendingEntry> e : batch) {
                     // 复合键解维：pending 键携带维度，服务端查询/引擎操作全部路由到该维度。
@@ -2117,7 +2103,8 @@ public final class ShadowLightCompute {
                         }
                         break;
                     case GATE:
-                        break; // 门控条目已由 tryPromote 条件移除，无需再移除队列
+                        // 占位邻柱 relight 等无队列 token 的任务：提交时无需条件移除
+                        break;
                 }
                 if (t.chunk == null) {
                     // 注入/应用后查表缺失（异常路径）：与旧实现一致——warn + 条目已移除（丢弃）
@@ -2532,12 +2519,10 @@ public final class ShadowLightCompute {
         inflightLight.remove(key);
         lightUpdates.remove(key);
         shadowApplyEpochs.remove(key);
-        PARKED_FULL_DELIVERIES.remove(key);
         lightFollowUps.remove(key);
         lightInitialized.remove(key);
         lightInitPassed.remove(key);
         nativeLightChunks.remove(key);
-        LightNeighborhoodGate.cancel(key);
         discardLightMask(key);
         DebugLogger.info(DebugLogger.LogType.ASYNC,
                 "[SHADOW_LIGHT] Cancelled work before unload ({}, {})",
@@ -2717,156 +2702,6 @@ public final class ShadowLightCompute {
                         .hassium$getChunkSource().hasChunk(chunkX, chunkZ);
     }
 
-    // ==================== 整柱交付收敛停车（flyrt7 路径） ====================
-
-    /** 停车时长上限：引擎持续忙 / 地表未亮时最多等 10s 再强打（防饿死；对齐原版不发半成品光）。 */
-    private static final long FULL_DELIVERY_PARK_TIMEOUT_MS = 10_000L;
-    /** 收敛后地表仍未就绪时的续停次数上限（每次 kick relight + 1s），超出强制打包防饿死。 */
-    private static final int MAX_SURFACE_PARK_ATTEMPTS = 3;
-    private static final long SURFACE_PARK_EXTEND_MS = 1_000L;
-
-    private record ParkedFullDelivery(long key,
-                                      net.minecraft.world.level.chunk.LevelChunk chunk,
-                                      net.minecraft.server.level.ServerLevel level,
-                                      boolean converged, boolean renderOnly, TraceOrigin traceOrigin,
-                                      Long applyEpochAtPark, long deadlineMs, int surfaceAttempts) {
-    }
-
-    /**
-     * 整柱包停车表：{@link #shouldParkFullDelivery} 为真时不打包，等引擎收敛后由
-     * {@link #flushParkedFullDeliveries}（drainReady 帧首，客户端主线程）冲刷。
-     * 键 = 复合 chunk key；重复 pushReady 以新条目替换（deadline 一并刷新）。
-     */
-    private static final ConcurrentHashMap<Long, ParkedFullDelivery> PARKED_FULL_DELIVERIES =
-            new ConcurrentHashMap<>();
-
-    /**
-     * 引擎有在途光工作时整柱包不得打包（半成品层会被当权威值下发）。
-     * <p>
-     * <b>不要</b>在此叠加「地表 sky≥15」：会与齐套门控/recompute 叠加把 gen 堵死，
-     * 回程大片空洞。地表门只管落盘；交付只等 {@code isLightConverged}（对齐原版
-     * light() future），假收敛残余由光桥 no-downgrade + 后续整柱兜底。
-     */
-    private static boolean shouldParkFullDelivery(long key,
-                                                  net.minecraft.world.level.chunk.LevelChunk chunk,
-                                                  net.minecraft.server.level.ServerLevel level) {
-        ShadowSeedServer server = ShadowServerRegistry.getInstance().get();
-        if (server == null || level == null) {
-            return false;
-        }
-        return !server.isLightConverged(level);
-    }
-
-    private static void parkFullDelivery(long key,
-                                         net.minecraft.world.level.chunk.LevelChunk chunk,
-                                         net.minecraft.server.level.ServerLevel level,
-                                         boolean converged, boolean renderOnly,
-                                         TraceOrigin traceOrigin, int surfaceAttempts) {
-        long deadline = System.currentTimeMillis()
-                + Math.max(FULL_DELIVERY_PARK_TIMEOUT_MS, SURFACE_PARK_EXTEND_MS);
-        PARKED_FULL_DELIVERIES.put(key, new ParkedFullDelivery(key, chunk, level, converged,
-                renderOnly, traceOrigin, shadowApplyEpochs.get(key), deadline, surfaceAttempts));
-        noteFullDeliveryParked(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
-    }
-
-    /**
-     * 帧首冲刷：收敛且地表就绪、或超时的条目打包交付；停车期间该柱已有更新的整柱包落地
-     * （apply epoch 变化）则丢弃防倒替。仍忙且未超时的条目留在表里下一帧再看。
-     * <p>
-     * 收敛后地表仍黑：在影子主循环 kick {@code relightChunk} 并续停（有上限），避免
-     * 「队列空 + 空层」的假收敛直接 emptyYMask 落地（flyroundtrip 回程 46 柱）。
-     */
-    private static void flushParkedFullDeliveries(ShadowSeedServer server) {
-        if (PARKED_FULL_DELIVERIES.isEmpty()) {
-            return;
-        }
-        long now = System.currentTimeMillis();
-        for (ParkedFullDelivery parked : List.copyOf(PARKED_FULL_DELIVERIES.values())) {
-            boolean convergedNow = server != null && server.isLightConverged(parked.level());
-            boolean timedOut = now >= parked.deadlineMs();
-            if (!convergedNow && !timedOut) {
-                continue; // 引擎仍忙且未超时：留表待下帧
-            }
-            if (!PARKED_FULL_DELIVERIES.remove(parked.key(), parked)) {
-                continue; // 已被更新的停车/清理替换
-            }
-            if (!java.util.Objects.equals(shadowApplyEpochs.get(parked.key()),
-                    parked.applyEpochAtPark())) {
-                noteFullDeliveryStaleDropped(parked.key());
-                continue; // 停车期间已有更新的整柱包落地：本包过期，防倒替
-            }
-            // 收敛但地表仍黑：等 deadline 再强打。假收敛（队列空 + 层全 0）若立刻打包，
-            // remote_pull / disk-miss 重进会发出首包黑柱（18,-5 apply#4）。不在此 relight。
-            if (server != null && parked.chunk() != null && !timedOut
-                    && !server.isColumnSurfaceLightReady(parked.chunk().getPos(),
-                            parked.chunk(), parked.level())) {
-                PARKED_FULL_DELIVERIES.put(parked.key(), parked);
-                continue;
-            }
-            if (!convergedNow) {
-                noteFullDeliveryTimedOut(parked.key());
-            }
-            ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(parked.key()),
-                    DimensionKey.chunkZOf(parked.key()));
-            runBuildOnShadowMain(pos, () -> {
-                ClientboundLevelChunkWithLightPacket packet = withChunkLock(pos,
-                        () -> SeedGenChunkCodec.buildPacket(parked.chunk(), parked.level()));
-                offerReady(parked.key(), pos, packet, parked.converged(),
-                        parked.renderOnly(), parked.traceOrigin());
-            });
-        }
-    }
-
-    /** 停车/超时冲刷/过期丢弃的观测计数与节流日志（诊断：确认门控生效与频率）。 */
-    private static final java.util.concurrent.atomic.AtomicLong parkedFullDeliveries =
-            new java.util.concurrent.atomic.AtomicLong();
-    private static final java.util.concurrent.atomic.AtomicLong timedOutFullDeliveries =
-            new java.util.concurrent.atomic.AtomicLong();
-    private static final java.util.concurrent.atomic.AtomicLong staleDroppedFullDeliveries =
-            new java.util.concurrent.atomic.AtomicLong();
-    private static volatile long lastParkLogMs;
-
-    private static void noteFullDeliveryParked(int x, int z) {
-        long total = parkedFullDeliveries.incrementAndGet();
-        long now = System.currentTimeMillis();
-        if (now - lastParkLogMs < 1_000L) {
-            return;
-        }
-        lastParkLogMs = now;
-        DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
-                "[SHADOW_LIGHT] Parked full delivery for convergence ({}, {}) total={}", x, z, total);
-    }
-
-    private static void noteFullDeliveryTimedOut(long key) {
-        timedOutFullDeliveries.incrementAndGet();
-        ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
-        DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
-                "[SHADOW_LIGHT] Parked full delivery timed out ({}, {})",
-                pos.x, pos.z);
-    }
-
-    /** 收敛后地表仍黑：kick relight 并续停（有上限）。 */
-    private static void noteFullDeliverySurfaceRepark(int x, int z, int attempt) {
-        DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
-                "[SHADOW_LIGHT] Surface not ready, repark+relight ({}, {}) attempt={}",
-                x, z, attempt);
-    }
-
-    /** 续停次数用尽仍无地表光：强制打包（防饿死；可能仍黑，靠光桥/后续整柱）。 */
-    private static void noteFullDeliverySurfaceForced(int x, int z) {
-        timedOutFullDeliveries.incrementAndGet();
-        DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
-                "[SHADOW_LIGHT] Surface light never ready, force pack ({}, {})",
-                x, z);
-    }
-
-    private static void noteFullDeliveryStaleDropped(long key) {
-        staleDroppedFullDeliveries.incrementAndGet();
-        DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
-                "[SHADOW_LIGHT] Parked full delivery stale-dropped ({}, {})",
-                DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
-    }
-
     /**
      * 帧尾（MixinClientTick，渲染前）：区块按脚下切比雪夫优先，光包仍 FIFO。
      * JoinBoost 两段消费：先 chunk 再光。加载屏只 apply 脚下 3×3。
@@ -2889,21 +2724,11 @@ public final class ShadowLightCompute {
         ClientChunkHandler.runProbeRecheck(Minecraft.getInstance() == null
                 ? null : Minecraft.getInstance().level);
         ShadowSeedServer server = ShadowServerRegistry.getInstance().get();
-        flushParkedFullDeliveries(server); // 整柱收敛停车冲刷（3b）
         if (server != null && server.isLightConverged()) {
             server.confirmLightsCorrectIfConverged();
         }
         ShadowLightProbe.onEngineTick(); // T3 探针：引擎终态周期快照（debug.lightVerify 门控）
         sweepLightTimeouts(); // per-chunk 光屏障 5s 超时兜底（主扫描点；低帧率由消费轮顶兜底）
-        // 齐套门控扫描：邻柱后到 / 超时降级。无新工作时 consumeLoop 不会被 pump，
-        // 门控条目需要由帧尾 drain 主动扫描，否则永久等待。
-        if (server != null && LightNeighborhoodGate.pendingCount() > 0) {
-            List<LightTask> gateTasks = new ArrayList<>();
-            pumpGateReady(server, gateTasks);
-            if (!gateTasks.isEmpty()) {
-                submitLightBatch(server, gateTasks);
-            }
-        }
         boolean joinBoost = ClientMainThreadBudget.isJoinBoostActive();
         if (!joinBoost) {
             drainLightMasks(deadlineNs, false, false, 0);
@@ -3514,7 +3339,6 @@ public final class ShadowLightCompute {
         lightInitPassed.clear();
         nativeLightChunks.clear();
         pendingPlaceholderNeighborRelight.clear();
-        LightNeighborhoodGate.clear();
         requestedMisses.clear();
         accountedIngress.clear();
         networkInFlight.clear();
@@ -3603,7 +3427,7 @@ public final class ShadowLightCompute {
         DELTA,
         /** 增量算光 / 邻柱补光：只回传光包（{@link #submitLightDelta} → pendingLightUpdates）。不做预览。 */
         LIGHT_ONLY,
-        /** 齐套门控 promote（{@link LightNeighborhoodGate} → awaiting 表）。条目已由门控移除，submitLightBatch 跳过队列条件移除。 */
+        /** 占位邻柱 relight 等无队列 token 的任务：submitLightBatch 不做条件移除。 */
         GATE
     }
 
@@ -3616,19 +3440,6 @@ public final class ShadowLightCompute {
     }
 
     /**
-     * 齐套门控上下文：enqueue 时暂存 LightTask 构建所需字段，tryPromote 后还原为 LightTask。
-     * source 固定为 {@link LightSource#GATE}——门控条目已由 tryPromote 条件移除，
-     * submitLightBatch 跳过队列条件移除（否则 remove 恒失败、任务被静默丢弃）。
-     */
-    private record GateContext(Object token,
-                               net.minecraft.world.level.chunk.LevelChunk chunk,
-                               net.minecraft.server.level.ServerLevel level,
-                               LightMetric metric, boolean renderOnly, TraceOrigin traceOrigin) {
-        LightTask toLightTask(long key) {
-            return new LightTask(key, LightSource.GATE, token, chunk, level, metric, renderOnly, traceOrigin);
-        }
-    }
-
     /**
      * 占位被真实数据顶替：登记 8 邻中「已注入、非占位、isLightCorrect」的柱。
      * 不在此同步算光——拍头 {@link #drainPlaceholderNeighborRelight} 合并去重，避免爬坡期
@@ -3715,47 +3526,6 @@ public final class ShadowLightCompute {
             DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
                     "[SHADOW_PLACEHOLDER] Neighbor relight queued ({}, {}) dim={}",
                     pos.x, pos.z, dimension);
-        }
-    }
-
-    /**
-     * 扫描齐套队列：对每个待齐套柱尝试 {@link LightNeighborhoodGate#tryPromote}，
-     * 齐套则构建 LightTask 加入本批；同时把同批「已注入但未算光」的邻柱一并提交，
-     * 确保 3×3 邻域在同一 consumeLoop 批次内同时算光（引擎跨边界传播依赖同批 DataLayer）。
-     */
-    private static void pumpGateReady(ShadowSeedServer server, List<LightTask> lightTasks) {
-        if (LightNeighborhoodGate.pendingCount() == 0) {
-            return;
-        }
-        for (long key : LightNeighborhoodGate.snapshotKeys()) {
-            Object context = LightNeighborhoodGate.tryPromote(server, key);
-            if (!(context instanceof GateContext gateCtx)) {
-                continue;
-            }
-            lightTasks.add(gateCtx.toLightTask(key));
-            // 一并 promote 同批未算光邻柱：避免中心柱算光时邻柱 DataLayer 为空
-            String dimension = DimensionKey.dimensionOf(key);
-            ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
-            for (int dx = -1; dx <= 1; dx++) {
-                for (int dz = -1; dz <= 1; dz++) {
-                    if (dx == 0 && dz == 0) {
-                        continue;
-                    }
-                    long nKey = DimensionKey.key(dimension, pos.x + dx, pos.z + dz);
-                    if (nKey == key) {
-                        continue;
-                    }
-                    net.minecraft.world.level.chunk.LevelChunk neighbor =
-                            server.injectedChunk(dimension, pos.x + dx, pos.z + dz);
-                    if (neighbor == null || neighbor.isLightCorrect()) {
-                        continue;
-                    }
-                    Object nCtx = LightNeighborhoodGate.tryPromote(server, nKey);
-                    if (nCtx instanceof GateContext neighborGateCtx) {
-                        lightTasks.add(neighborGateCtx.toLightTask(nKey));
-                    }
-                }
-            }
         }
     }
 

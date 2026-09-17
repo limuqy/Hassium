@@ -15,7 +15,7 @@ io.github.limuqy.mc.hassium.shadow
 ├── track/     ShadowTrackingSession, ShadowChunkProvider, VanillaAlignedChunkProvider,
 │              ShadowChunkAcquire, ShadowChunkDeliver, ShadowOfficialPacketBridge,
 │              ShadowColumnStore, ShadowChunkSource, ShadowTicketDriver
-├── light/     ShadowLightCompute, LightNeighborhoodGate, ShadowLightProbe,
+├── light/     ShadowLightCompute, ShadowLightProbe,
 │              ShadowVanillaLightPipeline, SeedGenChunkCodec, SmokeChunkTrace
 └── storage/   ShadowStorageManager, ShadowStorageHashes, ShadowRegionHeat,
                RegionCache, ShadowCacheEviction, HassiumType126Codec, HassiumChunkWriteBuffer
