@@ -319,7 +319,11 @@ public final class ShadowPullClient {
                     buffer.release();
                 }
             } else if (result.kind() == ShadowPullResponseS2CPacket.Kind.UNCHANGED) {
-                if (!ShadowLightCompute.publishCachedChunk(response.dimension(), pos)) {
+                boolean published = ShadowLightCompute.publishCachedChunk(response.dimension(), pos);
+                // 专用服语义：UNCHANGED = 服务端已有、影子应能本地交付。
+                // 必须释放 Provider 在途，否则 pump 永久 join → 不再 pull → 停摆。
+                releaseProviderInflight(response.dimension(), pos, published);
+                if (!published) {
                     Constants.LOG.warn("[SHADOW_PULL] Cache baseline unavailable for ({}, {}), retrying FULL",
                             result.chunkX(), result.chunkZ());
                     if (pending != null) {
@@ -334,10 +338,39 @@ public final class ShadowPullClient {
                 if (pending != null) {
                     pending.fallback().run();
                 }
-                // RANGE/unloaded/timeout：释放影子在途锁 + 短冷却，禁止 60s sweep 锁死
-                //（移动中心错位会反复 range，但冷却后 tracking/sweep/权威选柱可再试）
                 notePullFailure(response.dimension(), pos);
+                releaseProviderInflight(response.dimension(), pos, false);
             }
+        }
+    }
+
+    /**
+     * 响应处理尾：释放 Provider inflight，使 tracking 泵可再 acquire/交付。
+     * 有影子柱 → completeAcquire；无柱 → failAcquire（允许超时/下一拍重发 pull）。
+     */
+    private static void releaseProviderInflight(String dimension, ChunkPos pos, boolean expectMaterial) {
+        try {
+            net.minecraft.world.level.chunk.LevelChunk material = null;
+            var server = io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry
+                    .getInstance().get();
+            if (server != null && dimension != null && pos != null) {
+                material = server.injectedChunk(dimension, pos.x, pos.z);
+                if (material != null && server.isPlaceholder(dimension, pos.x, pos.z)) {
+                    material = null;
+                }
+            }
+            if (material != null) {
+                io.github.limuqy.mc.hassium.shadow.track.VanillaAlignedChunkProvider
+                        .completeAcquire(dimension, pos, material);
+            } else if (!expectMaterial) {
+                io.github.limuqy.mc.hassium.shadow.track.VanillaAlignedChunkProvider
+                        .failAcquire(dimension, pos);
+            } else {
+                // FULL/异步 publish 在途：只清 session 在途锁，Provider future 等 inject 完成
+                io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession.getInstance()
+                        .clearPullInFlight(dimension, pos);
+            }
+        } catch (Throwable ignored) {
         }
     }
 

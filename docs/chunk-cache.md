@@ -14,6 +14,7 @@
 **卖点特性（已实现）：** 统一 ShadowPull（§3）、分段增量（§11.5）、`/hassiumc export`（§12）。本地生成（SeedGen）开启时握手下发世界种子，由影子端原版写入 `level.dat`（**泄露种子**）；导出或手工把 `hassium_cache/<id>/world` 拷到 `saves/` 即可当存档。
 
 > **超视渲染（OVD）为现行功能**（影子双窗，默认开启）：影子端 vanilla tracking 仍是权威窗区块交付的唯一 owner；OVD 窗只从本地源（注入 / 盘）回填，详见 §10。
+> **S0 专用服后接回（2026-09-18）**：票半径恢复 `resolveViewDistance` OVD 分支（AUTHORITY_MARGIN=serverVD+1；effective>authority 时扩到 clientVD）；`tryServeOvdLocal` 只读 injected/type126（**不**恢复 `ovdLocalGeneration`）；Provider 窗外走本地臂、禁止 C2S。参考 git `a23e9bc5`/`e6ee3b11`。
 
 ## 1. 目标与约束
 

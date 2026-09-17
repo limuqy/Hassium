@@ -1,20 +1,29 @@
 package io.github.limuqy.mc.hassium.shadow.track;
 
 import io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute;
+import io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer;
+import io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry;
 
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import io.github.limuqy.mc.hassium.utils.DimensionKey;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.chunk.LevelChunk;
 
 /**
- * 始终异步 Provider（§3.2）：无论有无盘/注入，选柱后一律向真服 compare 或权威 FULL。
+ * 异步 Provider：acquire 只入队，网络 pull 由 {@link #drainPendingPulls} 限流发送。
  * <p>
- * 完成路径：Pull 响应 → {@code injectChunk}/{@code injectLoadedChunk} →
- * {@code ShadowChunkMapCompat.completeSuspendedLoad} 放行原版 holder 链。
- * 本类不直接 complete future（complete 由 inject 点负责，与悬置登记同源）。
+ * 设计（对齐原版专用服观感，无客户端硬在途上限）：
+ * <ul>
+ *   <li>待拉队列无界；同一柱去重（pending / inflight）；</li>
+ *   <li>发送限流（默认约对齐真服 {@code maxChunksPerTick} 吞吐）；</li>
+ *   <li>发送前若已出权威窗 → <b>丢弃</b>（远离 tracking 不拉）；</li>
+ *   <li>inflight 超时 → 冷却后允许再次入队，不硬拒绝 acquire。</li>
+ * </ul>
  */
 public final class VanillaAlignedChunkProvider implements ShadowChunkProvider {
 
@@ -22,6 +31,26 @@ public final class VanillaAlignedChunkProvider implements ShadowChunkProvider {
 
     private final ConcurrentHashMap<Long, CompletableFuture<LevelChunk>> inflight =
             new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Long, Long> inflightStartMs =
+            new ConcurrentHashMap<>();
+    private final ConcurrentHashMap<Long, Long> timeoutCooldownUntil =
+            new ConcurrentHashMap<>();
+    /** 待发送 pull：key → (dimension, pos)。无界队列语义；发送前检查窗外丢弃。 */
+    private final ConcurrentHashMap<Long, PendingPull> pendingPulls =
+            new ConcurrentHashMap<>();
+
+    /** 发送节拍（影子主循环泵）。 */
+    private static final long PULL_DRAIN_INTERVAL_MS = 50L;
+    /** 每拍最多 C2S 柱数（~5/tick × 20tick/s ≈ 100/s，与真服下发同量级）。 */
+    private static final int PULL_SENDS_PER_DRAIN = 5;
+    /** 在途网络超时：超过则释放并冷却，避免永久 join。 */
+    private static final long INFLIGHT_TIMEOUT_MS = 15_000L;
+    /** 超时冷却：冷却内不立刻再 C2S，但仍可入队，冷却结束由 drain 重发。 */
+    private static final long TIMEOUT_COOLDOWN_MS = 8_000L;
+
+    private long lastDrainMs;
+
+    private record PendingPull(String dimension, ChunkPos pos) {}
 
     private VanillaAlignedChunkProvider() {}
 
@@ -31,13 +60,12 @@ public final class VanillaAlignedChunkProvider implements ShadowChunkProvider {
 
     @Override
     public boolean hasInFlight(String dimension, ChunkPos pos) {
-        return pos != null && inflight.containsKey(
-                DimensionKey.key(dimension, pos.x, pos.z));
+        return pos != null && (inflight.containsKey(DimensionKey.key(dimension, pos.x, pos.z))
+                || pendingPulls.containsKey(DimensionKey.key(dimension, pos.x, pos.z)));
     }
 
     /**
-     * 始终发起异步 acquire：in-flight 则 join；否则按基线 compare / 空基线 FULL。
-     * 禁止同步读盘 Imposter。
+     * 入队 acquire：不立刻 C2S。有 material 直接 complete；窗外 fail；否则登记 pending。
      */
     @Override
     public CompletableFuture<LevelChunk> acquire(String dimension, ChunkPos pos,
@@ -50,9 +78,43 @@ public final class VanillaAlignedChunkProvider implements ShadowChunkProvider {
         if (existing != null && !existing.isDone()) {
             return existing;
         }
-        // 会话残留的已完成/失败 future：R2 重连 join 旧 future 会导致悬置 holder 永不完成
         if (existing != null) {
             inflight.remove(key, existing);
+        }
+        Long coolUntil = timeoutCooldownUntil.get(key);
+        long now = System.currentTimeMillis();
+        if (coolUntil != null) {
+            if (now < coolUntil) {
+                // 冷却中：仍占队列位，到期后 drain 重发
+                PendingPull prev = pendingPulls.get(key);
+                if (prev == null) {
+                    pendingPulls.put(key, new PendingPull(dimension, pos));
+                }
+                CompletableFuture<LevelChunk> cooling = new CompletableFuture<>();
+                inflight.put(key, cooling);
+                inflightStartMs.put(key, now);
+                return cooling;
+            }
+            timeoutCooldownUntil.remove(key);
+        }
+        ShadowSeedServer existingServer = ShadowServerRegistry.getInstance().get();
+        if (existingServer != null) {
+            LevelChunk material = existingServer.injectedChunk(dimension, pos.x, pos.z);
+            if (material != null && !existingServer.isPlaceholder(dimension, pos.x, pos.z)) {
+                completeAcquire(dimension, pos, material);
+                return CompletableFuture.completedFuture(material);
+            }
+        }
+        ShadowTrackingSession session = ShadowTrackingSession.getInstance();
+        if (session != null && !session.isAuthorityPullEligible(pos.x, pos.z)) {
+            io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat
+                    .failSuspendedLoad(dimension, pos);
+            pendingPulls.remove(key);
+            DebugLogger.info(DebugLogger.LogType.NETWORK,
+                    "[SHADOW_PROVIDER] skip acquire outside authority window ({}, {}) dim={}",
+                    pos.x, pos.z, dimension);
+            return CompletableFuture.failedFuture(
+                    new IllegalStateException("acquire outside authority window: " + pos));
         }
         CompletableFuture<LevelChunk> future = new CompletableFuture<>();
         CompletableFuture<LevelChunk> raced = inflight.putIfAbsent(key, future);
@@ -62,46 +124,129 @@ public final class VanillaAlignedChunkProvider implements ShadowChunkProvider {
         if (raced != null) {
             inflight.replace(key, raced, future);
         }
-        ShadowTrackingSession session = ShadowTrackingSession.getInstance();
-        // R4：会话未就绪 / 权威窗外禁止向真服 acquire（对齐原版 untrack 不发包）
-        if (session != null && !session.isAuthorityPullEligible(pos.x, pos.z)) {
-            inflight.remove(key, future);
-            future.completeExceptionally(
-                    new IllegalStateException("acquire outside authority window: " + pos));
-            DebugLogger.info(DebugLogger.LogType.NETWORK,
-                    "[SHADOW_PROVIDER] skip acquire outside authority window ({}, {}) dim={}",
-                    pos.x, pos.z, dimension);
-            return future;
-        }
-        if (!io.github.limuqy.mc.hassium.protocol.ShadowPullClient
-                .isPullRetryAllowed(dimension, pos)) {
-            // 冷却：清失败戳后立刻允许本轮（重连窗口不得整窗饿死）
-            io.github.limuqy.mc.hassium.protocol.ShadowPullClient.clearPullFailure(dimension, pos);
-        }
-        boolean hasBaseline = ShadowLightCompute.hasLocalPullBaseline(dimension, pos);
-        if (session != null && !session.markPullInFlightForAcquire(dimension, pos, System.currentTimeMillis())) {
-            // 残留在途标记：清掉后重试一次，保证悬置 future 一定有 pull 在途
-            session.clearPullInFlight(dimension, pos);
-            if (!session.markPullInFlightForAcquire(dimension, pos, System.currentTimeMillis())) {
-                DebugLogger.info(DebugLogger.LogType.NETWORK,
-                        "[SHADOW_PROVIDER] in-flight mark busy ({}, {}) dim={}",
-                        pos.x, pos.z, dimension);
-            }
-        }
+        // 入队即登记（无硬上限）；真正 C2S 由 drainPendingPulls 限流 + 出窗丢弃
+        pendingPulls.put(key, new PendingPull(dimension, pos));
         DebugLogger.info(DebugLogger.LogType.NETWORK,
-                "[SHADOW_PROVIDER] acquire ({}, {}) dim={} baseline={} reason={}",
-                pos.x, pos.z, dimension, hasBaseline, reason);
-        ShadowChunkAcquire.pullOne(dimension, pos, hasBaseline);
+                "[SHADOW_PROVIDER] enqueue pull ({}, {}) dim={} reason={} pending={}",
+                pos.x, pos.z, dimension, reason, pendingPulls.size());
         return future;
     }
 
-    /** inject 完成时清理 in-flight；chunk 为 null 时仅清标记（卸载/失败）。 */
+    /**
+     * 限流发送待拉队列（影子主循环调用）。出权威窗的柱直接丢弃。
+     */
+    public static void drainPendingPulls() {
+        INSTANCE.drainPendingPulls0();
+    }
+
+    private void drainPendingPulls0() {
+        long now = System.currentTimeMillis();
+        if (now - lastDrainMs < PULL_DRAIN_INTERVAL_MS || pendingPulls.isEmpty()) {
+            return;
+        }
+        lastDrainMs = now;
+        ShadowTrackingSession session = ShadowTrackingSession.getInstance();
+        ChunkPos center = session == null ? null : session.deliveryCenter();
+        if (center == null && session != null) {
+            center = session.virtualPlayerChunk();
+        }
+        List<PendingPull> batch = new ArrayList<>(pendingPulls.values());
+        final ChunkPos c = center;
+        if (c != null) {
+            batch.sort(Comparator.comparingLong(p -> {
+                long dx = (long) p.pos.x - c.x;
+                long dz = (long) p.pos.z - c.z;
+                return dx * dx + dz * dz;
+            }));
+        }
+        int sent = 0;
+        int dropped = 0;
+        int skippedCool = 0;
+        for (PendingPull pending : batch) {
+            if (sent >= PULL_SENDS_PER_DRAIN) {
+                break;
+            }
+            long key = DimensionKey.key(pending.dimension, pending.pos.x, pending.pos.z);
+            // 远距离：已出权威窗 → 丢弃，不再 C2S
+            if (session != null && !session.isAuthorityPullEligible(pending.pos.x, pending.pos.z)) {
+                if (pendingPulls.remove(key, pending)) {
+                    dropped++;
+                    failSuspendedOnly(pending.dimension, pending.pos);
+                    CompletableFuture<LevelChunk> f = inflight.remove(key);
+                    inflightStartMs.remove(key);
+                    if (f != null && !f.isDone()) {
+                        f.completeExceptionally(
+                                new IllegalStateException("pull dropped out of window: " + pending.pos));
+                    }
+                    try {
+                        session.clearPullInFlight(pending.dimension, pending.pos);
+                    } catch (Throwable ignored) {
+                    }
+                }
+                continue;
+            }
+            ShadowSeedServer server = ShadowServerRegistry.getInstance().get();
+            if (server != null) {
+                LevelChunk material =
+                        server.injectedChunk(pending.dimension, pending.pos.x, pending.pos.z);
+                if (material != null && !server.isPlaceholder(pending.dimension, pending.pos.x, pending.pos.z)) {
+                    pendingPulls.remove(key, pending);
+                    completeAcquire(pending.dimension, pending.pos, material);
+                    continue;
+                }
+            }
+            Long coolUntil = timeoutCooldownUntil.get(key);
+            if (coolUntil != null && now < coolUntil) {
+                skippedCool++;
+                continue;
+            }
+            if (coolUntil != null) {
+                timeoutCooldownUntil.remove(key);
+            }
+            CompletableFuture<LevelChunk> f = inflight.get(key);
+            if (f != null && f.isDone()) {
+                inflight.remove(key);
+                f = null;
+            }
+            if (f == null) {
+                f = new CompletableFuture<>();
+                inflight.put(key, f);
+            }
+            inflightStartMs.put(key, now);
+            boolean hasBaseline = ShadowLightCompute.hasLocalPullBaseline(pending.dimension, pending.pos);
+            if (session != null) {
+                if (!session.markPullInFlightForAcquire(pending.dimension, pending.pos, now)) {
+                    session.clearPullInFlight(pending.dimension, pending.pos);
+                    session.markPullInFlightForAcquire(pending.dimension, pending.pos, now);
+                }
+            }
+            pendingPulls.remove(key, pending);
+            ShadowChunkAcquire.pullOne(pending.dimension, pending.pos, hasBaseline);
+            sent++;
+        }
+        if (sent > 0 || dropped > 0) {
+            DebugLogger.info(DebugLogger.LogType.NETWORK,
+                    "[SHADOW_PROVIDER] drain pulls sent={} droppedFar={} coolSkip={} pendingLeft={}",
+                    sent, dropped, skippedCool, pendingPulls.size());
+        }
+    }
+
+    private static void failSuspendedOnly(String dimension, ChunkPos pos) {
+        try {
+            io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat.failSuspendedLoad(dimension, pos);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** inject 完成时清理 in-flight 与 pending。 */
     public static void completeAcquire(String dimension, ChunkPos pos, LevelChunk chunk) {
         if (dimension == null || pos == null) {
             return;
         }
         long key = DimensionKey.key(dimension, pos.x, pos.z);
+        INSTANCE.pendingPulls.remove(key);
         CompletableFuture<LevelChunk> future = INSTANCE.inflight.remove(key);
+        INSTANCE.inflightStartMs.remove(key);
         if (future != null && !future.isDone()) {
             if (chunk != null) {
                 future.complete(chunk);
@@ -119,10 +264,25 @@ public final class VanillaAlignedChunkProvider implements ShadowChunkProvider {
         if (dimension == null || pos == null) {
             return;
         }
-        INSTANCE.inflight.remove(DimensionKey.key(dimension, pos.x, pos.z));
+        long key = DimensionKey.key(dimension, pos.x, pos.z);
+        INSTANCE.pendingPulls.remove(key);
+        INSTANCE.inflight.remove(key);
+        INSTANCE.inflightStartMs.remove(key);
+        try {
+            ShadowTrackingSession.getInstance().clearPullInFlight(dimension, pos);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** 在途超时扫描（可由 drain 前调用；无泵时 acquire 路径也会检查）。 */
+    public static void noteInflightTimeout(long key, long nowMs) {
+        INSTANCE.timeoutCooldownUntil.put(key, nowMs + TIMEOUT_COOLDOWN_MS);
     }
 
     public static void clearAll() {
         INSTANCE.inflight.clear();
+        INSTANCE.inflightStartMs.clear();
+        INSTANCE.timeoutCooldownUntil.clear();
+        INSTANCE.pendingPulls.clear();
     }
 }

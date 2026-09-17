@@ -87,20 +87,9 @@ public final class ShadowChunkAcquire {
         if (shadow != null) {
             LevelChunkHolder holder = injectedNonPlaceholder(shadow, dimension, x, z);
             if (holder.present()) {
-                // 重入必 compare：注入柱仍在但客户端无落地凭据 → 不得 SKIP 盲交付
-                if (!ShadowLightCompute.isReentryPendingCompare(dimension, pos)) {
-                    return SelectionAction.SKIP;
-                }
-                if (!ShadowLightCompute.tryRequestMiss(dimension, pos)) {
-                    return SelectionAction.SKIP;
-                }
-                if (markInFlight && !markPullInFlight(dimension, pos)) {
-                    return SelectionAction.SKIP;
-                }
-                DebugLogger.info(DebugLogger.LogType.NETWORK,
-                        "[SHADOW_TRACK] reentry-compare ({}, {}) dim={} baseline=true reason=acquire",
-                        x, z, dimension);
-                return SelectionAction.PULL_COMPARE;
+                // 专用服语义：影子已有柱 = 服务端已 load，选柱路径不再 pull/compare。
+                // 投交给 tracking 泵 / deliverLocal；客户端 unload 不反驱再供给。
+                return SelectionAction.SKIP;
             }
         }
         // 失败冷却：RANGE 等拒绝后短冷却，避免风暴；冷却内两种选柱来源都跳过

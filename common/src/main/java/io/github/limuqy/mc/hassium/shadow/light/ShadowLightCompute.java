@@ -1702,8 +1702,12 @@ public final class ShadowLightCompute {
                                          net.minecraft.server.level.ServerLevel level,
                                          TraceOrigin origin) {
         try {
+            // B6：与 deliverLocal / pushReady 同一口径
             if (!ShadowTrackingSession.isDeliverableToClient(pos.x, pos.z)) {
-                return; // 光环柱：只算光不交付
+                DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+                        "[SHADOW_LIGHT] native light skip beyond view+margin ({}, {})",
+                        pos.x, pos.z);
+                return;
             }
             // S3：原版光——status/引擎产出即交付，无收敛停车门。
             runBuildOnShadowMain(pos, () -> {
@@ -1734,11 +1738,16 @@ public final class ShadowLightCompute {
             final ClientboundLevelChunkWithLightPacket fPacket = packet;
             final ChunkPos fPos = pos;
             io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.execute(() -> {
+                io.github.limuqy.mc.hassium.client.ClientChunkPipeline pipeline =
+                        io.github.limuqy.mc.hassium.client.ClientChunkPipeline.getInstance();
+                pipeline.setApplyInProgress(true);
                 try {
                     connection.handleLevelChunkWithLight(fPacket);
                 } catch (Throwable t) {
                     DebugLogger.warn(DebugLogger.LogType.CHUNK_APPLY,
                             "[SHADOW_CHUNK] vanilla-direct apply failed ({}, {})", fPos.x, fPos.z);
+                } finally {
+                    pipeline.setApplyInProgress(false);
                 }
             });
         } catch (Throwable ignored) {
@@ -2602,11 +2611,11 @@ public final class ShadowLightCompute {
                                   boolean renderOnly, TraceOrigin traceOrigin,
                                   boolean standingPreview) {
         ChunkPos pos = chunk.getPos();
-        // 光照光环（VD+1）只驻影子算光，不进真实客户端——对齐原版「只发 tracking 窗内 FULL」。
+        // B6：统一交付门 = ServerVD+余量；更远柱不进 ready（原版会 Ignore）
         if (!renderOnly && !standingPreview
                 && !ShadowTrackingSession.isDeliverableToClient(pos.x, pos.z)) {
             DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
-                    "[SHADOW_LIGHT] Halo skip deliver ({}, {}) dim={}",
+                    "[SHADOW_LIGHT] skip beyond view+margin ({}, {}) dim={}",
                     pos.x, pos.z, DimensionKey.dimensionOf(key));
             return;
         }

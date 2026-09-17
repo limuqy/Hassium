@@ -33,17 +33,14 @@ public final class ShadowChunkDeliver {
         if (dimension == null || pos == null) {
             return false;
         }
+        // 远离视距 + 余量外不投递；边界内仍投，原版可 Ignore 更远柱
         if (!renderOnly && !ShadowTrackingSession.isDeliverableToClient(pos.x, pos.z)) {
             DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
-                    "[SHADOW_DELIVER] skip out-of-window ({}, {}) dim={}",
+                    "[SHADOW_DELIVER] skip beyond view+margin ({}, {}) dim={}",
                     pos.x, pos.z, dimension);
             return false;
         }
-        if (!renderOnly && !localGeneration
-                && ShadowTrackingSession.getInstance()
-                        .tryReentryCompare(dimension, pos, "deliver")) {
-            return true;
-        }
+        // 专用服语义：本地已有柱 = 服务端已 load → 直接投递客户端。
         return ShadowLightCompute.publishCachedChunk(dimension, pos, localGeneration, renderOnly);
     }
 

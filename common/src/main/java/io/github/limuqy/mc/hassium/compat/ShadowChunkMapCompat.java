@@ -104,6 +104,20 @@ public final class ShadowChunkMapCompat {
         SUSPENDED_LOADS.clear();
     }
 
+    /**
+     * OVD / 窗外本地 miss：摘除悬置登记，<b>不得</b> {@code completeExceptionally}。
+     * 影子主循环会对 scheduleChunkLoad future join/whenComplete，异常完成会
+     * {@code CompletionException} 打崩 SHADOW_LOOP（1.20.1_fabric_I_ovdre 实证）。
+     * 语义 = 空置：不 pull、不注入空气柱；后续盘数据到达仍可 inject 放行。
+     */
+    public static void failSuspendedLoad(String dimension, ChunkPos pos) {
+        if (dimension == null || pos == null) {
+            return;
+        }
+        SUSPENDED_LOADS.remove(
+                io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z));
+    }
+
     /** 当前悬置 future 数量（诊断用）。 */
     public static int suspendedLoadCount() {
         return SUSPENDED_LOADS.size();

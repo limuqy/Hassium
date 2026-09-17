@@ -40,6 +40,11 @@ public final class ShadowOfficialPacketBridge {
     }
 
     private static void deliver(ClientPacketListener listener, Packet<?> packet) {
+        // 接法 B 直通原版落地：必须置 applyInProgress，否则 MixinClientPacketListener
+        // 会把桥包再次 intercept 进影子 light 管线（Halo/ready 二次门禁 → 真空洞）。
+        io.github.limuqy.mc.hassium.client.ClientChunkPipeline pipeline =
+                io.github.limuqy.mc.hassium.client.ClientChunkPipeline.getInstance();
+        pipeline.setApplyInProgress(true);
         try {
             if (packet instanceof ClientboundLevelChunkWithLightPacket chunkPacket) {
                 listener.handleLevelChunkWithLight(chunkPacket);
@@ -59,6 +64,8 @@ public final class ShadowOfficialPacketBridge {
                     "[SHADOW_BRIDGE] forward {}", packet.getClass().getSimpleName());
         } catch (Throwable t) {
             Constants.LOG.debug("Hassium: shadow bridge deliver failed {}", packet, t);
+        } finally {
+            pipeline.setApplyInProgress(false);
         }
     }
 }

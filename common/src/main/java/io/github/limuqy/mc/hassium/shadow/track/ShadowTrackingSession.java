@@ -58,10 +58,18 @@ public final class ShadowTrackingSession {
     private static final long CHUNK_TICK_BUDGET_NANOS = 2_000_000L;
     /** 一次泵最多发出的 pull 请求柱数（防首帧风暴；剩余下轮续发）。 */
     private static final int MAX_REQUESTS_PER_PUMP = 128;
-    /** 票窗补全泵间隔与单泵预算（ServerVD 窗内 completeness，非窗外 bootGrid）。 */
-    private static final long WINDOW_PUMP_INTERVAL_MS = 200L;
-    private static final int WINDOW_PUMP_BUDGET = 64;
-    private long lastWindowPumpMs;
+    /**
+     * 交付门余量：距 tracking 中心超过 {@code serverVD + 此值} 才不投递（B6）。
+     */
+    private static final int DELIVER_VIEW_MARGIN_CHUNKS = 4;
+    /**
+     * A1-② 进服/移动时权威窗 acquire 驱动间隔（非 WINDOW_PUMP：只负责「无 material 则 pull」，
+     * 不做 epoch 补扫、不交付）。真服 pull_mode 下无原版 trackChunk，必须有此驱动。
+     */
+    private static final long AUTHORITY_ACQUIRE_INTERVAL_MS = 200L;
+    /** 每拍最多向 Provider 提交 acquire 的格数（在途上限另见 Provider）。 */
+    private static final int AUTHORITY_ACQUIRE_BUDGET = 64;
+    private long lastAuthorityAcquireMs;
 
     /** 客户端 tick 发布的待同步状态（volatile 整体换引用，无锁）。 */
     private record PendingState(String dimension, double x, double y, double z,
@@ -82,10 +90,6 @@ public final class ShadowTrackingSession {
 
     /** 会话落位基准点：首个稳定座位（虚拟玩家放置瞬间的 chunk）。 */
     private ChunkPos homeChunk;
-    private final java.util.concurrent.ConcurrentLinkedQueue<ChunkPos> redeliverQueue =
-            new java.util.concurrent.ConcurrentLinkedQueue<>();
-    /** 单泵最多本地重发柱数。 */
-    private static final int MAX_REDELIVER_PER_PUMP = 32;
 
     /**
      * 注入表回收：保留域 = 可见形状 ∪ OVD 圈（即 {@code max(serverVD, clientVD)} 几何）。
@@ -207,6 +211,11 @@ public final class ShadowTrackingSession {
         }
     }
 
+    /** 交付/pull 轴心：真实玩家优先；无玩家时退回虚拟玩家（进服 boot）。 */
+    public ChunkPos virtualPlayerChunk() {
+        return virtualPlayer == null ? null : virtualPlayer.chunkPosition();
+    }
+
     /**
      * 权威 pull 门（R4）：**优先用真实客户端玩家区块**（真服 tracking 的中心），
      * 会话未就绪（VD 未知 / 无中心）时禁止 pull。与 {@link #inVanillaVisibleShape}
@@ -299,7 +308,6 @@ public final class ShadowTrackingSession {
             currentDimension = null;
             createFailed = false;
             sweepInFlight.clear();
-            redeliverQueue.clear();
             lastChunkTickMs = 0;
         }
         if (shadow == null || createFailed) {
@@ -343,66 +351,84 @@ public final class ShadowTrackingSession {
         }
         ShadowPlayerCompat.flushVirtualPlayerChunks(virtualPlayer);
         sweepOvdRing(shadow, now);
-        drainRedeliver(shadow);
-        drainTrackingWindowCompleteness(shadow, now);
+        drainAuthorityAcquires(shadow, now);
+        // pull 队列：限流发送 + 出权威窗丢弃（无客户端硬在途上限）
+        VanillaAlignedChunkProvider.drainPendingPulls();
+        // WINDOW_PUMP / drainRedeliver 已删：交付由 A1 三链（pull 响应 / materialize publish / 官方桥）承担。
         // P3（注入表回收）不在此处调用：ShadowSeedServer.unloadChunk 的 flushColumn 会等待
         // 影子主循环 → 主循环内调用即自死锁（实测 R2 挂死 / teardown 悬挂）。候选由
         // onClientChunkUnloaded 登记，回收由独立的 hassium-shadow-reclaim 线程驱动。
     }
 
     /**
-     * 影子票窗（ServerVD）补全：客户端无落地凭据 → 已注入 publish / 未注入 Provider.acquire。
-     * 只扫当前窗，不自绘窗外几何（不是 bootGrid）。
+     * A1-② 驱动：权威窗内「无 inject material」的柱向真服 acquire/pull（近→远）。
+     * 有 material 的柱不在本方法交付（由 materialize/pull 响应/官方桥交付）。
      */
-    private void drainTrackingWindowCompleteness(ShadowSeedServer shadow, long nowMs) {
+    private void drainAuthorityAcquires(ShadowSeedServer shadow, long nowMs) {
         if (shadow == null || virtualPlayer == null || currentDimension == null
                 || serverViewDistance <= 0) {
             return;
         }
-        if (nowMs - lastWindowPumpMs < WINDOW_PUMP_INTERVAL_MS) {
+        if (nowMs - lastAuthorityAcquireMs < AUTHORITY_ACQUIRE_INTERVAL_MS) {
             return;
         }
-        lastWindowPumpMs = nowMs;
-        ChunkPos center = virtualPlayer.chunkPosition();
+        lastAuthorityAcquireMs = nowMs;
+        ChunkPos center = deliveryCenter();
+        if (center == null) {
+            center = virtualPlayer.chunkPosition();
+        }
         if (center == null) {
             return;
         }
-        int served = 0;
-        int acquired = 0;
-        for (int x = center.x - serverViewDistance; x <= center.x + serverViewDistance; x++) {
-            for (int z = center.z - serverViewDistance; z <= center.z + serverViewDistance; z++) {
-                if (served + acquired >= WINDOW_PUMP_BUDGET) {
-                    break;
-                }
-                if (!ChunkShapeCompat.contains(center.x, center.z, serverViewDistance, x, z)) {
+        int range = serverViewDistance;
+        java.util.List<ChunkPos> enter = new java.util.ArrayList<>();
+        for (int x = center.x - range; x <= center.x + range; x++) {
+            for (int z = center.z - range; z <= center.z + range; z++) {
+                if (!ChunkShapeCompat.contains(center.x, center.z, range, x, z)) {
                     continue;
                 }
-                ChunkPos pos = new ChunkPos(x, z);
-                if (ShadowLightCompute.hasClientApplyEpoch(currentDimension, pos)) {
-                    continue;
-                }
-                net.minecraft.world.level.chunk.LevelChunk injected =
-                        shadow.injectedChunk(currentDimension, x, z);
-                if (injected != null && !shadow.isPlaceholder(currentDimension, x, z)) {
-                    // 重入必 compare：无落地凭据时不得盲 deliverLocal（丢视距外方块更新）
-                    if (tryReentryCompare(currentDimension, pos, "window")) {
-                        acquired++;
-                        continue;
-                    }
-                    if (ShadowChunkDeliver.deliverLocal(currentDimension, pos, false, false)) {
-                        served++;
-                    }
-                    continue;
-                }
-                VanillaAlignedChunkProvider.getInstance().acquire(
-                        currentDimension, pos, ShadowChunkProvider.AcquireReason.TRACKING);
-                acquired++;
+                enter.add(new ChunkPos(x, z));
             }
         }
-        if (served + acquired > 0) {
+        final int cx = center.x;
+        final int cz = center.z;
+        enter.sort(java.util.Comparator.comparingLong(p -> {
+            long dx = (long) p.x - cx;
+            long dz = (long) p.z - cz;
+            return dx * dx + dz * dz;
+        }));
+        int submitted = 0;
+        int skippedMaterial = 0;
+        int published = 0;
+        for (ChunkPos pos : enter) {
+            if (submitted + published >= AUTHORITY_ACQUIRE_BUDGET) {
+                break;
+            }
+            net.minecraft.world.level.chunk.LevelChunk injected =
+                    shadow.injectedChunk(currentDimension, pos.x, pos.z);
+            boolean material = injected != null
+                    && !shadow.isPlaceholder(currentDimension, pos.x, pos.z);
+            if (material) {
+                skippedMaterial++;
+                // A1：影子已有柱 = 服务端已 load。客户端无本会话落地凭据 → 立即权威柱交付
+                // （epoch 仅作「是否已发过」去重，不作选柱输入）。删 WINDOW_PUMP 后若跳过
+                // 此步，飞行入窗会「影子有货、客户端虚空」。
+                if (!ShadowLightCompute.hasClientApplyEpoch(currentDimension, pos)
+                        && isDeliverableToClient(pos.x, pos.z)
+                        && ShadowChunkDeliver.deliverLocal(currentDimension, pos, false, false)) {
+                    published++;
+                }
+                continue;
+            }
+            VanillaAlignedChunkProvider.getInstance().acquire(
+                    currentDimension, pos, ShadowChunkProvider.AcquireReason.TRACKING);
+            submitted++;
+        }
+        if (submitted > 0 || published > 0) {
             DebugLogger.info(DebugLogger.LogType.NETWORK,
-                    "[SHADOW_TRACK] window-complete center=({},{}) vd={} served={} acquired={}",
-                    center.x, center.z, serverViewDistance, served, acquired);
+                    "[SHADOW_TRACK] authority-acquire center=({},{}) vd={} submitted={} published={} material={} (dimension={})",
+                    center.x, center.z, serverViewDistance, submitted, published,
+                    skippedMaterial, currentDimension);
         }
     }
 
@@ -577,9 +603,8 @@ public final class ShadowTrackingSession {
     }
 
     /**
-     * 真实客户端 unload 时调用（任意线程）：清光桥凭据；若影子仍在可见形状内且有数据，
-     * 入重发队列。对齐原版语义——服务端仍把你算在 tracking 窗内就必须有数据；
-     * 真实服 Forget 半径可能小于影子 vd，不能等 tracking 边沿。
+     * 真实客户端 unload（任意线程）。A3：客户端缓存不反驱影子选柱。
+     * 窗内只清离开标记；窗外登记后由 reclaim 摘 inject（等价原版 Forget 后服务端卸）。
      */
     public void onClientChunkUnloaded(ChunkPos pos) {
         if (pos == null || boundServer == null || currentDimension == null) {
@@ -592,64 +617,11 @@ public final class ShadowTrackingSession {
             return;
         }
         if (stillWanted) {
-            // 客户端仍需要（窗内）：入重发队列，撤销离开标记
             outsideSinceMs.remove(key);
-            redeliverQueue.add(pos);
             return;
         }
-        // 客户端卸载且不在窗内：登记离开时刻，宽限后由 reclaimOutOfRetainSet 回收注入表。
-        // 触发源是真实客户端 leave（真服 Forget），不按影子端自绘几何推断。
         outsideSinceMs.putIfAbsent(key, System.currentTimeMillis());
         ensureReclaimTimer();
-    }
-
-    /** 影子主循环：把「窗内但客户端已无」的柱本地重发（等价原版 trackChunk）。 */
-    private void drainRedeliver(ShadowSeedServer shadow) {
-        int sent = 0;
-        ChunkPos pos;
-        while (sent < MAX_REDELIVER_PER_PUMP && (pos = redeliverQueue.poll()) != null) {
-            if (shadow == null || currentDimension == null) {
-                continue;
-            }
-            if (shadow.injectedChunk(currentDimension, pos.x, pos.z) == null) {
-                continue;
-            }
-            // 空气空壳占位柱不得 redeliver：它是光照齐套的临时占位，不是真实数据。
-            if (shadow.isPlaceholder(currentDimension, pos.x, pos.z)) {
-                continue;
-            }
-            if (!inVanillaVisibleShape(pos.x, pos.z) && !inOvdWindow(pos.x, pos.z)) {
-                continue;
-            }
-            if (ShadowLightCompute.hasClientApplyEpoch(currentDimension, pos)) {
-                continue; // 本会话已有落地凭据
-            }
-            if (ShadowLightCompute.isLocalRequeueInFlight(currentDimension, pos)) {
-                continue; // 本地复用已排队（generated/inflightLight），不重发维持队列抖动
-            }
-            // 本会话网络路径已在途/已记账：redeliver 不得再记成缓存全命中
-            if (ShadowLightCompute.wasNetworkIngress(currentDimension, pos)
-                    && ShadowLightCompute.hasClientApplyEpoch(currentDimension, pos)) {
-                continue;
-            }
-            // 重入必 compare：窗内重投递也不得盲 publish 旧柱
-            if (tryReentryCompare(currentDimension, pos, "redeliver")) {
-                continue;
-            }
-            boolean ovd = !inVanillaVisibleShape(pos.x, pos.z) && inOvdWindow(pos.x, pos.z);
-            boolean ok = ovd
-                    ? ShadowLightCompute.publishOvdCachedChunk(currentDimension, pos)
-                    : ShadowLightCompute.publishCachedChunk(currentDimension, pos);
-            if (ok) {
-                if (ovd) {
-                    recordOvdLoadedOnce(currentDimension, pos);
-                }
-                DebugLogger.info(DebugLogger.LogType.NETWORK,
-                        "[SHADOW_TRACK] redeliver ({}, {}) -> publishCached ovd={} (dimension={})",
-                        pos.x, pos.z, ovd, currentDimension);
-                sent++;
-            }
-        }
     }
 
     private void applyState(ShadowSeedServer shadow, PendingState state) {
@@ -712,7 +684,6 @@ public final class ShadowTrackingSession {
      */
     private void onTrackingDimensionChanged(PendingState state) {
         sweepInFlight.clear();
-        redeliverQueue.clear();
         ovdCounted.clear();
         ovdMissCounted.clear();
         ovdMissRetryAt.clear();
@@ -817,13 +788,26 @@ public final class ShadowTrackingSession {
         return ChunkShapeCompat.contains(center.x, center.z, serverViewDistance, x, z);
     }
 
-    /** 交付/trace 候选：权威可见形状 ∪ OVD（OVD 冻结时仅权威形状）。 */
+    /** 交付/trace 候选：权威形状 + 视距余量 ∪ OVD（B6）。 */
     public static boolean isDeliverableToClient(int x, int z) {
         ShadowTrackingSession s = INSTANCE;
         if (s == null) {
             return true;
         }
-        return s.inVanillaVisibleShape(x, z) || s.inOvdWindow(x, z);
+        return s.inDeliverableShape(x, z) || s.inOvdWindow(x, z);
+    }
+
+    /** 权威投递形状：serverVD + {@link #DELIVER_VIEW_MARGIN_CHUNKS}。 */
+    private boolean inDeliverableShape(int x, int z) {
+        if (serverViewDistance <= 0) {
+            return true;
+        }
+        ChunkPos center = deliveryCenter();
+        if (center == null) {
+            return true;
+        }
+        int range = serverViewDistance + DELIVER_VIEW_MARGIN_CHUNKS;
+        return ChunkShapeCompat.contains(center.x, center.z, range, x, z);
     }
 
     /** OVD 窗：client chebyshev 窗内且权威窗外；本地源服务，禁止 pull。 */
@@ -1040,70 +1024,42 @@ public final class ShadowTrackingSession {
             }
             return;
         }
+        // A1-③：seedGen 需先与真服 compare，再由响应侧权威柱交付
         if (SeedGenExecutor.deferLightUntilAuthority(localWorldgen, true)) {
             DebugLogger.info(DebugLogger.LogType.NETWORK,
-                    "[SHADOW_TRACK] local worldgen ({}, {}) persist then compare-before-light (dimension={})",
+                    "[SHADOW_TRACK] seedGen materialize ({}, {}) -> compare-before-deliver (dimension={})",
                     pos.x, pos.z, dimension);
             requestPullEligible(dimension, pos, false);
             return;
         }
-        // 空占位/无盘命中的首注入：没有可发布的基线，先 pull 真实数据（禁止把空气柱推给客户端）
-        boolean hasLocalBaseline = alreadyMaterialized
-                || diskHit
-                || ShadowLightCompute.hasLocalPullBaseline(dimension, pos);
-        if (!hasLocalBaseline) {
+        if (!isDeliverableToClient(pos.x, pos.z)) {
+            return;
+        }
+        net.minecraft.world.level.chunk.LevelChunk material =
+                shadow.injectedChunk(dimension, pos.x, pos.z);
+        boolean deliverableMaterial = material != null
+                && !shadow.isPlaceholder(dimension, pos.x, pos.z);
+        if (!deliverableMaterial) {
+            // A1-②：无本地可交付基线 → 权威 FULL
             DebugLogger.info(DebugLogger.LogType.NETWORK,
-                    "[SHADOW_TRACK] materialized ({}, {}) no-local-baseline -> pull (dimension={})",
+                    "[SHADOW_TRACK] materialized ({}, {}) no-material -> pull FULL (dimension={})",
                     pos.x, pos.z, dimension);
-            requestPullEligible(dimension, pos, false);
+            requestPullEligible(dimension, pos, true);
             return;
         }
-        // 重入（客户端无落地凭据 + 本地有基线）：必须先 compare，禁止盲 publish 当缓存命中。
-        // 覆盖注入表仍在（未 reclaim）与盘命中重载两条；UNCHANGED 由响应侧 publish+记全命中。
-        if (!ShadowLightCompute.hasClientApplyEpoch(dimension, pos)
-                && tryReentryCompare(dimension, pos,
-                        alreadyMaterialized ? "materialize" : "materialize-disk")) {
-            return;
-        }
-        // compare 路径不可用（原版服/未握手/窗外）或发射失败：回退本地 publish，避免黑洞。
-        // 不得因 wasNetworkIngress（上一会话/generated 残留）改走 pull 而丢交付——
-        // 实测 park 复用时 R1 1529 柱只回放 775，移动新区也不出现。
-        if (alreadyMaterialized && !ShadowLightCompute.hasClientApplyEpoch(dimension, pos)) {
-            boolean published = ShadowLightCompute.publishCachedChunk(dimension, pos);
-            if (!published) {
-                DebugLogger.info(DebugLogger.LogType.NETWORK,
-                        "[SHADOW_TRACK] materialized ({}, {}) redeliver-publish-failed -> pull (dimension={})",
-                        pos.x, pos.z, dimension);
-                ShadowLightCompute.clearRequestMiss(dimension, pos);
-                requestPullEligible(dimension, pos, true);
-                return;
-            }
-            return;
-        }
-        // 本会话网络全量已注入/落地：交付由 SERVER_PUSH/REMOTE_PULL 路径完成。
-        // 再 publishCachedChunk 会把同一柱改记成 MEMORY_CACHE 假全命中（R1 1219 假命中根因）。
-        if (alreadyMaterialized
-                && (ShadowLightCompute.wasNetworkIngress(dimension, pos)
-                    || ShadowLightCompute.hasClientApplyEpoch(dimension, pos))) {
-            if (ShadowLightCompute.tryRequestMiss(dimension, pos)) {
-                requestPullEligible(dimension, pos, false);
-            }
-            return;
-        }
-        // 进边沿必交付：盘上命中 / 上一会话缓存。本地 worldgen 已在上面 compare-before-light 返回。
+        // A1-①：有 material → 立即权威柱交付（compare 不挡首投；A3 不读 epoch）
         boolean published = ShadowLightCompute.publishCachedChunk(dimension, pos, localWorldgen, false);
         if (!published) {
             DebugLogger.info(DebugLogger.LogType.NETWORK,
-                    "[SHADOW_TRACK] materialized ({}, {}) publish-failed -> pull (dimension={})",
+                    "[SHADOW_TRACK] materialized ({}, {}) publish-failed -> pull FULL (dimension={})",
                     pos.x, pos.z, dimension);
             ShadowLightCompute.clearRequestMiss(dimension, pos);
             requestPullEligible(dimension, pos, true);
             return;
         }
         DebugLogger.info(DebugLogger.LogType.NETWORK,
-                "[SHADOW_TRACK] materialized ({}, {}) alreadyMaterialized={} -> publishCached (dimension={})",
-                pos.x, pos.z, alreadyMaterialized, dimension);
-        // 已本地交付后，可选对真实服 compare 保新鲜；防抖只作用于网络请求
+                "[SHADOW_TRACK] materialized ({}, {}) -> publishCached (dimension={}) localWorldgen={}",
+                pos.x, pos.z, dimension, localWorldgen);
         if (ShadowLightCompute.tryRequestMiss(dimension, pos)) {
             requestPullEligible(dimension, pos, false);
         }
@@ -1235,7 +1191,6 @@ public final class ShadowTrackingSession {
         s.boundServer = null;
         s.createFailed = false;
         s.sweepInFlight.clear();
-        s.redeliverQueue.clear();
         s.outsideSinceMs.clear();
         // Provider 在途 future / 悬置 load 必须随会话清空：R2 join 旧 future 会让
         // scheduleChunkLoad 悬置 holder 永不完成（R2 landed 只有 71 的根因之一）。
