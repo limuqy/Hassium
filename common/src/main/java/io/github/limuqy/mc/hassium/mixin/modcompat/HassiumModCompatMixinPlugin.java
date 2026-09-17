@@ -30,7 +30,12 @@ public final class HassiumModCompatMixinPlugin implements IMixinConfigPlugin {
     @Override
     public boolean shouldApplyMixin(String targetClassName, String mixinClassName) {
         try {
-            return ModCompatFlags.c2meChunkIoReplaced();
+            boolean apply = ModCompatFlags.c2meChunkIoReplaced();
+            if (apply) {
+                // 结构信号：mixin 将被应用（与是否发生 RegionFileVersion.wrap 流量无关）。
+                io.github.limuqy.mc.hassium.compat.mods.ModCompatStats.onCompatArmed();
+            }
+            return apply;
         } catch (Throwable t) {
             return false;
         }

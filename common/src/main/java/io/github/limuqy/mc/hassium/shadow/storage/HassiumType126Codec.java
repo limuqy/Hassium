@@ -17,6 +17,11 @@ public final class HassiumType126Codec {
     public static final byte HASH_MAGIC = (byte) 0x48;
     public static final int HASH_LENGTH = 8;
 
+    /** 厨房 Anvil 压缩 ID（region 槽 type 字节）。 */
+    public static final byte TYPE_GZIP = 1;
+    public static final byte TYPE_ZLIB = 2;
+    public static final byte TYPE_NONE = 3;
+
     private HassiumType126Codec() {}
 
     /**
@@ -101,6 +106,44 @@ public final class HassiumType126Codec {
         byte[] raw = new byte[length - 1];
         System.arraycopy(sector, 5, raw, 0, raw.length);
         return raw;
+    }
+
+    /**
+     * 解压原版 Anvil 槽 type 之后的载荷（C2ME wrap 未接管时的 zlib/gzip/none）。
+     * 供影子单写者把外部 IO 写入重编码为 type 126。
+     */
+    public static byte[] decodeVanillaPayload(byte compressionType, byte[] payloadAfterType)
+            throws IOException {
+        if (payloadAfterType == null) {
+            throw new IOException("vanilla payload is null");
+        }
+        if (compressionType == TYPE_NONE) {
+            return payloadAfterType;
+        }
+        java.io.InputStream in;
+        if (compressionType == TYPE_GZIP) {
+            in = new java.util.zip.GZIPInputStream(new java.io.ByteArrayInputStream(payloadAfterType));
+        } else if (compressionType == TYPE_ZLIB) {
+            in = new java.util.zip.InflaterInputStream(new java.io.ByteArrayInputStream(payloadAfterType));
+        } else {
+            throw new IOException("unsupported vanilla compression type " + (compressionType & 0xFF));
+        }
+        try (in; java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream(
+                Math.max(32, payloadAfterType.length * 2))) {
+            in.transferTo(out);
+            return out.toByteArray();
+        }
+    }
+
+    /**
+     * 外部 IO 的原版压缩槽 → type 126 sector 字节（含 4B length + 1B type + 0x48/hash + ZSTD）。
+     * 影子上下文 C2ME wrap 失败时用，避免与 {@code RegionCache.Image.save} 双写。
+     */
+    public static byte[] reencodeVanillaToHassium(
+            byte compressionType, byte[] payloadAfterType, Long contentHash, int zstdLevel)
+            throws IOException {
+        byte[] nbt = decodeVanillaPayload(compressionType, payloadAfterType);
+        return encodeSector(nbt, contentHash, zstdLevel);
     }
 
     public record Decoded(byte[] nbt, Long contentHash) {}

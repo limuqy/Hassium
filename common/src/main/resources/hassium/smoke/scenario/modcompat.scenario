@@ -4,12 +4,14 @@
 # mod 专属字段；带 mods 组另用 modcompat_strict.scenario 追加强断言（防空测）。
 #
 # 与 seedgen 同形：单轮、干净世界（脚本对非 classic 场景强制 -CleanWorld）。
-# 配置档案 modcompat.profile.properties：chunk.seedGenEnabled + debug.networkMetricsEnabled。
+# 配置档案 modcompat.profile.properties：chunk.seedGenEnabled=false + debug.networkMetricsEnabled。
 #
 # 关键观测字段（probe roundN.json 的 modCompat 段，本场景不断言）：
 #   modCompat.c2me / c2meChunkIoReplaced / c2meOpenCl / starlightFamily
+#   modCompat.c2meCompatArmed —— modcompat mixin 已放行（结构；strict 作 P0）
 #   modCompat.foreignLightEngineActive —— 光照引擎是否被 Starlight / ScalableLux 替换
-#   modCompat.c2meHookHits / type126Patched —— 写侧接管命中数
+#   modCompat.c2meHookHits —— RegionFileVersion.wrap 接管命中（关 seedGen 可为 0，只观测）
+#   modCompat.type126Patched —— 写侧 type126 头补丁命中（影子下被收编短路，只观测）
 join label=WAIT_JOIN_1 since=start timeoutMs=${joinTimeoutMs}
 fly seconds=${moveSeconds} tag=MOVE_
 wait ms=${round1WaitMs}

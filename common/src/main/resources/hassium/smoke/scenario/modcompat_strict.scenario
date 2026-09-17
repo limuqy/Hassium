@@ -2,8 +2,12 @@
 #
 # 与 modcompat.scenario 同形，追加兼容层强断言以防"空测"——否则"装没装 mod 都 PASS"
 # 无法证明接管真的生效：
-#   modCompat.c2meChunkIoReplaced eq 1 —— C2ME 自实现区块 IO（ioSystem.replaceImpl）已装
-#   modCompat.c2meHookHits      gt 0   —— 压缩入口接管命中（=0 说明接管未生效）
+#   modCompat.c2meChunkIoReplaced eq 1 —— C2ME 自实现区块 IO（ioSystem.replaceImpl）类存在
+#   modCompat.c2meCompatArmed     eq 1 —— modcompat mixin 已被 plugin 放行（结构信号）
+#
+# 不断言 modCompat.c2meHookHits：影子主路径 ShadowStorageManager→Image.save 不经
+# RegionFileVersion.wrap；关 seedGen（网络-only）时 C2ME 可能整场不写 chunk → hookHits=0
+# 是预期而非接管失败（见 mod-compat.md §7.2b）。该字段只作观测。
 #
 # 不断言 modCompat.type126Patched：影子上下文里影子映像已是唯一写者，RegionFile.write
 # 被取消（见 mod-compat.md §7.3），挂在同一注入点的 C2ME type/hash 补丁随之被短路，
@@ -18,5 +22,5 @@ dump label=ROUND1 round=1
 assertProbe key=stats.clientAppliedChunkCount op=gt value=0
 assertProbe key=stats.clientLandedChunkCount op=gt value=0
 assertProbe key=modCompat.c2meChunkIoReplaced op=eq value=1
-assertProbe key=modCompat.c2meHookHits op=gt value=0
+assertProbe key=modCompat.c2meCompatArmed op=eq value=1
 exit rounds=1

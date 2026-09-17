@@ -81,6 +81,41 @@ class SpatialCheckTest(unittest.TestCase):
         self.assertEqual(0, report["gaps"]["receivedNotInjected"]["count"])
         self.assertEqual(0, report["gaps"]["expectedNotPresent"]["count"])
 
+    def test_ready_not_applied_excludes_seedgen_local_residency(self):
+        """seedgen：本地柱进 ready/applied，但不在 networkReceived → actualPresent。
+        readyNotApplied 必须按 ready−clientApplied，不能减 actualPresent。"""
+        from scripts.smoke.analyzer import _trace_analysis
+
+        network = [[0, 0]]
+        local = [[1, 0], [2, 0]]
+        report = _trace_analysis({
+            "chunkTrace": {
+                "networkReceived": {"positions": network},
+                "shadowInjected": {"positions": network + local},
+                "shadowReady": {"positions": network + local},
+                "clientApplied": {"positions": network + local},
+                "meshCompiled": {"positions": network + local},
+            },
+            "clientCache": {"actualPresent": {"positions": network}},
+        })
+        self.assertEqual(0, report["gaps"]["readyNotApplied"]["count"])
+        self.assertEqual(0, report["gaps"]["expectedNotPresent"]["count"])
+
+    def test_ready_not_applied_detects_true_unapplied(self):
+        from scripts.smoke.analyzer import _trace_analysis
+
+        report = _trace_analysis({
+            "chunkTrace": {
+                "networkReceived": {"positions": [[0, 0]]},
+                "shadowReady": {"positions": [[0, 0], [1, 0]]},
+                "clientApplied": {"positions": [[0, 0]]},
+                "meshCompiled": {"positions": [[0, 0]]},
+            },
+            "clientCache": {"actualPresent": {"positions": [[0, 0]]}},
+        })
+        self.assertEqual(1, report["gaps"]["readyNotApplied"]["count"])
+        self.assertEqual([[1, 0]], report["gaps"]["readyNotApplied"]["positions"])
+
     def test_classic_spatial_snapshot_is_diagnostic_not_gate(self):
         from scripts.smoke.analyzer import analyze_result
         from pathlib import Path

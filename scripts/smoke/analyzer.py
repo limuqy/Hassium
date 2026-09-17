@@ -161,7 +161,9 @@ def _trace_analysis(probe: dict[str, Any]) -> dict[str, Any]:
         # 纯原版 world-side 路径会直接 networkReceived → clientApplied，不经过已裁剪的影子注入/ready 阶段。
         "receivedNotInjected": stages["networkReceived"] - (stages["shadowInjected"] | stages["clientApplied"]),
         "injectedNotReady": stages["shadowInjected"] - stages["shadowReady"],
-        "readyNotApplied": stages["shadowReady"] - actual,
+        # 名实一致：ready 却未进 clientApplied。不可用 actualPresent——那只抽
+        # networkReceived 候选（SmokeProbeWriter），seedgen 本地柱会整批伪造成缺口。
+        "readyNotApplied": stages["shadowReady"] - stages["clientApplied"],
         "appliedNotMeshed": stages["clientApplied"] - stages["meshCompiled"],
         "expectedNotPresent": expected - actual,
     }

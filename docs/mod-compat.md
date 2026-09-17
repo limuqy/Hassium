@@ -99,9 +99,41 @@ C2ME 与 Hassium 是「加速器与用户」关系：Hassium 影子端的 worldg
 - **零重压**：载荷在压缩入口即由 Hassium 直接 ZSTD+字典产出，`RegionFile.write` 只改 2 个头字段。
 
 **门控**（与 `MixinRegionFile` 写路径同口径）：影子端恒接管；专用服需 `storage.enabled=true`。
-无 C2ME 时两个 hook 由 `HassiumModCompatMixinPlugin` 整体跳过。
+无 C2ME 时两个 hook 由 `HassiumModCompatMixinPlugin` 整体跳过；放行时计
+`ModCompatStats.compatArmed`（probe `modCompat.c2meCompatArmed`，strict P0 结构锚）。
 
 **逃生：** `storage.enabled = false`（默认已关；影子端不受该开关约束，故影子缓存始终受益）。
+
+### 7.2b 影子单写者主路径不经过 wrap（改造后）
+
+影子端持久化主路径是 `ShadowStorageHashes` 标脏 → `ShadowStorageManager.flushDirty`
+→ `HassiumType126Codec.encodeSector` → `RegionCache.Image.save` 整文件重写 **.mca**
+（见 [`chunk-cache.md`](chunk-cache.md) §11.3）。该链 **不调用** `RegionFileVersion.wrap`，
+也不经过 C2ME `C2MEStorageThread` 的自拼 sector。
+
+因此：
+
+| 信号 | 含义 | 关 seedGen（网络-only） |
+|------|------|-------------------------|
+| `c2meCompatArmed` | modcompat mixin 已放行 | **应 = 1**（结构） |
+| `c2meChunkIoReplaced` | C2ME replaceImpl 类存在 | **应 = 1** |
+| `c2meHookHits` | `wrap` 接管命中（C2ME/ChunkMap 写过 chunk） | **可 = 0（预期）** |
+| `type126Patched` | `RegionFile.write` 头补丁放行 | 影子下被收编短路，只观测 |
+
+仅当 SeedGen 本地 worldgen / 其它仍走 `ChunkMap`+C2ME 的写发生时，§7.2 的 wrap 钩子
+才会产生 `c2meHookHits`。`modcompat_strict` 以 `c2meCompatArmed` 作防空测 P0，
+**不再**要求 `c2meHookHits > 0`。
+
+**C 级双写加固（已落地）**：影子上下文解析到 `ShadowStorageManager` 后，
+`MixinRegionFile.adoptShadowWrite` **一律 `ci.cancel()`**，禁止 `RegionFile` 自身落盘。
+载荷处理：
+
+- `0x48`（wrap 已接管）：直接 `adoptEncodedColumn` 收编进映像；
+- 非 `0x48`（C2ME wrap 未接管时的 zlib/gzip/none）：`HassiumType126Codec.reencodeVanillaToHassium`
+  解压后重编码 type 126 再收编；
+- 重编码失败：放弃该柱并记 ERROR（宁可 cache miss / 重拉，也不与 `Image.save` 双写撕裂 .mca）。
+
+主兼容仍是 §7.2 的 wrap 钩子（产出 `0x48`）；本条是 wrap 失败时的兜底，不再回落 `RegionFile.write`。
 
 ### 7.3 影子端：`RegionFile.write` 收编而非落盘（单写者）
 
@@ -119,8 +151,8 @@ C2ME 与 Hassium 是「加速器与用户」关系：Hassium 影子端的 worldg
 `cancel()` 同时短路挂在同一注入点的后续 HEAD 注入，故影子上下文里 C2ME 的 type126/hash
 补丁不再执行（冒烟实测：2363 次影子写只放行 21 次补丁）。这是冗余而非缺失——收编路径已按
 坐标归一化嵌入 hash，且映像落盘自己写 type 字节；该补丁只在专用服存储路径（非影子）保留
-原有职责。**推论：`modCompat.type126Patched` 在影子上下文只作观测，不作门禁**（门禁改用
-`c2meHookHits`，见 runtime-smoke-test §外部 Mod 手动冒烟）。
+原有职责。**推论：`modCompat.type126Patched` 在影子上下文只作观测，不作门禁**；
+`modCompat.c2meHookHits` 同为流量观测（§7.2b），strict 结构门禁用 `c2meCompatArmed`。
 
 读侧同样改道映像（`ShadowSeedServer.loadFromDisk` 早已如此），否则过期扇区表仍会读出错位柱。
 非 Hassium 载荷（vanilla zlib/gzip/lz4/none）不收编，回落原版写盘——单写者约束只为该柱让步，

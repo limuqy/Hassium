@@ -455,10 +455,10 @@ public final class SmokeProbeWriter {
     }
 
     /**
-     * modCompat：三方兼容层证据（只增不改）。{@code detected*} 为结构性检测结果，
-     * {@code c2meHookHits} 为压缩入口接管的命中次数——**为 0 说明接管未生效**
-     * （典型原因：C2ME 未装 / 未开 {@code ioSystem.replaceImpl} / gate 未放行），
-     * 是防空测的关键锚点。
+     * modCompat：三方兼容层证据（只增不改）。{@code detected*} / {@code c2meCompatArmed}
+     * 为结构信号（mixin 是否放行），与写流量无关；{@code c2meHookHits} 是
+     * {@code RegionFileVersion.wrap} 接管命中——影子主路径走映像不经 wrap，
+     * 关 seedGen 可恒 0，只作观测（strict 不再断言）。
      */
     private static void appendModCompat(StringBuilder sb) {
         sb.append("  \"modCompat\": {\n");
@@ -471,6 +471,9 @@ public final class SmokeProbeWriter {
         sb.append("    \"starlightFamily\": ")
                 .append(io.github.limuqy.mc.hassium.compat.mods.ModCompatFlags.starlightFamily()).append(",\n");
         sb.append("    \"foreignLightEngineActive\": ").append(foreignLightEngineActive()).append(",\n");
+        sb.append("    \"c2meCompatArmed\": ")
+                .append(io.github.limuqy.mc.hassium.compat.mods.ModCompatStats.compatArmed() > 0 ? 1 : 0)
+                .append(",\n");
         field(sb, "c2meHookHits", io.github.limuqy.mc.hassium.compat.mods.ModCompatStats.payloadStreams());
         lastField(sb, "type126Patched", io.github.limuqy.mc.hassium.compat.mods.ModCompatStats.type126Patched());
         sb.append("  }\n");

@@ -788,6 +788,8 @@ public final class ScenarioEngine {
                     io.github.limuqy.mc.hassium.compat.mods.ModCompatStats.type126Patched();
             case "modCompat.c2meChunkIoReplaced" ->
                     io.github.limuqy.mc.hassium.compat.mods.ModCompatFlags.c2meChunkIoReplaced() ? 1L : 0L;
+            case "modCompat.c2meCompatArmed" ->
+                    io.github.limuqy.mc.hassium.compat.mods.ModCompatStats.compatArmed() > 0 ? 1L : 0L;
             case "modCompat.foreignLightEngineActive" -> foreignLightEngineActive(mc) ? 1L : 0L;
             default -> null;
         };

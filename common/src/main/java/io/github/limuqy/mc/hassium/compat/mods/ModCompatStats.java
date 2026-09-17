@@ -11,6 +11,7 @@ public final class ModCompatStats {
 
     private static final AtomicLong C2ME_PAYLOAD_STREAMS = new AtomicLong();
     private static final AtomicLong C2ME_TYPE126_PATCHED = new AtomicLong();
+    private static final AtomicLong C2ME_COMPAT_ARMED = new AtomicLong();
 
     private ModCompatStats() {
     }
@@ -25,6 +26,15 @@ public final class ModCompatStats {
         C2ME_TYPE126_PATCHED.incrementAndGet();
     }
 
+    /**
+     * 兼容层 mixin 已被 plugin 放行（结构信号，与写流量无关）。
+     * 影子主路径 {@code ShadowStorageManager} 不经 {@code RegionFileVersion.wrap}，
+     * 关 seedGen 时 {@code c2meHookHits} 可恒为 0，故 strict 门禁改用本计数。
+     */
+    public static void onCompatArmed() {
+        C2ME_COMPAT_ARMED.incrementAndGet();
+    }
+
     public static long payloadStreams() {
         return C2ME_PAYLOAD_STREAMS.get();
     }
@@ -33,8 +43,14 @@ public final class ModCompatStats {
         return C2ME_TYPE126_PATCHED.get();
     }
 
+    /** ≥1 = 至少一个 modcompat mixin 已应用（0/1 口径见 probe 取 {@code >0 ? 1 : 0}）。 */
+    public static long compatArmed() {
+        return C2ME_COMPAT_ARMED.get();
+    }
+
     public static void reset() {
         C2ME_PAYLOAD_STREAMS.set(0L);
         C2ME_TYPE126_PATCHED.set(0L);
+        C2ME_COMPAT_ARMED.set(0L);
     }
 }

@@ -226,12 +226,17 @@ public abstract class MixinRegionFile {
      * {@code getChunkDataOutputStream}，{@link #hassium$onGetChunkDataOutputStream} 覆盖不到它
      * （见 {@code C2meChunkIoCompat}）。
      * <p>
+     * <b>单写者强制</b>（C 级双写加固）：一旦解析到影子 storage，本注入一律 {@code cancel()}。
+     * 非 {@code 0x48} 的外部 IO 载荷（C2ME wrap 未接管时的 zlib/gzip/none）不再回落
+     * {@code RegionFile} 落盘——那会与 {@link io.github.limuqy.mc.hassium.shadow.storage.RegionCache.Image#save}
+     * 整文件重写构成双写者（错位 / {@code wrong location} / 半截 type126）。改为解压后重编码
+     * 为 type 126 收编进映像；重编码失败则放弃该柱并记 ERROR，宁可 cache miss 也不撕裂 .mca。
+     * <p>
      * 取消同时也短路挂在同一注入点的后续 HEAD 注入（Mixin 把 cancel 的返回插在本注入之后，
      * 冒烟实测：影子写 2363 次只放行了 21 次 C2ME 补丁）——影子上下文里 C2ME 的
      * type126/hash 补丁因此不再执行：本收编路径已自行归一化嵌入 hash（
      * {@link io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager#adoptEncodedColumn}），
-     * {@link io.github.limuqy.mc.hassium.shadow.storage.RegionCache.Image#save} 落盘时写 type 字节，
-     * 补丁在本上下文冗余。该补丁只在专用服存储路径（非影子）保留原有职责。
+     * 落盘时写 type 字节，补丁在本上下文冗余。该补丁只在专用服存储路径（非影子）保留原有职责。
      */
     @Inject(method = "write", at = @At("HEAD"), cancellable = true)
     private void hassium$adoptShadowWrite(ChunkPos pos, ByteBuffer buffer, CallbackInfo ci) {
@@ -239,9 +244,9 @@ public abstract class MixinRegionFile {
         if (mgr == null) {
             return;
         }
-        if (hassium$adoptShadowSector(mgr, pos, buffer)) {
-            ci.cancel();
-        }
+        hassium$adoptShadowSector(mgr, pos, buffer);
+        // 单写者：禁止 RegionFile 自身落盘（与 Image.save 互斥）。
+        ci.cancel();
     }
 
     /**
@@ -306,39 +311,74 @@ public abstract class MixinRegionFile {
 
     /**
      * 影子上下文：从 {@code RegionFile.write} 的 sector 缓冲收进映像。
+     * <p>
+     * {@code 0x48} 载荷直接收编；其它 Anvil type（C2ME 未接管 wrap）解压后重编码为
+     * type 126 再收编。调用方已 {@code cancel()}，本方法失败不会再落盘。
      *
-     * @return true = 已收进映像（调用方取消落盘）；false = 非 Hassium 载荷或收编失败，回落原版写盘
+     * @return true = 已收进映像；false = 收编失败（单柱 cache miss，不双写）
      */
     @Unique
     private boolean hassium$adoptShadowSector(
             io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager mgr, ChunkPos pos, ByteBuffer buffer) {
         try {
-            if (buffer == null || buffer.limit() < 5 + 1 + HassiumType126Codec.HASH_LENGTH) {
+            if (buffer == null || buffer.capacity() < 5) {
                 return false;
             }
-            if (buffer.get(5) != HassiumType126Codec.HASH_MAGIC) {
-                // 非 Hassium 载荷（vanilla zlib/gzip/lz4/none 首字节均非 0x48）：不接管
-                return false;
+            if (buffer.limit() >= 5 + 1 + HassiumType126Codec.HASH_LENGTH
+                    && buffer.get(5) == HassiumType126Codec.HASH_MAGIC) {
+                return hassium$adoptEncodedPayload(mgr, pos, hassium$copyPayload(buffer));
             }
-            ByteBuffer view = buffer.duplicate();
-            view.position(0);
-            byte[] sector = new byte[view.limit()];
-            view.get(sector);
-            // 显式给坐标 hash：外部 IO 的嵌入 hash 是零占位，补丁与本收编无先后约束，
-            // adoptEncodedColumn 会按坐标 hash 归一化嵌入头（见 normalizeEmbeddedHash）。
+            byte compressionType = buffer.get(4);
+            byte[] payload = hassium$copyPayload(buffer);
             Long hash = io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes
                     .get(mgr.dimension(), pos);
-            boolean adopted = mgr.adoptEncodedColumn(pos, HassiumType126Codec.payloadAfterType(sector), hash);
-            if (adopted) {
-                hassium$LOGGER.debug("Hassium: adopted shadow sector {} ({} bytes) into region image",
-                        pos, sector.length);
-            }
-            return adopted;
+            int level = HassiumConfigService.getInstance().getStorageCompressionLevel();
+            byte[] sector = HassiumType126Codec.reencodeVanillaToHassium(compressionType, payload, hash, level);
+            return hassium$adoptEncodedPayload(mgr, pos, HassiumType126Codec.payloadAfterType(sector));
         } catch (Throwable t) {
-            // 收编失败不丢数据：回落原版写盘（罕见，且只为该柱牺牲单写者约束）。
-            hassium$LOGGER.error("Hassium: shadow sector adopt failed for {}, falling back", pos, t);
+            // 重编码失败：放弃该柱（下次 cache miss 重拉），禁止回落 RegionFile 落盘。
+            hassium$LOGGER.error(
+                    "Hassium: shadow sector adopt failed for {} type={} — column dropped to keep single-writer",
+                    pos, buffer == null ? -1 : (buffer.get(4) & 0xFF), t);
             return false;
         }
+    }
+
+    /** 槽 type 之后的载荷拷贝（按 header length，越界时取剩余）。 */
+    @Unique
+    private static byte[] hassium$copyPayload(ByteBuffer buffer) {
+        int lengthField = buffer.getInt(0);
+        int payloadLen;
+        if (lengthField > 1 && 5 + (lengthField - 1) <= buffer.capacity()) {
+            payloadLen = lengthField - 1;
+        } else {
+            payloadLen = Math.max(0, buffer.capacity() - 5);
+        }
+        byte[] payload = new byte[payloadLen];
+        if (payloadLen == 0) {
+            return payload;
+        }
+        ByteBuffer view = buffer.duplicate();
+        view.position(5);
+        view.limit(5 + payloadLen);
+        view.get(payload);
+        return payload;
+    }
+
+    @Unique
+    private boolean hassium$adoptEncodedPayload(
+            io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager mgr, ChunkPos pos, byte[] payload) {
+        if (payload == null || payload.length == 0) {
+            return false;
+        }
+        Long hash = io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes
+                .get(mgr.dimension(), pos);
+        boolean adopted = mgr.adoptEncodedColumn(pos, payload, hash);
+        if (adopted) {
+            hassium$LOGGER.debug("Hassium: adopted shadow sector {} ({} bytes) into region image",
+                    pos, payload.length);
+        }
+        return adopted;
     }
 
     @Unique
