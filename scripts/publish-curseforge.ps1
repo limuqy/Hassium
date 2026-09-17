@@ -96,12 +96,12 @@ foreach ($ver in $versionList) {
 
     Write-Host "`n=== Publish $ver ($($loaders -join ',')) ===" -ForegroundColor Cyan
     # PowerShell 会拆开 1.20.1，必须给 -P 参数加引号。
-    # --no-daemon 与 AGENTS.md 全程构建惯例统一，避免 daemon 残留占用 jar。
+    # 走 daemon（AGENTS.md：编译/打包用 daemon，不要 --no-daemon）。
     # -x test：发布验证由 scripts/runtime-smoke-test-batch.ps1 那条运行时冒烟覆盖（全版本已过），
     #          common 的 plain JUnit 是开发期单元片段且依赖 MC runtime/原版 API，让它挡 build 只会误伤产线产物。
-    & $Gradlew --no-daemon build publishCurseForge "-Pmc_ver=$ver" -x test @extra
+    & $Gradlew build publishCurseForge "-Pmc_ver=$ver" -x test @extra
     $code = $LASTEXITCODE
-    # --no-daemon 模式无持久 daemon，不需 --stop；JVM 进程随 Gradle 退出即释放 jar 锁。
+    # daemon 模式下不能 --stop（会误杀并行会话）；各版本 jar 已写入 build/<ver 下划线>/libs，锁随即释放。
     if ($code -ne 0) {
         $failed += "$ver"
         Write-Host "FAILED: $ver" -ForegroundColor Red
