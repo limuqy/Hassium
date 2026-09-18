@@ -287,20 +287,20 @@ public final class ShadowPullClient {
             ChunkPos pos = new ChunkPos(result.chunkX(), result.chunkZ());
             long key = io.github.limuqy.mc.hassium.utils.DimensionKey.key(response.dimension(), pos.x, pos.z);
             PendingCompare pending = PENDING_COMPARE.remove(key);
+            // 任何权威裁决到达都释放 session pull 在途，避免 drain 误判 inflight 后无法补发
+            io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession.getInstance()
+                    .clearPullInFlight(response.dimension(), pos);
             if (result.kind() == ShadowPullResponseS2CPacket.Kind.FULL) {
                 recordFullResult(comparedBaseline);
                 if (pending != null) {
-                    // 拦截模式：已收网络数据即权威，响应载荷丢弃（不解压）
                     io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
-                            .clear(response.dimension(), pos);
+                            .confirm(response.dimension(), pos);
                     pending.fallback().run();
                 } else {
-                    // 先放行再落地：apply 内部可能同步 offerReady
                     io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
-                            .clear(response.dimension(), pos);
+                            .confirm(response.dimension(), pos);
                     if (!ClientChunkHandler.applyShadowPullFull(decompressPullFull(result))) {
                         Constants.LOG.warn("[SHADOW_PULL] Failed to apply FULL ({}, {})", result.chunkX(), result.chunkZ());
-                        // 未成功落地权威数据前不得交付 seedGen 本地柱
                         io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
                                 .mark(response.dimension(), pos);
                         retryAuthoritativeFullOnce(response.dimension(), pos);
@@ -311,12 +311,9 @@ public final class ShadowPullClient {
                         io.netty.buffer.Unpooled.wrappedBuffer(result.payload()));
                 try {
                     io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
-                            .clear(response.dimension(), pos);
+                            .confirm(response.dimension(), pos);
                     ShadowLightCompute.submitDelta(SectionDeltaS2CPacket.decode(buffer));
                     io.github.limuqy.mc.hassium.metrics.NetworkStats.recordSectionDeltaRequestsSent(1);
-                    // 流量节省 actual 锚点：SectionDelta 线缆字节。decode 只记 zstd 对，
-                    // 禁止在 recordSectionDeltaReceived 写 actual（防双重计数）。
-                    // 漏记会让重连轮 actual=0 → 流量节省虚高 100%。
                     io.github.limuqy.mc.hassium.metrics.NetworkStats.recordWireBytesReceived(
                             result.payload().length);
                 } catch (Throwable t) {
@@ -324,7 +321,7 @@ public final class ShadowPullClient {
                             result.chunkX(), result.chunkZ(), t);
                     if (pending != null) {
                         io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
-                                .clear(response.dimension(), pos);
+                                .confirm(response.dimension(), pos);
                         pending.fallback().run();
                     } else {
                         io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
@@ -335,12 +332,9 @@ public final class ShadowPullClient {
                     buffer.release();
                 }
             } else if (result.kind() == ShadowPullResponseS2CPacket.Kind.UNCHANGED) {
-                // 服务端已确认 hash 一致：先放行再本地交付
                 io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
-                        .clear(response.dimension(), pos);
+                        .confirm(response.dimension(), pos);
                 boolean published = ShadowLightCompute.publishCachedChunk(response.dimension(), pos);
-                // 专用服语义：UNCHANGED = 服务端已有、影子应能本地交付。
-                // 必须释放 Provider 在途，否则 pump 永久 join → 不再 pull → 停摆。
                 releaseProviderInflight(response.dimension(), pos, published);
                 if (!published) {
                     Constants.LOG.warn("[SHADOW_PULL] Cache baseline unavailable for ({}, {}), retrying FULL",
@@ -349,7 +343,7 @@ public final class ShadowPullClient {
                             .mark(response.dimension(), pos);
                     if (pending != null) {
                         io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
-                                .clear(response.dimension(), pos);
+                                .confirm(response.dimension(), pos);
                         pending.fallback().run();
                     } else {
                         retryAuthoritativeFullOnce(response.dimension(), pos);

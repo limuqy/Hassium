@@ -1,6 +1,7 @@
 package io.github.limuqy.mc.hassium.shadow.track;
 
 import io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute;
+import io.github.limuqy.mc.hassium.shadow.server.SeedGenExecutor;
 import io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer;
 import io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry;
 
@@ -105,6 +106,13 @@ public final class VanillaAlignedChunkProvider implements ShadowChunkProvider {
                 return CompletableFuture.completedFuture(material);
             }
         }
+        // seedGen 门控开：无 material 且无本地基线 → 不入队 network pull，
+        // 交给影子 worldgen（A1-③）；避免与 authoritative FULL 抢跑把 locallyGenerated 打成 0。
+        if (SeedGenExecutor.getInstance().isGenerationGateOpen()
+                && !ShadowLightCompute.hasLocalPullBaseline(dimension, pos)) {
+            return CompletableFuture.failedFuture(
+                    new IllegalStateException("seedgen-local: skip network pull " + pos));
+        }
         ShadowTrackingSession session = ShadowTrackingSession.getInstance();
         if (session != null && !session.isAuthorityPullEligible(pos.x, pos.z)) {
             io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat
@@ -194,6 +202,24 @@ public final class VanillaAlignedChunkProvider implements ShadowChunkProvider {
                     completeAcquire(pending.dimension, pending.pos, material);
                     continue;
                 }
+            }
+            if (SeedGenExecutor.getInstance().isGenerationGateOpen()
+                    && !ShadowLightCompute.hasLocalPullBaseline(pending.dimension, pending.pos)) {
+                // seedGen 本地生成优先：丢掉 network pull 入队项
+                if (pendingPulls.remove(key, pending)) {
+                    dropped++;
+                    CompletableFuture<LevelChunk> f = inflight.remove(key);
+                    inflightStartMs.remove(key);
+                    if (f != null && !f.isDone()) {
+                        f.completeExceptionally(
+                                new IllegalStateException("seedgen-local drop pull: " + pending.pos));
+                    }
+                    try {
+                        session.clearPullInFlight(pending.dimension, pending.pos);
+                    } catch (Throwable ignored) {
+                    }
+                }
+                continue;
             }
             Long coolUntil = timeoutCooldownUntil.get(key);
             if (coolUntil != null && now < coolUntil) {

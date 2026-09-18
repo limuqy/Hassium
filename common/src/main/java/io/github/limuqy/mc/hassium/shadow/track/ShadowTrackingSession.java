@@ -405,19 +405,38 @@ public final class ShadowTrackingSession {
                     && !shadow.isPlaceholder(currentDimension, pos.x, pos.z);
             if (material) {
                 skippedMaterial++;
-                // SeedGen 方案 A：compare 响应前不投递本地生成柱
+                // 已 compare 成功：允许响应侧/补投交付；禁止再 mark（会把已在光管线的柱钉死）
+                if (io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
+                        .isConfirmed(currentDimension, pos)) {
+                    if (!ShadowLightCompute.hasClientApplyEpoch(currentDimension, pos)
+                            && isDeliverableToClient(pos.x, pos.z)) {
+                        if (ShadowChunkDeliver.deliverLocal(currentDimension, pos, false, false)) {
+                            published++;
+                        }
+                    }
+                    continue;
+                }
+                // 仍在等 compare：不盲投
                 if (io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
                         .isAwaiting(currentDimension, pos)) {
                     continue;
                 }
-                // A1：影子已有柱 = 服务端已 load。客户端无本会话落地凭据 → 立即权威柱交付
-                // （epoch 仅作「是否已发过」去重，不作选柱输入）。删 WINDOW_PUMP 后若跳过
-                // 此步，飞行入窗会「影子有货、客户端虚空」。
+                // 本地基线尚未 compare：mark + 发请求（先清陈旧在途再发）
                 if (!ShadowLightCompute.hasClientApplyEpoch(currentDimension, pos)
-                        && isDeliverableToClient(pos.x, pos.z)
-                        && ShadowChunkDeliver.deliverLocal(currentDimension, pos, false, false)) {
-                    published++;
+                        && isDeliverableToClient(pos.x, pos.z)) {
+                    io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
+                            .mark(currentDimension, pos);
+                    clearPullInFlight(currentDimension, pos);
+                    boolean baseline = ShadowLightCompute.hasLocalPullBaseline(currentDimension, pos);
+                    if (!requestPullEligible(currentDimension, pos, false)) {
+                        requestPullEligible(currentDimension, pos, !baseline);
+                    }
                 }
+                continue;
+            }
+            // seedGen 门控开 + 无 material：交给影子 worldgen，不与 authoritative FULL 抢跑
+            if (SeedGenExecutor.getInstance().isGenerationGateOpen()
+                    && !ShadowLightCompute.hasLocalPullBaseline(currentDimension, pos)) {
                 continue;
             }
             VanillaAlignedChunkProvider.getInstance().acquire(
@@ -426,7 +445,7 @@ public final class ShadowTrackingSession {
         }
         if (submitted > 0 || published > 0) {
             DebugLogger.info(DebugLogger.LogType.NETWORK,
-                    "[SHADOW_TRACK] authority-acquire center=({},{}) vd={} submitted={} published={} material={} (dimension={})",
+                    "[SHADOW_TRACK] authority-acquire center=({},{}) vd={} submitted={} compareQueued={} material={} (dimension={})",
                     center.x, center.z, serverViewDistance, submitted, published,
                     skippedMaterial, currentDimension);
         }
@@ -1138,6 +1157,10 @@ public final class ShadowTrackingSession {
             if (!requestPullEligible(dimension, pos, false)) {
                 // 有基线 compare 发不出去时仍要权威应答；标记保持，禁止本地盲交付
                 requestPullEligible(dimension, pos, true);
+            } else {
+                DebugLogger.info(DebugLogger.LogType.NETWORK,
+                        "[SHADOW_TRACK] seedGen compare requested ({}, {}) (dimension={})",
+                        pos.x, pos.z, dimension);
             }
             return;
         }
@@ -1160,44 +1183,26 @@ public final class ShadowTrackingSession {
             requestPullEligible(dimension, pos, true);
             return;
         }
-        // A1-①：有本地盘缓存基线（diskHit ⇒ 柱是从影子存档读回来的）也必须先与真服 compare，
-        // 磁盘基线 ≠ 已验证权威，不得抢先交付。交付门：mark 之后 publishCached / offerReady /
-        // 官方包桥一律被拒；响应侧 UNCHANGED / DELTA / FULL 落地成功才 clear() 放行。
+        // 权威窗本地基线（盘缓存 / 内存注入 / seedGen）一律先 compare，禁止抢先交付。
+        // 交付门：mark 之后 publishCached / offerReady / 官方包桥一律被拒；
+        // 响应侧 UNCHANGED / DELTA / FULL 落地成功才 clear() 放行。
         // 顺序必须"先 mark 再请求"：反过来会被「响应先到 → clear 空表 → 再 mark」钉死。
-        if (diskHit) {
+        // 网络 FULL 响应侧 injectChunk 会 clear，本分支对已 clear 的权威注入再 compare 作保鲜。
+        {
             io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate.mark(dimension, pos);
             if (requestPullEligible(dimension, pos, false)
                     || requestPullEligible(dimension, pos, true)) {
                 DebugLogger.info(DebugLogger.LogType.NETWORK,
                         "[SHADOW_TRACK] materialized ({}, {}) -> compare-before-deliver "
-                                + "(dimension={}) cacheBaseline=true",
-                        pos.x, pos.z, dimension);
+                                + "(dimension={}) cacheBaseline={} localWorldgen={}",
+                        pos.x, pos.z, dimension, diskHit, localWorldgen);
             } else {
-                // 权威请求两条都发不出去（窗外 / 会话未就绪）：宁可留空也不盲交付——标记保持，
-                // 该柱不进客户端。这是要修的空洞（网络本身不可用时本来就玩不了），
-                // 用本地假柱补上只会误导渲染。
                 DebugLogger.warn(DebugLogger.LogType.NETWORK,
-                        "[SHADOW_TRACK] HOLE: ({}, {}) cache baseline without authority request "
+                        "[SHADOW_TRACK] HOLE: ({}, {}) local baseline without authority request "
                                 + "(dimension={}) — left undelivered",
                         pos.x, pos.z, dimension);
             }
             return;
-        }
-        // 本次会话注入的权威数据（网络 FULL 落地 / 生成柱）：直接交付。
-        boolean published = ShadowLightCompute.publishCachedChunk(dimension, pos, localWorldgen, false);
-        if (!published) {
-            DebugLogger.info(DebugLogger.LogType.NETWORK,
-                    "[SHADOW_TRACK] materialized ({}, {}) publish-failed -> pull FULL (dimension={})",
-                    pos.x, pos.z, dimension);
-            ShadowLightCompute.clearRequestMiss(dimension, pos);
-            requestPullEligible(dimension, pos, true);
-            return;
-        }
-        DebugLogger.info(DebugLogger.LogType.NETWORK,
-                "[SHADOW_TRACK] materialized ({}, {}) -> publishCached (dimension={}) localWorldgen={}",
-                pos.x, pos.z, dimension, localWorldgen);
-        if (ShadowLightCompute.tryRequestMiss(dimension, pos)) {
-            requestPullEligible(dimension, pos, false);
         }
     }
 

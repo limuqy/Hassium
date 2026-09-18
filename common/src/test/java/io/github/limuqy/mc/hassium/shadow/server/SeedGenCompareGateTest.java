@@ -36,6 +36,20 @@ class SeedGenCompareGateTest {
     }
 
     @Test
+    @DisplayName("confirm 后放行且 drain 可补投；mark 会撤销 confirmed")
+    void confirmAllowsRedeliver() {
+        ChunkPos pos = new ChunkPos(1, 2);
+        SeedGenCompareGate.mark("minecraft:overworld", pos);
+        assertTrue(SeedGenCompareGate.isAwaiting("minecraft:overworld", pos));
+        SeedGenCompareGate.confirm("minecraft:overworld", pos);
+        assertFalse(SeedGenCompareGate.isAwaiting("minecraft:overworld", pos));
+        assertTrue(SeedGenCompareGate.isConfirmed("minecraft:overworld", pos));
+        SeedGenCompareGate.mark("minecraft:overworld", pos);
+        assertFalse(SeedGenCompareGate.isConfirmed("minecraft:overworld", pos));
+        assertTrue(SeedGenCompareGate.isAwaiting("minecraft:overworld", pos));
+    }
+
+    @Test
     @DisplayName("会话 reset / 切维 clearAll 清空全部 awaiting")
     void clearAllEmptiesTable() {
         SeedGenCompareGate.mark("minecraft:overworld", new ChunkPos(0, 0));

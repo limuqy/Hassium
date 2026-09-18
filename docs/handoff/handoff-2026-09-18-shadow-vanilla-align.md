@@ -32,16 +32,18 @@ A1-① 有缓存
 A1-② seedGen 关 + 无缓存
   选柱 → authoritative FULL → 注入 → 权威柱交付
 
-A1-③ seedGen 开 + 有缓存
+A1-③ seedGen 开 + 无缓存（有缓存统一走硬盘基线 → A1-①，不再本地 worldgen）
   选柱 → seedGen（真 seed）作基线 → compare
        → UNCHANGED / DELTA / FULL → 权威柱交付
 ```
 
 **约束**
 
-1. compare **不得挡首投**：本地/真服数据一旦可交付，先交付；compare 仅作已交付后保鲜（S0 与本 handoff 对 A4 的合并口径）。  
+1. compare **必须挡首投**：走 compare 的路径（A1-① / A1-③）**必须在服务端权威裁决（UNCHANGED / DELTA / FULL）落地之后**才允许权威柱交付；禁止「先交付、后 compare 保鲜」。A1-③ 实现口径 = `SeedGenCompareGate`（物化 mark → 响应 clear → 才 deliver）。A1-② 的 authoritative FULL 本身已是权威应答，不存在本地基线盲投。  
 2. 「权威柱交付」= **含可用光的官方柱包**（lightStrip 开：真服剥光 → 影子 LightEngine 算光后打包）。  
 3. 客户端 `hasClientApplyEpoch` **不作**选柱/是否交付的控制输入（A3）。
+
+> **2026-09-18 口径修订（用户拍板）**：原文 A1-③ 误写为「seedGen 开 + **有**缓存」；有缓存时磁盘/注入基线优先，统一走 A1-①，seedGen 只服务**无缓存**柱。原文约束 1「compare 不得挡首投」与 A1-③ 要求冲突，已更正为 **compare 必须挡首投**。
 
 ## 2. 审计清单（业务无关脱节点摘要）
 
@@ -54,7 +56,7 @@ A1-③ seedGen 开 + 有缓存
 | A1 | `scheduleChunkLoad` 悬置 + 多驱动 | 实现 §1 三条链；汇到 Provider/materialize |
 | A2 | 客户端 intercept 过宽 | **保留**握手后真服不推整柱；**收窄**客户端 cancel（P2） |
 | A3 | `hasClientApplyEpoch` 控制面 | 清理（M1） |
-| A4 | 物化「重入必 compare」挡首投 | 并入 A1：有数据即交付（M1） |
+| A4 | 物化「重入必 compare」挡首投 | **保留并强化**：compare 必须挡首投（A1-①/A1-③）；禁「有数据即交付」 |
 | A5 | `drainRedeliver` / `redeliverQueue` 死路径 | 删除（依赖 A1 覆盖） |
 | A6 | bootGrid/sweep 过时注释 | 清理 |
 | A7 | OVD 双窗 | 暂保留；默认 VD 相等时环带空；后续可关 |
@@ -101,7 +103,8 @@ A1-③ seedGen 开 + 有缓存
 
 | 项 | 决策 |
 |----|------|
-| A1 | §1 三条链；交付=生成权威柱 |
+| A1 | §1 三条链；交付=生成权威柱；A1-③ = seedGen 开 + **无缓存** |
+| A1/约束1 | **compare 必须挡首投**（A1-①/A1-③）；权威裁决前不得交付本地基线/seedGen 柱 |
 | A2 | 握手后关原版直推 **合理**（兼容原版服=无握手不 intercept）；实现上 **收窄** cancel，不取消 pull |
 | A3 | 清理干净 |
 | A5 | 清理干净（与 A1 绑定） |
@@ -123,7 +126,7 @@ A1-③ seedGen 开 + 有缓存
 | 序 | 内容 | 验收 |
 |----|------|------|
 | P0.1 | 实现 A1 三条链；`scheduleChunkLoad` / Provider / materialize 汇到权威柱交付 | 长飞/停住后 enter 窗内柱持续 `CHUNK_APPLY`/原版 apply |
-| P0.2 | 有可交付柱即 publish；compare 不挡首投 | 无「compare 在途但客户端空窗」 |
+| P0.2 | compare **必须挡首投**（A1-①/A1-③）；A1-② 权威 FULL 落地后交付 | seedGen/缓存基线柱在 UNCHANGED/DELTA/FULL 前无 `CHUNK_APPLY`/桥 forward；A1-③ 无 `origin=local_generation` 盲投 |
 | P0.3 | 清 A3 epoch 控制面 + 删 A5 `drainRedeliver` 死路径 | 代码无 epoch 短路选柱；无 redeliver 队列 |
 | P0.4 | B6 交付门统一（VD+余量）全入口一致 | 同一柱不出现「一处 skip 一处仍交付」 |
 
@@ -197,7 +200,7 @@ A1-③ seedGen 开 + 有缓存
 | M1 未实现 | 高 | 当前为补丁态；飞行回归未在 A1 完整实现后跑过 |
 | WINDOW_PUMP 删除后交付覆盖 | 高 | 【推断】inject/盘命中路径可能无人投递，见 §3 残留风险 |
 | lightStrip 保留 | 低 | 默认开；toml 可选关，但 `isServerLightStrip` 读配置 |
-| seedGen 开路径 | 中 | 本轮实测均为 seedGen=false；A1-③ 需单独冒烟 |
+| seedGen 开路径 | 低→中 | **已跑** 1.20.1 fabric `seedgen` 冒烟 `1.20.1_fabric_I_seedgen_gateA` PASS：15 柱 compare-before-deliver，落地 origin=section_delta/shadow_memory_cache，`local_generation` 盲投=0，闸日志 96 次；1.21+ / forge-neoforge 锚点未跑 |
 | 多 loader（forge/neoforge） | 低 | M1/M2 至少 fabric 1.20.1 验证后再扫 loader |
 
 ## 9. 实现时纪律

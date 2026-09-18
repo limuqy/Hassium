@@ -475,6 +475,8 @@ public class ShadowSeedServer extends MinecraftServer {
             // S3 光照缓存：网络注入后 setLightCorrect(false) → 记重算
             io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute
                     .accountLightFromChunk(dimension, pos, chunk);
+            // 网络权威 packet 落地 = compare/权威应答已到：confirm 放行
+            io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate.confirm(dimension, pos);
             return true;
         } catch (Throwable t) {
             ShadowLightCompute.withChunkLock(pos, () -> restoreInjectedChunk(key, previous));
