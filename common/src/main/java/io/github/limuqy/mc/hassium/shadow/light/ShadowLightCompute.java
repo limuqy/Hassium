@@ -210,8 +210,6 @@ public final class ShadowLightCompute {
      * 看到「已注入但无 accountedIngress」会把网络柱误 publish 成缓存全命中。
      */
     private static final java.util.Set<Long> networkInFlight = java.util.concurrent.ConcurrentHashMap.newKeySet();
-    /** hash 全命中已记账柱（复合键）。同一柱磁盘命中后再收到 hash 会走内存命中，不得再加一次。 */
-    private static final java.util.Set<Long> accountedCacheHits = java.util.concurrent.ConcurrentHashMap.newKeySet();
     /** 光照命中/重算已记账柱（复合键）。邻柱 LIGHT_ONLY 补光会把同一片柱刷成千上万次。 */
     private static final java.util.Set<Long> accountedLights = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
@@ -474,7 +472,6 @@ public final class ShadowLightCompute {
         requestedMisses.clear();
         accountedIngress.clear();
         networkInFlight.clear();
-        accountedCacheHits.clear();
         accountedLights.clear();
         shadowApplyEpochs.clear();
         fullApplyTraces.clear();
@@ -753,10 +750,8 @@ public final class ShadowLightCompute {
         }
         String resolved = dimension == null ? currentDimension() : dimension;
         long key = DimensionKey.key(resolved, pos.x, pos.z);
-        // 同柱已按缓存全命中记账：不得再记网络全量（防跨路径双计）
-        if (accountedCacheHits.contains(key)) {
-            return;
-        }
+        // 网络侧仍按柱去重（同一柱的一次网络落地不重复计「新增/过期」）；
+        // 缓存侧不做去重——往返重读按次计入命中（见 accountCacheFullHit）。
         if (!accountedIngress.add(key)) {
             return;
         }
@@ -786,17 +781,13 @@ public final class ShadowLightCompute {
         accountedIngress.remove(DimensionKey.key(dimension, pos.x, pos.z));
     }
 
+    /**
+     * 缓存全命中按**次**记账，不做会话内去重：原版 A→B→A 会把 A 的柱再推一次，MOD 侧第二次
+     * 交付走本地缓存同样替掉了一次网络推送——重复读取本身就是流量节省的一部分（用户 2026-09-19
+     * 决策）。每次落地（{@link #accountAuthoritativeLanded}）恰好调用一次，不会重复计同一交付。
+     */
     public static boolean accountCacheFullHit(String dimension, ChunkPos pos) {
         if (pos == null) {
-            return false;
-        }
-        String resolved = dimension == null ? currentDimension() : dimension;
-        long key = DimensionKey.key(resolved, pos.x, pos.z);
-        // 同柱已按网络全量记账：不得再记缓存命中（R1 双路径假命中）
-        if (accountedIngress.contains(key)) {
-            return false;
-        }
-        if (!accountedCacheHits.add(key)) {
             return false;
         }
         io.github.limuqy.mc.hassium.metrics.NetworkStats.recordCacheLoadEligible(
@@ -1497,9 +1488,8 @@ public final class ShadowLightCompute {
         TraceOrigin resolvedOrigin = origin == null ? TraceOrigin.SERVER_PUSH : origin;
         if (isNetworkOrigin(resolvedOrigin)) {
             networkInFlight.add(key);
-            // 网络来源在注入时优先记账：后续 publishCached/光交付不得再记成缓存全命中。
-            // R1 门禁「fullReq=0 且 cacheHit>0」的根因是 materialize 桥抢跑 MEMORY_CACHE
-            // 记账后，光管线 land 的 REMOTE_PULL 被 accountedCacheHits 挡住（phaseA3）。
+            // 网络来源在注入时优先记账：同一次交付不得再被改写成缓存全命中（来源唯一）。
+            // 注意：只约束「同一次交付」——往返重读是另一次交付，按次计入命中（见 accountCacheFullHit）。
             // REMOTE_PULL（compare-pull FULL）记过期桶；SERVER_PUSH/权威 FULL 记新增桶。
             accountVisibleNetworkIngress(resolved, pos,
                     resolvedOrigin == TraceOrigin.REMOTE_PULL);
@@ -3126,13 +3116,11 @@ public final class ShadowLightCompute {
         client().onProbeChunkUnloaded(pos);
         // 允许对真实服再 compare（卸载后基线可能已过期）；不挡本地 publish
         requestedMisses.remove(chunkKey);
-        // 往返：本会话曾网络加载过的柱，客户端 unload 后必须允许再记缓存命中。
-        // 否则 accountedIngress 永久占位 → 回程 publish 被 wasNetworkIngress 跳过，
-        // 且 accountCacheFullHit 恒 false →「缓存空 / 全是新增」（用户往返实测）。
+        // 往返：本会话曾网络加载过的柱，客户端 unload 后必须允许再记缓存命中
+        // （accountCacheFullHit 已改为按次记账，此处仍清网络占位以免影响新增/过期分桶）。
         if (removedEpoch != null) {
             accountedIngress.remove(chunkKey);
             networkInFlight.remove(chunkKey);
-            accountedCacheHits.remove(chunkKey);
             // 清掉未完成的光/回传工作与网络来源 GenEntry：否则回程 publishCached 的
             // submitPreLight 会因「queued 是 REMOTE_PULL」被静默 return true 而不交付。
             cancelChunkWork(chunkKey);
@@ -3167,7 +3155,6 @@ public final class ShadowLightCompute {
         requestedMisses.clear();
         accountedIngress.clear();
         networkInFlight.clear();
-        accountedCacheHits.clear();
         accountedLights.clear();
         resetHashClassify();
         shadowApplyEpochs.clear();

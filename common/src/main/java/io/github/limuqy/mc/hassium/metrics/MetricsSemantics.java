@@ -21,6 +21,9 @@ package io.github.limuqy.mc.hassium.metrics;
  * <ul>
  *   <li><b>全命中</b>：影子端读取区块，且服务端确认无变更（compare-pull UNCHANGED
  *       → {@code publishCachedChunk}；或服务端直推时影子内存已有 hash 一致柱）。
+ *       <b>按交付次数计，不做会话内按柱去重</b>（用户 2026-09-19 决策）：原版 A→B→A 会把 A 的
+ *       柱再推一次，MOD 侧第二次交付走本地缓存同样替掉了一次网络推送——往返重读本身就是流量
+ *       节省的一部分。同一次交付仍只按一个来源记账（origin 唯一，不得双记）。
  *       计数器：{@code cacheHitFullChunkCount/Bytes}。</li>
  *   <li><b>部分命中/增量</b>：DELTA。本地基线柱 + 分段增量合并成功。
  *       计数器：{@code cacheDeltaCount/Bytes}；分片变更内容 {@code cacheShardBytes}
@@ -32,7 +35,8 @@ package io.github.limuqy.mc.hassium.metrics;
  * 锚点：
  * <ul>
  *   <li>{@code recordCacheFullHit} ← {@code accountCacheFullHit} ← UNCHANGED /
- *       内存 hash 一致复用；权威边沿 hash-hit（含 OVD→权威 已持有零请求）</li>
+ *       内存 hash 一致复用；权威边沿 hash-hit（含 OVD→权威 已持有零请求）。
+ *       每次落地交付计一次（往返重读各计一次，见 §1 全命中口径）</li>
  *   <li>{@code recordCacheDeltaSaved} + {@code recordCacheShard} ← {@code applySectionDelta} 成功</li>
  *   <li>应用字节 = {@code getFullChunkRequestBytes + cacheHitFullChunkBytes
  *       + cacheDeltaSavedBytes + serverPush×ESTIMATED_CHUNK_BYTES}</li>
@@ -70,6 +74,9 @@ package io.github.limuqy.mc.hassium.metrics;
  * 不得被 {@code publishCachedChunk} 改写成「全命中」。
  * {@code enqueueInjectedForLight(SERVER_PUSH/REMOTE_PULL)} 与
  * {@code onPullInjected → publishCachedChunk} 禁止对同一柱双投递覆盖来源。
+ * <p>
+ * 该红线只约束「同一次交付」：柱被客户端卸载后往返重读是**另一次交付**，按次计入命中
+ * （与 §1 一致）——两次都算，因为原版那两次都会走网络。
  *
  * <h2>3. 光照缓存（少算了哪些光）</h2>
  * <pre>

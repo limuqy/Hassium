@@ -227,17 +227,17 @@ class ShadowLightComputeTimingRegressionTest {
     }
 
     @Test
-    @DisplayName("hash 全命中按柱去重：磁盘后再走内存不得记两次")
-    void cacheFullHitAccountsOncePerColumn() {
+    @DisplayName("hash 全命中按交付次数计：往返重读各记一次（允许重复）")
+    void cacheFullHitAccountsPerDelivery() {
         NetworkStats.reset();
         NetworkStats.setEnabled(true);
         try {
             ChunkPos pos = new ChunkPos(4, 9);
             assertTrue(ShadowLightCompute.accountCacheFullHit(DimensionKey.OVERWORLD, pos));
-            assertFalse(ShadowLightCompute.accountCacheFullHit(DimensionKey.OVERWORLD, pos),
-                    "同一柱磁盘命中后再收到 hash 会走内存命中，全命中不得翻倍");
-            assertEquals(1, NetworkStats.getMetrics().getCacheHitFullChunkCount());
-            assertEquals(NetworkStats.ESTIMATED_CHUNK_BYTES,
+            assertTrue(ShadowLightCompute.accountCacheFullHit(DimensionKey.OVERWORLD, pos),
+                    "往返重读是另一次交付：原版 A→B→A 会再推一次，MOD 侧走缓存同样算流量节省");
+            assertEquals(2, NetworkStats.getMetrics().getCacheHitFullChunkCount());
+            assertEquals(2L * NetworkStats.ESTIMATED_CHUNK_BYTES,
                     NetworkStats.getMetrics().getCacheHitFullChunkBytes());
         } finally {
             ShadowLightCompute.onDisconnect();
@@ -274,7 +274,7 @@ class ShadowLightComputeTimingRegressionTest {
     }
 
     @Test
-    @DisplayName("落地兜底：内存复用记缓存命中，直推记全量；同柱不与 inject 记账叠加")
+    @DisplayName("落地兜底：内存复用按次记缓存命中，直推记全量（网络侧仍去重）")
     void authoritativeLandedAccountsByOriginWithoutDoubleCount() {
         NetworkStats.reset();
         NetworkStats.setEnabled(true);
@@ -289,8 +289,10 @@ class ShadowLightComputeTimingRegressionTest {
             ShadowLightCompute.accountAuthoritativeLanded(DimensionKey.OVERWORLD, push,
                     TraceOrigin.SERVER_PUSH);
 
-            assertEquals(1, NetworkStats.getMetrics().getCacheHitFullChunkCount());
-            assertEquals(1, NetworkStats.getMetrics().getFullChunkRequestCount());
+            assertEquals(2, NetworkStats.getMetrics().getCacheHitFullChunkCount(),
+                    "两次缓存交付各计一次（允许重复，对齐原版重推口径）");
+            assertEquals(1, NetworkStats.getMetrics().getFullChunkRequestCount(),
+                    "网络侧仍按柱去重：同一柱的一次网络落地不重复计新增/过期");
         } finally {
             ShadowLightCompute.onDisconnect();
             NetworkStats.reset();
