@@ -80,12 +80,9 @@ public class MixinChunkMap {
     }
 
     /**
-     * 影子虚拟玩家交付桥（§6 节点 E/G → I）：原版链产出的柱（type126 读盘命中 /
-     * 本地生成门控放行的生成柱）注入影子表形成本地基线，携带基线发统一比对请求；
-     * 服务端裁决 UNCHANGED/DELTA/FULL 后经既有响应路径落地。不走原版包发送。
-     * <p>
-     * 无数据被悬置的柱（worldgen 压制）FULL future 永不完成，不会进入本钩子——
-     * 其交付由悬置登记的空基线请求 FULL 响应承担。
+     * 影子虚拟玩家交付桥（§6 节点 E/G → I）：原版链产出的柱注入影子表形成本地基线；
+     * seedGen 权威窗走 compare-before-deliver（先 mark，响应前不桥接）。
+     * 服务端裁决 UNCHANGED/DELTA/FULL 后经既有响应路径落地。
      */
     @Inject(method = "playerLoadedChunk", at = @At("HEAD"), cancellable = true)
     private void hassium$shadowBridgeLoadedChunk(ServerPlayer player,
@@ -94,7 +91,9 @@ public class MixinChunkMap {
         if (!RuntimeServerContext.isShadowServerContext() || chunk == null) {
             return;
         }
-        // S3 接法 B：官方包桥接真实客户端 + 影子物化记账
+        // 先物化：seedGen defer 分支会写 SeedGenCompareGate，再决定是否桥接
+        hassium$notifyShadowMaterialized(chunk);
+        // S3 接法 B：官方包桥接真实客户端（awaiting-compare 时 forward 内也会拒）
         Packet<?> packet = holder != null ? holder.getValue() : null;
         if (packet == null && lightEngine != null) {
             // 与 flush 序列化共用 chunkLock：否则 PalettedContainer ThreadingDetector
@@ -107,7 +106,6 @@ public class MixinChunkMap {
         }
         io.github.limuqy.mc.hassium.shadow.track.ShadowOfficialPacketBridge
                 .forwardToRealClient(packet);
-        hassium$notifyShadowMaterialized(chunk);
         ci.cancel();
     }
 

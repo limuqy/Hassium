@@ -291,15 +291,27 @@ public final class ShadowPullClient {
                 recordFullResult(comparedBaseline);
                 if (pending != null) {
                     // 拦截模式：已收网络数据即权威，响应载荷丢弃（不解压）
+                    io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
+                            .clear(response.dimension(), pos);
                     pending.fallback().run();
-                } else if (!ClientChunkHandler.applyShadowPullFull(decompressPullFull(result))) {
-                    Constants.LOG.warn("[SHADOW_PULL] Failed to apply FULL ({}, {})", result.chunkX(), result.chunkZ());
-                    retryAuthoritativeFullOnce(response.dimension(), pos);
+                } else {
+                    // 先放行再落地：apply 内部可能同步 offerReady
+                    io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
+                            .clear(response.dimension(), pos);
+                    if (!ClientChunkHandler.applyShadowPullFull(decompressPullFull(result))) {
+                        Constants.LOG.warn("[SHADOW_PULL] Failed to apply FULL ({}, {})", result.chunkX(), result.chunkZ());
+                        // 未成功落地权威数据前不得交付 seedGen 本地柱
+                        io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
+                                .mark(response.dimension(), pos);
+                        retryAuthoritativeFullOnce(response.dimension(), pos);
+                    }
                 }
             } else if (result.kind() == ShadowPullResponseS2CPacket.Kind.DELTA) {
                 net.minecraft.network.FriendlyByteBuf buffer = new net.minecraft.network.FriendlyByteBuf(
                         io.netty.buffer.Unpooled.wrappedBuffer(result.payload()));
                 try {
+                    io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
+                            .clear(response.dimension(), pos);
                     ShadowLightCompute.submitDelta(SectionDeltaS2CPacket.decode(buffer));
                     io.github.limuqy.mc.hassium.metrics.NetworkStats.recordSectionDeltaRequestsSent(1);
                     // 流量节省 actual 锚点：SectionDelta 线缆字节。decode 只记 zstd 对，
@@ -311,14 +323,21 @@ public final class ShadowPullClient {
                     Constants.LOG.warn("[SHADOW_PULL] Failed to apply DELTA ({}, {}), retrying FULL",
                             result.chunkX(), result.chunkZ(), t);
                     if (pending != null) {
+                        io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
+                                .clear(response.dimension(), pos);
                         pending.fallback().run();
                     } else {
+                        io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
+                                .mark(response.dimension(), pos);
                         retryAuthoritativeFullOnce(response.dimension(), pos);
                     }
                 } finally {
                     buffer.release();
                 }
             } else if (result.kind() == ShadowPullResponseS2CPacket.Kind.UNCHANGED) {
+                // 服务端已确认 hash 一致：先放行再本地交付
+                io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
+                        .clear(response.dimension(), pos);
                 boolean published = ShadowLightCompute.publishCachedChunk(response.dimension(), pos);
                 // 专用服语义：UNCHANGED = 服务端已有、影子应能本地交付。
                 // 必须释放 Provider 在途，否则 pump 永久 join → 不再 pull → 停摆。
@@ -326,7 +345,11 @@ public final class ShadowPullClient {
                 if (!published) {
                     Constants.LOG.warn("[SHADOW_PULL] Cache baseline unavailable for ({}, {}), retrying FULL",
                             result.chunkX(), result.chunkZ());
+                    io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
+                            .mark(response.dimension(), pos);
                     if (pending != null) {
+                        io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
+                                .clear(response.dimension(), pos);
                         pending.fallback().run();
                     } else {
                         retryAuthoritativeFullOnce(response.dimension(), pos);
@@ -336,8 +359,11 @@ public final class ShadowPullClient {
                 Constants.LOG.warn("[SHADOW_PULL] Request rejected for ({}, {}): {}",
                         result.chunkX(), result.chunkZ(), result.error());
                 if (pending != null) {
+                    io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
+                            .clear(response.dimension(), pos);
                     pending.fallback().run();
                 }
+                // 无 pending 的拒绝：保留 awaiting，禁止 seedGen 盲交付
                 notePullFailure(response.dimension(), pos);
                 releaseProviderInflight(response.dimension(), pos, false);
             }
@@ -380,6 +406,11 @@ public final class ShadowPullClient {
         for (java.util.Map.Entry<Long, PendingCompare> entry : PENDING_COMPARE.entrySet()) {
             if (now - entry.getValue().timestampMs() > COMPARE_TIMEOUT_MS
                     && PENDING_COMPARE.remove(entry.getKey(), entry.getValue())) {
+                // 超时回退用的是已收网络数据（真服包），可视为权威来源
+                io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate.clear(
+                        entry.getValue().dimension(),
+                        new ChunkPos(io.github.limuqy.mc.hassium.utils.DimensionKey.chunkXOf(entry.getKey()),
+                                io.github.limuqy.mc.hassium.utils.DimensionKey.chunkZOf(entry.getKey())));
                 entry.getValue().fallback().run();
             }
         }
@@ -402,6 +433,7 @@ public final class ShadowPullClient {
         REQUEST_MODES.clear();
         PENDING_COMPARE.clear();
         lastFailAtMs.clear();
+        io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate.clearAll();
     }
 
     /** 真客户端切维：作废旧维度在途 compare / 失败冷却，避免坐标碰撞串维。 */
@@ -409,6 +441,7 @@ public final class ShadowPullClient {
         PENDING_COMPARE.clear();
         lastFailAtMs.clear();
         REQUEST_MODES.clear();
+        io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate.clearAll();
     }
 }
 

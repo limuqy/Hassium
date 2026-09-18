@@ -40,6 +40,13 @@ public final class ShadowChunkDeliver {
                     pos.x, pos.z, dimension);
             return false;
         }
+        if (io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
+                .isAwaiting(dimension, pos)) {
+            DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+                    "[SHADOW_DELIVER] skip seedGenAwaitingCompare ({}, {}) dim={}",
+                    pos.x, pos.z, dimension);
+            return false;
+        }
         // 专用服语义：本地已有柱 = 服务端已 load → 直接投递客户端。
         return ShadowLightCompute.publishCachedChunk(dimension, pos, localGeneration, renderOnly);
     }

@@ -101,18 +101,6 @@ public final class ShadowLightCompute {
     /** 管道在途光屏障：复合键 -> 提交上下文（submitLightBatch 提交，completeLight/超时扫表
      *  条件移除；size = 在途计数，上限 {@link #PIPELINE_MAX_INFLIGHT}，断连清空）。 */
     private static final ConcurrentHashMap<Long, InflightLight> inflightLight = new ConcurrentHashMap<>();
-    /**
-     * 单写者实验：等待**原版 holder** 把该柱标为 lightCorrect（{@code ChunkStatus.LIGHT} 的
-     * POST_UPDATE 里 {@code chunk.setLightCorrect(true)}；{@code completeSuspendedLoad} 已把注入柱
-     * 以 ImposterProtoChunk 交给 holder）。登记后由帧尾扫描收口——本类**不再**调引擎算光。
-     */
-    private static final ConcurrentHashMap<Long, InflightLight> awaitingHolderLight =
-            new ConcurrentHashMap<>();
-    /**
-     * 单写者宽限期：holder 归属柱在该时限内未被原版链点亮 → 转自驱两阶段兜底。
-     * 1s 足以覆盖原版 LIGHT 任务（毫秒级）；只为"holder 归属但实际不点亮"的外圈柱兜底。
-     */
-    private static final long HOLDER_LIGHT_GRACE_MS = 1_000L;
     private static final ConcurrentHashMap<Long, Long> shadowApplyEpochs = new ConcurrentHashMap<>();
     private static final AtomicLong shadowApplyEpoch = new AtomicLong();
 
@@ -890,6 +878,13 @@ public final class ShadowLightCompute {
         }
         if (!isEnabled()) {
             notePublishBlocked(renderOnly, "engineDisabledOrShadowFailed", pos);
+            return false;
+        }
+        // SeedGen 方案 A：权威 compare 落地前禁止本地柱进真实客户端
+        String gateDim = dimension == null ? currentDimension() : dimension;
+        if (io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
+                .blockClientDelivery(gateDim, pos.x, pos.z)) {
+            notePublishBlocked(renderOnly, "seedGenAwaitingCompare", pos);
             return false;
         }
         // 在途网络全量只拦「无本地柱」的缓存 publish：已有 injected 非占位时本地基线即 §3.2
@@ -1701,6 +1696,13 @@ public final class ShadowLightCompute {
                         pos.x, pos.z);
                 return;
             }
+            if (io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
+                    .blockClientDelivery(dimension, pos.x, pos.z)) {
+                DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+                        "[SHADOW_LIGHT] native light skip seedGenAwaitingCompare ({}, {})",
+                        pos.x, pos.z);
+                return;
+            }
             // S3：原版光——status/引擎产出即交付，无收敛停车门。
             runBuildOnShadowMain(pos, () -> {
                 ClientboundLevelChunkWithLightPacket packet;
@@ -2191,151 +2193,36 @@ public final class ShadowLightCompute {
         inf.submittedAtNs = System.nanoTime();
         inflightLight.put(t.key, inf);
         try {
-            net.minecraft.world.level.ChunkPos pos = new net.minecraft.world.level.ChunkPos(
-                    DimensionKey.chunkXOf(t.key), DimensionKey.chunkZOf(t.key));
-            if (io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat
-                    .wasHolderCompleted(DimensionKey.dimensionOf(t.key), pos)) {
-                // 单写者：该柱由原版 holder 的 ChunkStatus 链负责 —— 本类不再调引擎，只等
-                // holder 置 lightCorrect 后收口交付（双写会让终态不确定：实测同柱 lightChunk 2–6 次）。
-                nativeLightChunks.remove(t.key);
-                lightInitialized.remove(t.key);
-                awaitingHolderLight.put(t.key, inf);
-                DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
-                        "[SHADOW_LIGHT] Await holder light ({}, {}) src={}",
-                        pos.x, pos.z, t.source);
-            } else {
-                // 无 holder 归属（holder 请求窗外 / 悬置 future 未登记）：沿用影子自驱两阶段，
-                // 否则该柱既无人算光也无人交付（sw1 实测 R1 交付 −25%、R2 封闭洞 77）。
-                net.minecraft.server.level.ServerLevel level = t.level != null
-                        ? t.level : server.overworld();
-                net.minecraft.world.level.chunk.ChunkAccess nativeChunk =
-                        nativeLightChunks.remove(t.key);
-                if (nativeChunk == null) {
-                    // 回退：未过 INITIALIZE_LIGHT（超时降级路径），完整两阶段
-                    inf.nativeChunk = io.github.limuqy.mc.hassium.compat.ShadowServerCompat
-                            .createNativeLightChunk(level, t.chunk,
-                                    lightChunkHasExistingLight(t.metric == LightMetric.REUSE_CACHE));
-                    io.github.limuqy.mc.hassium.compat.ShadowServerCompat
-                            .initializeNativeLight(level, inf.nativeChunk)
-                            .thenCompose(ignored -> io.github.limuqy.mc.hassium.compat.ShadowServerCompat
-                                    .completeNativeLight(level, inf.nativeChunk))
-                            .whenComplete((ignored, throwable) -> {
-                                if (throwable != null) {
-                                    abortLight(t.key, throwable);
-                                } else {
-                                    completeLight(inf, true);
-                                }
-                            });
-                } else {
-                    // 正常路径：只跑 LIGHT（INITIALIZE_LIGHT 已在第一阶段完成）
-                    inf.nativeChunk = nativeChunk;
-                    lightInitialized.remove(t.key);
-                    io.github.limuqy.mc.hassium.compat.ShadowServerCompat
-                            .completeNativeLight(level, nativeChunk)
-                            .whenComplete((ignored, throwable) -> {
-                                if (throwable != null) {
-                                    abortLight(t.key, throwable);
-                                } else {
-                                    completeLight(inf, true);
-                                }
-                            });
-                }
-            }
-        } catch (Throwable failure) {
-            abortLight(t.key, failure);
-        }
-    }
-
-    /**
-     * 帧尾扫描：等待原版 holder 完成该柱光照（有界）。
-     * <p>
-     * 完成判据 = {@code injectedChunk(pos).isLightCorrect()}（vanilla LIGHT 任务 POST_UPDATE 置位）。
-     * 超过 {@code inf.deadlineMs} 仍未完成：记一条 warn 后按当前引擎状态收口（不无限等、不挂 UI）。
-     */
-    private static void sweepHolderLightAwait(ShadowSeedServer server) {
-        if (awaitingHolderLight.isEmpty()) {
-            return;
-        }
-        long now = System.currentTimeMillis();
-        for (Map.Entry<Long, InflightLight> e : awaitingHolderLight.entrySet()) {
-            InflightLight inf = e.getValue();
-            if (inf == null || !inflightLight.containsKey(e.getKey())) {
-                awaitingHolderLight.remove(e.getKey(), inf);
-                continue;
-            }
-            boolean lightCorrect = false;
-            try {
-                net.minecraft.world.level.chunk.LevelChunk chunk = server == null ? null
-                        : server.injectedChunk(DimensionKey.dimensionOf(e.getKey()),
-                                (int) DimensionKey.chunkXOf(e.getKey()),
-                                (int) DimensionKey.chunkZOf(e.getKey()));
-                lightCorrect = chunk != null && chunk.isLightCorrect();
-            } catch (Throwable ignored) {
-                // 查表竞态：本帧跳过，下一帧再判
-            }
-            boolean timedOut = now >= inf.deadlineMs;
-            if (!lightCorrect && !timedOut) {
-                // 宽限期内继续等原版链（单写者）；超期仍未点亮 → 该柱转自驱兜底，
-                // 否则它会停在 not-ready（classic 实测 613 柱 P0：外圈带柱 holder 归属但 holder 不点亮）。
-                long waitingMs = (System.nanoTime() - inf.submittedAtNs) / 1_000_000L;
-                if (waitingMs < HOLDER_LIGHT_GRACE_MS) {
-                    continue;
-                }
-                awaitingHolderLight.remove(e.getKey(), inf);
-                if (runLegacyLightFallback(server, inf)) {
-                    continue;
-                }
-                completeLight(inf, false);
-                continue;
-            }
-            if (!lightCorrect) {
-                DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
-                        "[SHADOW_LIGHT] Holder light timeout ({}, {}) — completing as-is",
-                        (int) DimensionKey.chunkXOf(e.getKey()),
-                        (int) DimensionKey.chunkZOf(e.getKey()));
-            }
-            awaitingHolderLight.remove(e.getKey(), inf);
-            completeLight(inf, lightCorrect);
-        }
-    }
-
-    /**
-     * holder 归属但迟迟未点亮的柱：转自驱两阶段（与无归属柱同路径）。
-     * <p>
-     * 必要性：holder 归属只说明"悬置 future 放行过"，不等于"holder 真会跑 LIGHT"——
-     * 玩家 ticket 窗外的外圈柱属于前者（classic `TRACE_INJECTED_NOT_READY` 613 柱实测）。
-     *
-     * @return true = 已接管（完成时自行收口）；false = 无法兜底（调用方按当前状态收口）
-     */
-    private static boolean runLegacyLightFallback(ShadowSeedServer server, InflightLight inf) {
-        if (inf == null || inf.chunk == null) {
-            return false;
-        }
-        try {
-            net.minecraft.server.level.ServerLevel level = inf.level != null
-                    ? inf.level : server.overworld();
-            DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
-                    "[SHADOW_LIGHT] holder silent → legacy two-phase fallback ({}, {})",
-                    inf.chunk.getPos().x, inf.chunk.getPos().z);
+            // 自驱两阶段（唯一路径）：曾经的"holder 单写者"分支已退役——实测 holder 100% 在场但
+            // 73.6% 的柱在 1s 内到不了 LIGHT（其 LIGHT 被同一条 ~100 柱/s 的波次串着走，探针柱
+            // 实测 11s 后才点亮），等满宽限后仍走本路径算光 → 只赚到每柱 1s 延迟 + 双写照旧。
+            net.minecraft.server.level.ServerLevel level = t.level != null
+                    ? t.level : server.overworld();
+            // 必须"从零两阶段"：INITIALIZE_LIGHT 装空 DataLayer + LIGHT 传播。复用注入时那次
+            // INITIALIZE_LIGHT、只跑 LIGHT 会留下檐口残差——实测探针柱 (-13,3) 引擎层
+            // SELF-z0 从 11 12 11 退化成 0 0 0（swc5 vs swc7，单变量 A/B）。两阶段把它拉回
+            // 11 12 11，且交付/耗时不受影响（swc7/swc8：R1 1529、R2 1085、进服 ~0.7–0.8s，
+            // LIGHT_CALL 与 lightSegRecalc 反而更少）。
+            nativeLightChunks.remove(t.key); // 只摘表：不再复用第一阶段的 nativeChunk
             inf.nativeChunk = io.github.limuqy.mc.hassium.compat.ShadowServerCompat
-                    .createNativeLightChunk(level, inf.chunk,
-                            lightChunkHasExistingLight(inf.metric == LightMetric.REUSE_CACHE));
+                    .createNativeLightChunk(level, t.chunk,
+                            lightChunkHasExistingLight(t.metric == LightMetric.REUSE_CACHE));
             io.github.limuqy.mc.hassium.compat.ShadowServerCompat
                     .initializeNativeLight(level, inf.nativeChunk)
                     .thenCompose(ignored -> io.github.limuqy.mc.hassium.compat.ShadowServerCompat
                             .completeNativeLight(level, inf.nativeChunk))
                     .whenComplete((ignored, throwable) -> {
                         if (throwable != null) {
-                            abortLight(inf.key, throwable);
+                            abortLight(t.key, throwable);
                         } else {
                             completeLight(inf, true);
                         }
                     });
-            return true;
-        } catch (Throwable t) {
-            return false;
+        } catch (Throwable failure) {
+            abortLight(t.key, failure);
         }
     }
+
 
     /** 原版 LIGHT future 完成后的唯一完成收口。 */
     private static boolean completeLight(InflightLight inf, boolean converged) {
@@ -2641,7 +2528,6 @@ public final class ShadowLightCompute {
         pendingDeltas.remove(key);
         pendingLightUpdates.remove(key);
         inflightLight.remove(key);
-        awaitingHolderLight.remove(key);
         lightUpdates.remove(key);
         shadowApplyEpochs.remove(key);
         lightFollowUps.remove(key);
@@ -2747,6 +2633,13 @@ public final class ShadowLightCompute {
         if (packet == null) {
             DebugLogger.warn(DebugLogger.LogType.ASYNC,
                     "[SHADOW_CHUNK] Build packet failed ({}, {})", pos.x, pos.z);
+            return;
+        }
+        if (io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
+                .blockClientDelivery(DimensionKey.dimensionOf(key), pos.x, pos.z)) {
+            DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+                    "[SHADOW_LIGHT] offerReady blocked seedGenAwaitingCompare ({}, {})",
+                    pos.x, pos.z);
             return;
         }
         io.github.limuqy.mc.hassium.utils.ChunkFlowTiming.recordReady(key);
@@ -2860,7 +2753,6 @@ public final class ShadowLightCompute {
         }
         ShadowLightProbe.onEngineTick(); // T3 探针：引擎终态周期快照（debug.lightVerify 门控）
         sweepLightTimeouts(); // per-chunk 光屏障 5s 超时兜底（主扫描点；低帧率由消费轮顶兜底）
-        sweepHolderLightAwait(server); // 单写者：等原版 holder 完成光照后收口
         // 齐套门控扫描：邻柱后到 / 超时降级。无新工作时 consumeLoop 不会被 pump，
         // 门控条目需要由帧尾 drain 主动扫描，否则永久等待。
         if (server != null && LightNeighborhoodGate.pendingCount() > 0) {
@@ -3467,7 +3359,6 @@ public final class ShadowLightCompute {
         generated.clear();
         pendingLightUpdates.clear();
         inflightLight.clear(); // 在途光屏障：回调侧条件移除失败即短路丢弃（断连竞态）
-        awaitingHolderLight.clear();
         ready.clear();
         lightUpdates.clear();
         lightInitialized.clear();

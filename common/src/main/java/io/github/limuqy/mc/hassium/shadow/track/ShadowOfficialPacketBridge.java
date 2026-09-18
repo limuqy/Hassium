@@ -30,6 +30,20 @@ public final class ShadowOfficialPacketBridge {
         if (mc == null || mc.getConnection() == null || mc.level == null) {
             return false;
         }
+        String dimension = io.github.limuqy.mc.hassium.compat.LevelCompat.getDimensionId(mc.level);
+        if (dimension != null && packet instanceof ClientboundLevelChunkWithLightPacket chunkPacket
+                && io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
+                        .blockClientDelivery(dimension, chunkPacket.getX(), chunkPacket.getZ())) {
+            Constants.LOG.debug(
+                    "Hassium: seedGen awaiting compare, drop bridge chunk ({},{})",
+                    chunkPacket.getX(), chunkPacket.getZ());
+            return false;
+        }
+        if (dimension != null && packet instanceof ClientboundLightUpdatePacket lightPacket
+                && io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
+                        .blockClientDelivery(dimension, lightPacket.getX(), lightPacket.getZ())) {
+            return false;
+        }
         try {
             mc.execute(() -> deliver(mc.getConnection(), packet));
             return true;
