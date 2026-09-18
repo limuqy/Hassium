@@ -47,6 +47,16 @@ public final class ShadowServerRegistry {
     static final long SEED_WAIT_TIMEOUT_MS = 2_000L;
     static final long SEED_WAIT_POLL_MS = 25L;
 
+    /**
+     * 重进时等待上次关停完成的上界（毫秒）。该等待跑在 {@link #getOrCreate()} 的**调用线程**上，
+     * 而调用线程可能是渲染/主线程（publishCachedChunk、方块包转发都经 getOrCreate）——旧值 30s
+     * 意味着「断连后立即重进」最坏冻屏 30s。实测正常关停是毫秒级（saveAll 0–17ms；过远柱已由
+     * unloadChunk→flushColumn 提前逐柱落盘），故收到秒级。
+     */
+    static final long PREVIOUS_SHUTDOWN_WAIT_MS = 3_000L;
+    /** 等待超过该阈值记一行 INFO：用于判定「重进卡顿」是否落在这条路径上。 */
+    static final long PREVIOUS_SHUTDOWN_SLOW_MS = 500L;
+
 
     private final Object lock = new Object();
     private volatile ShadowSeedServer server;
@@ -520,13 +530,57 @@ public final class ShadowServerRegistry {
         return previousShutdownComplete;
     }
 
-    /** 有界等待上次关停 saveAll 完成（30s 与 saver 同界；超时继续创建）。 */
+    /**
+     * 断连路径**同步等**本次关停保存结束（有界）。
+     * <p>
+     * 关停本身仍是异步 daemon 线程（{@link #shutdown()}）；这里只是把「等」挪到断连路径上——
+     * 用户在此处本就预期等待（对齐原版单人「保存世界中」语义），且等待期间 saver 已在跑。
+     * 关游戏窗口（共享 ioPool 已关）时 saveAll 会跳过，但 closeStorage 仍会写出已编码的 region
+     * 映像，所以等待仍有意义。
+     * <p>
+     * 超时即放弃等待并记一行 warn：数据不因此丢，靠下次会话 compare miss 重推。
+     *
+     * @return true = 在超时前等到关停结束（或无在途关停）
+     */
+    public boolean awaitShutdownComplete(long timeoutMs) {
+        java.util.concurrent.CompletableFuture<Void> future = shutdownFuture;
+        if (future == null || future.isDone()) {
+            return true;
+        }
+        long startMs = System.currentTimeMillis();
+        try {
+            future.get(Math.max(0L, timeoutMs), java.util.concurrent.TimeUnit.MILLISECONDS);
+            Constants.LOG.info("Hassium: shadow shutdown waited {}ms on disconnect",
+                    System.currentTimeMillis() - startMs);
+            return true;
+        } catch (java.util.concurrent.TimeoutException e) {
+            Constants.LOG.warn("Hassium: shadow shutdown still running after {}ms on disconnect; "
+                    + "leaving it to finish in background (data re-pushed on next session)", timeoutMs);
+            return false;
+        } catch (Exception e) {
+            DebugLogger.warn(DebugLogger.LogType.ASYNC, "[SHADOW] await shutdown failed", e);
+            return false;
+        }
+    }
+
+    /**
+     * 有界等待上次关停 saveAll 完成，超时继续创建。
+     * <p>
+     * 上界 {@link #PREVIOUS_SHUTDOWN_WAIT_MS}：本方法在 {@link #getOrCreate()} 的调用线程上跑，
+     * 而该线程可能是渲染/主线程，故只给秒级（saver 侧等上一次关停仍是 30s 上界——那是后台线程，
+     * 不冻游戏）。超时不是致命：{@code ShadowSeedServer.canWriteStorage()} 要求
+     * {@link #isPreviousShutdownComplete()}，R2 的写盘会一直被挡到上次关停真正结束，不会并发写
+     * 同一存档目录。
+     */
     private static void awaitPreviousShutdownComplete() {
-        final long deadline = System.currentTimeMillis() + 30_000L;
+        final long startMs = System.currentTimeMillis();
+        final long deadline = startMs + PREVIOUS_SHUTDOWN_WAIT_MS;
         while (!ShadowServerRegistry.getInstance().isPreviousShutdownComplete()) {
             if (System.currentTimeMillis() > deadline) {
-                DebugLogger.warn(DebugLogger.LogType.ASYNC,
-                        "[SHADOW] Previous shutdown saveAll not complete in 30s; creating shadow server anyway");
+                // 无条件输出：这条是「重进静默卡顿」唯一的现场证据，不得受 debug 门控
+                Constants.LOG.warn("Hassium: Previous shadow shutdown not complete in {}ms; creating "
+                                + "shadow server anyway (writes stay gated until it finishes)",
+                        PREVIOUS_SHUTDOWN_WAIT_MS);
                 return;
             }
             try {
@@ -535,6 +589,10 @@ public final class ShadowServerRegistry {
                 Thread.currentThread().interrupt();
                 return;
             }
+        }
+        long waitedMs = System.currentTimeMillis() - startMs;
+        if (waitedMs >= PREVIOUS_SHUTDOWN_SLOW_MS) {
+            Constants.LOG.info("Hassium: waited {}ms for previous shadow shutdown before creating", waitedMs);
         }
     }
 

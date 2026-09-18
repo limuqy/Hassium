@@ -38,6 +38,15 @@ public final class ClientLifecycleHelper {
      */
     private static final AtomicBoolean disconnectCleanupArmed = new AtomicBoolean(false);
 
+    /**
+     * 断连时同步等影子端保存结束的上界（毫秒）。
+     * <p>
+     * 实测正常关停是毫秒级（saveAll 0–36ms；过远柱已由 unloadChunk→flushColumn 提前落盘），
+     * 这里给足余量覆盖「视距内大量脏柱 + 磁盘慢」的最坏情况；超时即放弃等待并记 warn
+     * （数据靠下次会话 compare miss 重推），不无限拖住退出。
+     */
+    private static final long DISCONNECT_SAVE_WAIT_MS = 10_000L;
+
     private ClientLifecycleHelper() {
     }
 
@@ -335,13 +344,19 @@ public final class ClientLifecycleHelper {
     /**
      * 断开连接最终清理（vanilla 世界拆除之后）。
      * <p>
-     * 先恢复编码并 park 影子端（调用线程从还活着的 ChunkMap 刷脏落盘），再关客户端 executor。
+     * 先恢复编码并关停影子端（异步 saver 从还活着的 ChunkMap 刷脏落盘），**再同步等它落完**
+     * （{@link ShadowServerRegistry#awaitShutdownComplete(long)}，有界）——等待放在断连路径上：
+     * 用户在此处本就预期等待（对齐原版单人「保存世界中」），而不是留给下次进服的主线程去等。
+     * 最后关客户端 executor。
      */
     public static void finalizeDisconnect() {
         if (!finalized.compareAndSet(false, true)) return;
         disconnectCleanupArmed.set(false);
         io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager.resumeEncoding();
-        io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry.getInstance().parkForReuse();
+        io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry registry =
+                io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry.getInstance();
+        registry.parkForReuse();
+        registry.awaitShutdownComplete(DISCONNECT_SAVE_WAIT_MS);
         if (HassiumConfigService.getInstance().isMetricsAutoResetEnabled()) {
             io.github.limuqy.mc.hassium.metrics.NetworkStats.reset();
         }
