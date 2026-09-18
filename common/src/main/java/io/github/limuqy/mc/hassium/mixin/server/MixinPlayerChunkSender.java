@@ -122,8 +122,11 @@ public abstract class MixinPlayerChunkSender {
         ServerPlayer player = listener.getPlayer();
         if (io.github.limuqy.mc.hassium.server.RuntimeServerContext.isShadowServerContext()) {
             // S3 接法 B：影子上下文官方包转发真实客户端，不进 dummy、也不走真服抑制逻辑
+            // （带来源维度：原版区块/光照包无维度字段，跨维直通会把旧维度柱落进新维度）
             io.github.limuqy.mc.hassium.shadow.track.ShadowOfficialPacketBridge
-                    .forwardToRealClient(packet);
+                    .forwardToRealClient(packet,
+                            io.github.limuqy.mc.hassium.compat.LevelCompat
+                                    .getDimensionId(player.level()));
             return;
         }
         if (!PlayerCompressionTracker.isCompressionEnabled(player)) {

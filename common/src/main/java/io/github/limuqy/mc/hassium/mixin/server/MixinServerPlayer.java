@@ -59,10 +59,12 @@ public abstract class MixinServerPlayer extends Player {
     private void hassium$onTrackChunk(ChunkPos pos, Packet<?> chunkPacket, CallbackInfo ci) {
         ServerPlayer self = (ServerPlayer) (Object) this;
         if (io.github.limuqy.mc.hassium.server.RuntimeServerContext.isShadowServerContext()) {
-            // S3 接法 B：影子专用服官方包 → 真实客户端
+            // S3 接法 B：影子专用服官方包 → 真实客户端（带来源维度，桥侧做维度闸）
             if (chunkPacket != null) {
                 io.github.limuqy.mc.hassium.shadow.track.ShadowOfficialPacketBridge
-                        .forwardToRealClient(chunkPacket);
+                        .forwardToRealClient(chunkPacket,
+                                io.github.limuqy.mc.hassium.compat.LevelCompat
+                                        .getDimensionId(self.level()));
             }
             ci.cancel();
             return;

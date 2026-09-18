@@ -105,7 +105,9 @@ public class MixinChunkMap {
                             chunk, engine, null, null));
         }
         io.github.limuqy.mc.hassium.shadow.track.ShadowOfficialPacketBridge
-                .forwardToRealClient(packet);
+                .forwardToRealClient(packet,
+                        io.github.limuqy.mc.hassium.compat.LevelCompat
+                                .getDimensionId(player.level()));
         ci.cancel();
     }
 

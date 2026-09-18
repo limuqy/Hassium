@@ -2691,6 +2691,16 @@ public final class ShadowLightCompute {
                                            KeyedPriorityQueue.Entry<ReadyItem> entry, ReadyItem item) {
         int chunkX = item.chunkPacket.getX();
         int chunkZ = item.chunkPacket.getZ();
+        // 维度闸（投递点复检）：publish 时已按客户端维拒过，但柱可能在 ready 队列里等到
+        // 客户端切维之后才被投递——原版区块包**不带维度字段**，handleLevelChunkWithLight
+        // 会把它落进「当前」level（实测：TP 进 TF 后 overworld 柱被落进暮色森林）。
+        // 丢弃即可：影子虚拟玩家离开旧维度会 untrackChunk，重进时重新 track → 重新投递。
+        if (clientDimensionMismatch(entry.key().dimension())) {
+            DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+                    "[SHADOW_CHUNK] drop cross-dimension chunk ({}, {}) dim={} (client switched)",
+                    chunkX, chunkZ, entry.key().dimension());
+            return true;
+        }
         ChunkPos chunkPos = new ChunkPos(chunkX, chunkZ);
         long chunkKey = DimensionKey.key(entry.key().dimension(), chunkX, chunkZ);
         client().logShadowChunkApplyEvent("shadow_attempt", chunkPos, item.renderOnly(), item.traceOrigin());
@@ -2793,6 +2803,9 @@ public final class ShadowLightCompute {
             return;
         }
         // pauseEncoding 只挡 ChunkSerializer 入队，不挡主线程光包 drain。
+        // 注意：断连拆除期这里会经 getOrCreate() 新建实例，实测**是 R2 复用实例的来源**
+        //（去掉后 R2 空 ClientChunkCache：applied 1162→0）；调整前须先理清 R2 创建/复用路径，
+        // 见 mod-compat.md §11 待办。
         ShadowSeedServer server = ShadowServerRegistry.getInstance().getOrCreate();
         if (server == null) {
             lightUpdates.clear(); // 影子端不可用：收集作废

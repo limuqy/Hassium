@@ -22,7 +22,23 @@ public final class ShadowOfficialPacketBridge {
     /** 是否允许桥接（S3；false 时回落 publish 管线）。 */
     public static volatile boolean enabled = true;
 
-    public static boolean forwardToRealClient(Packet<?> packet) {
+    /**
+     * 影子端官方包 → 真实客户端。
+     * <p>
+     * <b>维度闸</b>：原版 {@code ClientboundLevelChunkWithLightPacket} /
+     * {@code ClientboundLightUpdatePacket} **不带维度字段**（维度由 {@code ClientboundRespawnPacket}
+     * 切换的 level 隐含），{@link #deliver} 直接把它们交给客户端当前 level。影子端是**一个
+     * MinecraftServer 带多个 ServerLevel**，切维（如 TP 进暮色森林）后旧维度的在途柱仍在跑光门/
+     * 打包/Provider 队列，若直通就会把旧维度地形落进新维度（实测：TP 进 TF 后仍投递 overworld 柱
+     * → 暮色森林里出现主世界区块）。
+     * <p>
+     * 故投递必须校验**包的来源维度**与客户端当前维度一致；不一致即丢弃。
+     * 丢弃安全：影子虚拟玩家离开旧维度时会 {@code untrackChunk}，重进时重新 track → 重新投递
+     * （与重入重交付同一条链）。
+     *
+     * @param sourceDimension 产出该包的影子端维度 id；{@code null} 表示未知（不做维度闸）
+     */
+    public static boolean forwardToRealClient(Packet<?> packet, String sourceDimension) {
         if (!enabled || packet == null) {
             return false;
         }
@@ -31,6 +47,12 @@ public final class ShadowOfficialPacketBridge {
             return false;
         }
         String dimension = io.github.limuqy.mc.hassium.compat.LevelCompat.getDimensionId(mc.level);
+        if (sourceDimension != null && dimension != null && !sourceDimension.equals(dimension)) {
+            Constants.LOG.debug(
+                    "Hassium: drop cross-dimension shadow packet {} ({} -> {})",
+                    packet.getClass().getSimpleName(), sourceDimension, dimension);
+            return false;
+        }
         if (dimension != null && packet instanceof ClientboundLevelChunkWithLightPacket chunkPacket) {
             if (io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
                     .blockClientDelivery(dimension, chunkPacket.getX(), chunkPacket.getZ())) {
