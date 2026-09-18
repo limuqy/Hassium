@@ -178,16 +178,18 @@ public interface HassiumMetrics {
 
     /**
      * 客户端应用来源柱数（冒烟结构门禁 / 区块加载对照）：
-     * {@code 全量请求 + 缓存全命中 + SeedGen 本地生成 + 分段增量 + 服务端直推}。
-     * 直推（server_push）不经过前四项任一入口，是独立第五分量。
-     * 缓存命中率分母用 {@link #getClientAppliedChunkBytes()}，不含本地生成。
+     * {@code 全量请求 + 缓存全命中 + SeedGen 本地生成 + 分段增量 + 服务端直推 + OVD 本地源服务}。
+     * 直推（server_push）与 OVD（超视环带，**不算缓存命中**）为独立分量。
+     * 本值为**来源事件和**，应 ≥ {@link #getClientLandedChunkCount()}（权威唯一落地）。
+     * 缓存命中率分母用 {@link #getClientAppliedChunkBytes()}，不含本地生成与 OVD。
      */
     default long getClientAppliedChunkCount() {
         return getFullChunkRequestCount()
                 + getCacheHitFullChunkCount()
                 + getLocallyGeneratedChunkCount()
                 + getCacheDeltaCount()
-                + getServerPushAppliedCount();
+                + getServerPushAppliedCount()
+                + getOvdLoadedCount();
     }
 
     /** 服务端直推且实际落地的区块数（独立分母分量；reset 清零）。 */
@@ -216,15 +218,15 @@ public interface HassiumMetrics {
     }
 
     /**
-     * 获取客户端实际落地的权威区块数（按区块位置去重）。
+     * 获取客户端实际落地的**权威**区块数（按区块位置去重）。
      * <p>
-     * <b>口径</b>：会话内成功写入 {@code ClientChunkCache} 的唯一坐标数——含网络 FULL、
-     * 缓存整柱重交付（UNCHANGED → publishCachedChunk）、分段增量落地与 server_push。
+     * <b>口径</b>：会话内成功写入 {@code ClientChunkCache} 的**非 OVD**唯一坐标——
+     * 网络 FULL、缓存整柱重交付、分段增量、server_push；<b>OVD/renderOnly 不计</b>。
+     * OVD 进 {@link #getClientAppliedChunkCount()} 来源和与 {@link #getOvdLoadedCount()}，
+     * 不进本值、不进缓存命中。
+     * <p>
      * 与 {@link #getLandedTotalCount()} 同值；冒烟「确有区块落地」门禁用它。
-     * <p>
-     * 注意：{@link #getClientAppliedChunkCount()} 是来源事件和（可含跨源同一坐标的
-     * 重复计数），可大于本值；<b>不得</b>把本值再与 {@code cacheHitFullChunkCount}
-     * 相加——cacheHit 重交付已计入本值。
+     * {@link #getClientAppliedChunkCount()}（来源和）应 ≥ 本值。
      */
     long getClientLandedChunkCount();
 
@@ -458,7 +460,8 @@ public interface HassiumMetrics {
 
     /**
      * 有效命中内容字节：{@code 全命中 + 部分命中 - 增量}。
-     * 全命中 = {@link #getCacheHitFullChunkBytes()}（磁盘/内存 contentHash 整柱复用）；
+     * 全命中 = {@link #getCacheHitFullChunkBytes()}（磁盘/内存 contentHash 整柱复用，**权威窗**；
+     * OVD 超视环带 renderOnly 回放 **不计入** 缓存命中）；
      * 部分命中 = {@link #getCachePartialHitBytes()}（缓存柱作基线的分段增量）；
      * 增量 = {@link #getCacheShardBytes()}（FULL 整段 / BLOCKS 按格折算）。
      * SeedGen 本地生成不算缓存命中，只在「区块加载 / 本地」展示。

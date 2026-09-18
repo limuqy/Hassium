@@ -184,12 +184,21 @@ public class NetworkStats {
     }
 
     /**
-     * 记录一个权威区块已成功应用到客户端世界（按区块坐标去重）。
-     * 供缓存命中率分母「客户端应用区块」使用。
+     * 记录一个**权威**区块已成功应用到客户端世界（按区块坐标去重）。
+     * 供缓存命中率分母与 landed 使用；**OVD/renderOnly 不得调用本方法**。
      */
     public static void recordChunkApplied(int chunkX, int chunkZ) {
         if (!enabled) return;
         metrics.recordClientChunkApplied(net.minecraft.world.level.ChunkPos.asLong(chunkX, chunkZ));
+    }
+
+    /**
+     * OVD（renderOnly）柱已进入客户端/影子服务计数：只进 applied 来源和
+     * （{@code getClientApplied += ovdLoaded}）与 ovdLoaded，**不计** landed、**不计** cacheHit。
+     */
+    public static void recordOvdChunkServiced(int chunkX, int chunkZ) {
+        // ovdLoaded 已由 ShadowTrackingSession.recordOvdLoadedOnce 在 publish 成功时记账；
+        // 此处仅作文档锚点，避免误调 recordChunkApplied 把 OVD 打进 landed。
     }
 
     /**

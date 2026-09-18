@@ -2690,6 +2690,11 @@ public final class ShadowLightCompute {
                         .hassium$getChunkSource().hasChunk(chunkX, chunkZ);
     }
 
+    /** 诊断：真实客户端 ClientChunkCache 是否驻留该柱。 */
+    public static boolean clientHasChunk(int chunkX, int chunkZ) {
+        return hasClientChunk(Minecraft.getInstance(), chunkX, chunkZ);
+    }
+
     /**
      * 帧尾（MixinClientTick，渲染前）：区块按脚下切比雪夫优先，光包仍 FIFO。
      * JoinBoost 两段消费：先 chunk 再光。加载屏只 apply 脚下 3×3。
@@ -2888,6 +2893,11 @@ public final class ShadowLightCompute {
             return true;
         }
         client().logShadowChunkApplyEvent("shadow_ignored", chunkPos, false, item.traceOrigin());
+        if (item.renderOnly()) {
+            DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+                    "[OVD_PATH] apply-ignored renderOnly ({}, {}) nextRetryWouldBe={}",
+                    chunkX, chunkZ, ignoredApplyRetries.getOrDefault(chunkKey, 0) + 1);
+        }
         // 原版 tracking view 外的柱不可自愈（见 ignoredApplyRetries 注释）：有限重试后放弃投递，
         // 否则整柱在 ready 里每帧打转，渲染线程被日志+无效 apply 吃满。影子表/磁盘基线保留。
         int attempts = ignoredApplyRetries.merge(chunkKey, 1, Integer::sum);

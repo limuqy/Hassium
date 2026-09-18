@@ -575,30 +575,122 @@ public final class ShadowTrackingSession {
                     }
                     ChunkPos pos = new ChunkPos(x, z);
                     var injected = shadow.injectedChunk(currentDimension, x, z);
+                    boolean clientHas = ShadowLightCompute.clientHasChunk(x, z);
+                    boolean epoch = ShadowLightCompute.hasClientApplyEpoch(currentDimension, pos);
+                    // OVD_PATH：逐跳诊断（inject/epoch/clientHas/publish）——缺柱归因用
+                    boolean watch = isOvdWatchCoord(x, z);
                     if (injected != null) {
                         if (published >= OVD_PUBLISH_BUDGET) {
+                            if (watch) {
+                                DebugLogger.info(DebugLogger.LogType.NETWORK,
+                                        "[OVD_PATH] sweep budget-skip ({}, {}) inj=Y epoch={} clientHas={}",
+                                        x, z, epoch, clientHas);
+                            }
                             continue;
                         }
-                        if (ShadowLightCompute.hasClientApplyEpoch(currentDimension, pos)) {
+                        if (epoch) {
                             recordOvdLoadedOnce(currentDimension, pos);
+                            if (watch && !clientHas) {
+                                DebugLogger.info(DebugLogger.LogType.NETWORK,
+                                        "[OVD_PATH] sweep epoch-but-clientMissing ({}, {}) — stale ovdCounted",
+                                        x, z);
+                            }
                             continue;
                         }
-                        if (ShadowLightCompute.publishOvdCachedChunk(currentDimension, pos)) {
+                        boolean pub = ShadowLightCompute.publishOvdCachedChunk(currentDimension, pos);
+                        if (pub) {
                             recordOvdLoadedOnce(currentDimension, pos);
                             published++;
                         }
+                        if (watch) {
+                            DebugLogger.info(DebugLogger.LogType.NETWORK,
+                                    "[OVD_PATH] sweep publish ({}, {}) inj=Y epoch={} clientHas={} pub={} radiusLogFollows",
+                                    x, z, epoch, clientHas, pub);
+                        }
                     } else {
                         notInjected++;
-                        // OVD 冻结 / tryServeOvdLocal 已删：缺盘柱不在此泵
+                        if (watch) {
+                            DebugLogger.info(DebugLogger.LogType.NETWORK,
+                                    "[OVD_PATH] sweep no-inject ({}, {}) epoch={} clientHas={} — try local disk",
+                                    x, z, epoch, clientHas);
+                        }
+                        // ticket2 时代路径：缺 inject 读影子盘（type126），不 pull
+                        if (diskTried < OVD_DISK_BUDGET) {
+                            tryServeOvdLocal(shadow, currentDimension, x, z);
+                            diskTried++;
+                        }
                     }
                 }
             }
         }
-        if (diskTried > 0 || published > 0) {
+        if (diskTried > 0 || published > 0 || notInjected > 0) {
+            int radius = -1;
+            try {
+                net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
+                if (mc != null && mc.level != null) {
+                    radius = io.github.limuqy.mc.hassium.client.OvdClientLifecycle.effectiveClientVD(mc);
+                }
+            } catch (Throwable ignored) {
+            }
             DebugLogger.info(DebugLogger.LogType.NETWORK,
-                    "[SHADOW_TRACK] OVD sweep disk={} publish={} window={} missing={} center=({},{}) ring={}..{} (dimension={})",
+                    "[SHADOW_TRACK] OVD sweep disk={} publish={} window={} missing={} center=({},{}) ring={}..{} clientRadius={} (dimension={})",
                     diskTried, published, windowCells, notInjected,
-                    center.x, center.z, serverVD + 1, clientVD, currentDimension);
+                    center.x, center.z, serverVD, clientVD, radius, currentDimension);
+        }
+    }
+
+    /** OVD 诊断观察坐标：cheb==serverVD+2 的环中点（vdplus1 缺柱形态）。 */
+    private static boolean isOvdWatchCoord(int x, int z) {
+        ShadowTrackingSession s = INSTANCE;
+        if (s == null || s.serverViewDistance <= 0) {
+            return false;
+        }
+        ChunkPos center = deliveryCenter();
+        if (center == null) {
+            return false;
+        }
+        int r = s.serverViewDistance + 2;
+        int dx = x - center.x;
+        int dz = z - center.z;
+        if (Math.max(Math.abs(dx), Math.abs(dz)) != r) {
+            return false;
+        }
+        // 仅四边中段（非角）：|dx|<r 且 |dz|==r，或反过来
+        return (Math.abs(dz) == r && Math.abs(dx) <= r / 2)
+                || (Math.abs(dx) == r && Math.abs(dz) <= r / 2);
+    }
+
+    /**
+     * OVD 本地源（ticket2 影子驱动路径）：inject 为空时读影子 type126 盘。
+     * 无盘记 miss + 冷却；有盘 inject + renderOnly publish。禁止 pull / ovdLocalGeneration。
+     */
+    private void tryServeOvdLocal(ShadowSeedServer shadow, String dimension, int x, int z) {
+        if (shadow == null || dimension == null) {
+            return;
+        }
+        ChunkPos pos = new ChunkPos(x, z);
+        if (shadow.injectedChunk(dimension, x, z) != null) {
+            return;
+        }
+        net.minecraft.world.level.chunk.LevelChunk chunk = shadow.loadFromDisk(dimension, pos);
+        if (chunk == null) {
+            ovdMissRetryAt.put(DimensionKey.key(dimension, x, z), System.currentTimeMillis() + 2_000L);
+            ShadowChunkMapCompat.failSuspendedLoad(dimension, pos);
+            recordOvdMissOnce(dimension, pos);
+            DebugLogger.info(DebugLogger.LogType.NETWORK,
+                    "[OVD_PATH] disk-miss ({}, {}) dim={}", x, z, dimension);
+            return;
+        }
+        boolean diskHit = io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes
+                .get(dimension, pos) != null;
+        shadow.injectLoadedChunk(dimension, pos, chunk, !diskHit);
+        ShadowChunkMapCompat.completeSuspendedLoad(dimension, pos, chunk);
+        boolean pub = ShadowLightCompute.publishOvdCachedChunk(dimension, pos);
+        DebugLogger.info(DebugLogger.LogType.NETWORK,
+                "[OVD_PATH] disk-serve ({}, {}) diskHit={} pub={} clientHas={} dim={}",
+                x, z, diskHit, pub, ShadowLightCompute.clientHasChunk(x, z), dimension);
+        if (pub) {
+            recordOvdLoadedOnce(dimension, pos);
         }
     }
 
@@ -1017,6 +1109,12 @@ public final class ShadowTrackingSession {
                 boolean published = ShadowLightCompute.publishOvdCachedChunk(dimension, pos);
                 if (published) {
                     recordOvdLoadedOnce(dimension, pos);
+                }
+                if (isOvdWatchCoord(pos.x, pos.z)) {
+                    DebugLogger.info(DebugLogger.LogType.NETWORK,
+                            "[OVD_PATH] materialize ({}, {}) pub={} clientHas={} (dimension={})",
+                            pos.x, pos.z, published,
+                            ShadowLightCompute.clientHasChunk(pos.x, pos.z), dimension);
                 }
                 DebugLogger.info(DebugLogger.LogType.NETWORK,
                         "[SHADOW_TRACK] OVD materialized ({}, {}) -> publish {} (dimension={})",
