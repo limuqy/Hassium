@@ -259,6 +259,18 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 **不改冒烟脚本**：外部 mod jar 由人工放入 `<loader>/run/client/mods` 与 `<loader>/run/server/mods`，
 跑完手动清空；脚本侧只用已有的 `-Scenario` 与 `scripts/smoke/profiles/`。
 
+### 清档要求（C2ME 必读）
+
+**每场都要清存档**；**从 C2ME 切回无 mod 模式同样要清**。原因与做法：
+
+| 污染面 | 清理 |
+|--------|------|
+| 服务端世界 | 显式传 `-CleanWorld`。**不要依赖场景白名单**——脚本只对 `seedgen/dimension/modcompat/modcompat_strict` 强制，`tf` 等场景会复用上一场存档 |
+| C2ME DFC 编译缓存 | `<loader>/run/{client,server}/cache`（`c2me-dfc`）——脚本不清理客户端侧 |
+| C2ME 配置 | `<loader>/run/{client,server}/config/c2me.toml`（换 mod 集合后重生成） |
+| **Hassium 配置残留** | `<loader>/run/{client,server}/config/hassium/*.toml`。该文件跨场次持久，**未被 profile 钉死的键会继承上一场**：实测 neoforge 侧残留 `chunk.seedGenEnabled=true`（历史 seedgen 场次），使 `tf` 场跑成「本地生成」路径（`locallyGenerated=2418`、`ClientChunkCache` 空）→ 与 fabric 场不可比。**修法 = 在 profile 里显式钉死本场景依赖的键**（`tf.profile.properties` 已补 `chunk.seedGenEnabled = false`），**不要删这些 toml**：删掉后 `Invoke-SmokeProfilePatch` 对缺失文件 no-op（脚本会打印「文件不存在…由 mod 首启生成默认值」），需要非默认值的场景（如 `seedgen` 要 `seedGenEnabled=true`）会**静默失效**——实测两场空跑 `locallyGenerated=0`。全新 run 目录先跑一场生成默认 toml，再跑目标场景 |
+| 客户端影子缓存 | 脚本 [1/9] 已清 `hassium_cache` / `crash-reports` |
+
 ### 版本矩阵（逐 jar 读取 `fabric.mod.json` 实测；1.20.1 无 neoforge，全部走 fabric）
 
 - **1.20.1**：`c2me-fabric-mc1.20.1-0.2.0+alpha.11.18.jar` + `starlight-1.1.2+fabric.dbc156f.jar`（`minecraft: 1.20.*`）
@@ -267,6 +279,10 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 - 可选：`c2me-fabric-opts-accel-opencl-mc<ver>-*.jar`（OpenCL 世界生成加速）——**要求 Java >= 25**，
   需先 `$env:JAVA_HOME = '<graalvm-25>'` 再起会话；且 `openclAccel.allowIncompatibilityFallback`
   默认 `false`，无受支持 OpenCL 设备时会在 `runServer` 直接抛异常导致 exit 3。
+  **客户端侧另需 Hassium 侧接管**：C2ME 把 OpenCL 上下文初始化挂在 `MinecraftServer.runServer()` HEAD，
+  而影子端不走 `runServer` → 影子端创建必抛（`OpenCL global context is not initialized`），
+  且真服 `pull_mode` 已压制原版整柱 → 空 `ClientChunkCache`。Hassium 已在
+  `compat/mods/C2meOpenClCompat` 为影子实例补齐上下文（见 [mod-compat.md](mod-compat.md) §7.4）。
 
 Starlight 与 ScalableLux **互斥**（后者 `provides: ["starlight"]`），且各自只覆盖上表版本范围，不要交叉。
 
