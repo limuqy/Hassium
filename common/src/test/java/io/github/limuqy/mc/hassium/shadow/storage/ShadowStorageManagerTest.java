@@ -501,6 +501,71 @@ class ShadowStorageManagerTest {
                 "超槽位柱整槽不进文件（退化为 cache miss，而非损坏邻槽）");
     }
 
+    @Test
+    @DisplayName("整文件落盘走 tmp+原子改名：不留 tmp 残留，目标被完整替换")
+    void savePublishesRegionFileAtomically() throws Exception {
+        // 旧实现 Files.write 原地截断重写：写入窗口内强退/断电会留半截 .mca（整个 region 退化）。
+        // 新实现写同目录 tmp → force → ATOMIC_MOVE；本用例钉住可观测契约：无 tmp 残留、
+        // 旧柱扇区随重写真正消失、产物仍是可读的完整映像。
+        ChunkPos kept = new ChunkPos(6, 1);
+        ChunkPos dropped = new ChunkPos(7, 1);
+        assertEquals(RegionCache.regionKey(kept.x, kept.z),
+                RegionCache.regionKey(dropped.x, dropped.z), "前置：同 region");
+        Path file = RegionCache.regionFile(regionDir, kept.x, kept.z);
+        Path tmp = file.resolveSibling(file.getFileName() + RegionCache.Image.TMP_SUFFIX);
+
+        assertTrue(manager.adoptEncodedColumn(kept, adoptedPayload(0x51L, 51), 0x51L));
+        assertTrue(manager.adoptEncodedColumn(dropped, adoptedPayload(0x62L, 62), 0x62L));
+        assertFalse(manager.saveDirtyRegions(5_000L).timedOut());
+        assertFalse(java.nio.file.Files.exists(tmp), "落盘后不得留 .tmp 残留");
+        long twoColumnBytes = java.nio.file.Files.size(file);
+
+        manager.deleteColumn(dropped);
+        assertFalse(java.nio.file.Files.exists(tmp), "重写后不得留 .tmp 残留");
+        assertTrue(java.nio.file.Files.size(file) < twoColumnBytes,
+                "整文件替换：被删柱的扇区必须随重写消失");
+
+        ShadowStorageHashes.clear();
+        manager.close();
+        manager = new ShadowStorageManager(regionDir, pos2 -> nbtPayload.clone(), injected::contains, 1);
+        assertTrue(manager.probeHash(kept, 0x51L).match(), "替换后保留柱自持");
+        assertArrayEquals(adoptedNbt(51), manager.readChunk(kept), "改名不得损坏内容");
+        assertEquals(ShadowStorageManager.ProbeStatus.ABSENT, manager.probeHash(dropped, 0x62L).status(),
+                "被删柱必须真正消失");
+    }
+
+    @Test
+    @DisplayName("目标 .mca 被别的句柄持有（Windows 共享删除受限）时退化为原地写，不丢柱")
+    void saveFallsBackToInPlaceWhenTargetHandleHeld() throws Exception {
+        // 影子服务端自己的原版 RegionFile 长期持有同一 .mca 的 FileChannel（构造即 open），
+        // Windows 未授予 FILE_SHARE_DELETE → 原子改名必被拒。退化路径必须仍然落盘完整内容，
+        // 否则脏位永不清、重连复用整条链断掉（实测 ATOMIC_MOVE 抛 AccessDeniedException）。
+        ChunkPos pos = new ChunkPos(6, 3);
+        injected.add(ChunkPos.asLong(pos.x, pos.z));
+        ShadowStorageHashes.put(pos, 0x71L);
+        persistIngest(pos);
+        Path file = RegionCache.regionFile(regionDir, pos.x, pos.z);
+        Path tmp = file.resolveSibling(file.getFileName() + RegionCache.Image.TMP_SUFFIX);
+        assertTrue(java.nio.file.Files.isRegularFile(file), "前置：先有一次落盘");
+
+        try (java.nio.channels.FileChannel held = java.nio.channels.FileChannel.open(
+                file, java.nio.file.StandardOpenOption.READ, java.nio.file.StandardOpenOption.WRITE)) {
+            assertTrue(held.isOpen());
+            ShadowStorageHashes.put(pos, 0x72L);
+            manager.markContentDirty(pos);
+            manager.markLightReady(pos);
+            assertFalse(manager.encodeDirty(5_000L).timedOut());
+            assertFalse(manager.saveDirtyRegions(5_000L).timedOut(), "持有句柄不得让落盘失败");
+        }
+        assertFalse(java.nio.file.Files.exists(tmp), "退化路径同样不得留 .tmp 残留");
+
+        ShadowStorageHashes.clear();
+        manager.close();
+        manager = new ShadowStorageManager(regionDir, pos2 -> nbtPayload.clone(), injected::contains, 1);
+        assertTrue(manager.probeHash(pos, 0x72L).match(), "退化路径写出的 hash 头必须可探活");
+        assertArrayEquals(nbtPayload, manager.readChunk(pos), "退化路径不得丢柱");
+    }
+
     /** adopt 入参：type126 槽的 type-之后载荷（0x48 头 + ZSTD）。 */
     private static byte[] adoptedPayload(long hash, int marker) throws Exception {
         return HassiumType126Codec.payloadAfterType(

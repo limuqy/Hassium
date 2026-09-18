@@ -3,8 +3,11 @@ package io.github.limuqy.mc.hassium.shadow.storage;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -114,6 +117,9 @@ public final class RegionCache {
         private final int[] timestamps = new int[SLOTS];
         private boolean fileDirty;
 
+        /** 落盘临时文件后缀（同目录 {@code r.X.Z.mca.tmp}）；写完 force 后原子改名替换目标。 */
+        static final String TMP_SUFFIX = ".tmp";
+
         public static Image empty() {
             return new Image();
         }
@@ -219,6 +225,21 @@ public final class RegionCache {
             return fileDirty;
         }
 
+        /**
+         * 整文件落盘：同目录 {@code <name>.tmp} 写完 force 后原子改名替换目标。
+         * <p>
+         * 旧实现直接 {@code Files.write(file, out)}——打开即截断、原地重写。强退/断电落在写入
+         * 窗口内会留下半截 .mca（新偏移表可能已落盘，而它指向的扇区还没有），整个 region
+         * （1024 柱）一起退化。原版 {@code RegionFile#write} 靠「增量扇区分配 + 先写数据后写
+         * 指针 + 旧扇区延后释放」把损害限制在最后写入的一柱；整文件重写拿不到那个粒度，但
+         * tmp + {@code ATOMIC_MOVE} 至少保证目标文件要么是旧的完整版本、要么是新的完整版本。
+         * <p>
+         * 失败（写 tmp / 改名）时清理 tmp 并把异常抛给调用方：{@code fileDirty} 保持为真，
+         * 下一轮 flush 仍会重试。目录项本身不 force（Java 无跨平台 fsync 目录的手段）。
+         * <p>
+         * 改名被平台拒绝时见 {@link #writeAtomically} 的原地写退化（Windows 上原版
+         * {@code RegionFile} 句柄持有同一 .mca，共享删除受限）。
+         */
         public synchronized void save(Path file) throws IOException {
             if (!fileDirty) {
                 return;
@@ -261,8 +282,42 @@ public final class RegionCache {
                 out[fileOffset + 4] = HassiumType126Codec.COMPRESSION_TYPE;
                 System.arraycopy(payload, 0, out, fileOffset + 5, payload.length);
             }
-            Files.write(file, out);
+            writeAtomically(file, out);
             fileDirty = false;
+        }
+
+        /**
+         * 同目录 tmp 写满 → {@code force(true)} → 原子改名替换。
+         * <p>
+         * 改名被拒时退化回原地写（{@link Files#write}），不因平台限制丢柱：Windows 上影子
+         * 服务端自己的原版 {@code RegionFile} 长期持有同一 .mca 的 FileChannel
+         * （{@code RegionFileStorage} 缓存 RegionFile，构造即 open），而 JDK 未开
+         * {@code FILE_SHARE_DELETE} → {@code MoveFileEx} 必被拒；实测原地写可成功（共享写成立）。
+         * 退化路径 = 旧实现行为（完整内容、非原子），仅失去原子性，不丢数据。
+         */
+        private static void writeAtomically(Path file, byte[] out) throws IOException {
+            Path tmp = file.resolveSibling(file.getFileName() + TMP_SUFFIX);
+            try {
+                try (FileChannel channel = FileChannel.open(tmp,
+                        StandardOpenOption.CREATE, StandardOpenOption.WRITE,
+                        StandardOpenOption.TRUNCATE_EXISTING)) {
+                    ByteBuffer buffer = ByteBuffer.wrap(out);
+                    while (buffer.hasRemaining()) {
+                        channel.write(buffer);
+                    }
+                    channel.force(true);
+                }
+                try {
+                    Files.move(tmp, file,
+                            StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+                } catch (IOException moveFailure) {
+                    LOGGER.debug("Hassium: atomic publish denied for {} ({}), in-place fallback",
+                            file, moveFailure.toString());
+                    Files.write(file, out);
+                }
+            } finally {
+                Files.deleteIfExists(tmp);
+            }
         }
     }
 }
