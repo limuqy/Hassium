@@ -400,6 +400,26 @@ public final class ShadowLightProbe {
                 sb.append('\n');
             }
         }
+        // 屋檐残差定位：探针柱的光源在北邻（z=0 紧邻北邻柱的 z=15）。
+        // 只读打印本柱 z=0 行与北邻 section z=15 行的 sky 值，判定「源头本身是黑」还是
+        // 「邻柱光没传播过来」——两种结论指向完全不同的修法。
+        appendSkyRow(sb, tag + " SELF-z0", sky, 0);
+        DataLayer northSky = engine.getLayerListener(LightLayer.SKY)
+                .getDataLayerData(SectionPos.of(SECTION_X, SECTION_Y, SECTION_Z - 1));
+        appendSkyRow(sb, tag + " NORTH-section-z15", northSky, 15);
+    }
+
+    /** 单行 sky 值（固定 z，遍历 x=0..15，取该列 y=8 的高度层）。 */
+    private static void appendSkyRow(StringBuilder sb, String tag, DataLayer layer, int fixedZ) {
+        sb.append(tag).append(" y=88 x0..15:");
+        if (layer == null) {
+            sb.append(" <null>\n");
+            return;
+        }
+        for (int x = 0; x < 16; x++) {
+            sb.append(' ').append(layer.get(x, 8, fixedZ));
+        }
+        sb.append('\n');
     }
 
     /**

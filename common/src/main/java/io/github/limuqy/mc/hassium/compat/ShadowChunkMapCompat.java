@@ -43,6 +43,25 @@ public final class ShadowChunkMapCompat {
     private static final java.util.concurrent.ConcurrentHashMap<Long, java.util.concurrent.CompletableFuture<?>> SUSPENDED_LOADS =
             new java.util.concurrent.ConcurrentHashMap<>();
 
+    /**
+     * 已被 holder 放行过的柱（{@code completeSuspendedLoad} 成功登记）。
+     * <p>
+     * 语义 = 「该柱由原版 holder 的 {@code ChunkStatus} 链负责」：其 INITIALIZE_LIGHT/LIGHT
+     * 由 holder 跑（单写者），交付挂在该链完成上；不在本集合内的注入柱（holder 请求窗外）
+     * 没有 holder 归属，必须沿用影子自己的两阶段光路径，否则既无人算光也无人交付。
+     */
+    private static final java.util.Set<Long> HOLDER_COMPLETED =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /** 该柱是否由原版 holder 链负责（{@code completeSuspendedLoad} 曾成功放行）。 */
+    public static boolean wasHolderCompleted(String dimension, ChunkPos pos) {
+        if (dimension == null || pos == null) {
+            return false;
+        }
+        return HOLDER_COMPLETED.contains(
+                io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z));
+    }
+
     private ShadowChunkMapCompat() {}
 
     /** SeedGen {@code generateChunk} 期间允许金字塔 worldgen；注入票路径禁止。 */
@@ -87,6 +106,7 @@ public final class ShadowChunkMapCompat {
         if (future == null) {
             return false;
         }
+        HOLDER_COMPLETED.add(io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z));
         ImposterProtoChunk imposter = asImposter(chunk);
 #if MC_VER < MC_1_21_1
         ((java.util.concurrent.CompletableFuture) future)
@@ -102,6 +122,7 @@ public final class ShadowChunkMapCompat {
     /** 关停/park 清空：world 丢弃后悬置 future 无主，直接丢弃登记。 */
     public static void clearSuspendedLoads() {
         SUSPENDED_LOADS.clear();
+        HOLDER_COMPLETED.clear();
     }
 
     /**

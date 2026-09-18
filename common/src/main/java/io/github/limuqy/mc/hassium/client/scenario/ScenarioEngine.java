@@ -60,6 +60,10 @@ public final class ScenarioEngine {
     private static boolean joinAnnounced;
     private static boolean dumpWaitAnnounced;
     private static boolean dimensionCommandSent;
+    /** join 等待诊断节流（每 5s 一行证据，见 execJoin）。 */
+    private static long joinWaitLogAtMs;
+    /** R2 重连有界自愈：本步骤是否已强制重连过一次。 */
+    private static boolean reconnectRetried;
 
     // 飞行注入：爬升阶段到期 → 转平飞；平飞到期或玩家消失 → 复位按键
     private static long moveUntilMs = -1L;
@@ -196,6 +200,8 @@ public final class ScenarioEngine {
         joinAnnounced = false;
         dumpWaitAnnounced = false;
         dimensionCommandSent = false;
+        joinWaitLogAtMs = 0L;
+        reconnectRetried = false;
     }
 
     private static String currentDesc() {
@@ -229,6 +235,32 @@ public final class ScenarioEngine {
             return Outcome.DONE;
         }
         if (mc.player == null || mc.level == null || mc.getConnection() == null) {
+            // 间歇「重连后登录卡死」取证：每 5s 一行（含三段 null 态），下一场复现即可区分
+            // 「TCP/登录半开」与「连接压根没建立」。日志节流，正常场次每步只留少量行。
+            if (now - joinWaitLogAtMs >= 5_000L) {
+                joinWaitLogAtMs = now;
+                LOGGER.info("HassiumSmokeTest: JOIN_WAIT {} elapsedMs={} conn={} player={} level={}",
+                        label, base > 0L ? now - base : 0L,
+                        mc.getConnection() != null, mc.player != null, mc.level != null);
+            }
+            // 有界自愈（仅 R2，since=disconnect）：15s 内连 play 连接都没建立 → 清层后强制重连一次。
+            // 只重试一次，避免把「服务端拒绝」放大成重连风暴。
+            if (sinceDisconnect && !reconnectRetried && base > 0L && now - base > 15_000L
+                    && mc.getConnection() == null) {
+                reconnectRetried = true;
+                LOGGER.warn("HassiumSmokeTest: {} no connection after {}ms — forcing teardown + one reconnect retry",
+                        label, now - base);
+                try {
+#if MC_VER < MC_1_21_1
+                    mc.clearLevel();
+#else
+                    mc.disconnect(new net.minecraft.client.gui.screens.TitleScreen(), false);
+#endif
+                } catch (Throwable t) {
+                    LOGGER.warn("HassiumSmokeTest: teardown before retry failed: {}", t.toString());
+                }
+                triggerReconnect(mc);
+            }
             return Outcome.RUNNING;
         }
         // 单人内嵌服不计入多人连服冒烟

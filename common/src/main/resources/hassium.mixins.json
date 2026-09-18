@@ -28,6 +28,7 @@
         "server.MixinPlayerChunkSender",
         "shadow.MixinLightDataWrite",
         "shadow.ThreadedLevelLightEngineAccessor",
+    "shadow.MixinThreadedLevelLightEngine",
         "client.LightUpdatePacketAccessor",
         "client.LevelChunkWithLightPacketAccessor",
         "server.MixinReloadableServerResources",
