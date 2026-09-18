@@ -39,21 +39,7 @@ public final class ShadowOfficialPacketBridge {
                         chunkPacket.getX(), chunkPacket.getZ());
                 return false;
             }
-            var shadow = io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry
-                    .getInstance().get();
-            net.minecraft.world.level.chunk.LevelChunk material = shadow == null ? null
-                    : shadow.injectedChunk(dimension, chunkPacket.getX(), chunkPacket.getZ());
-            if (material != null
-                    && !io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute
-                            .isVanillaAlignedClientPackReady(dimension,
-                                    new net.minecraft.world.level.ChunkPos(
-                                            chunkPacket.getX(), chunkPacket.getZ()),
-                                    material)) {
-                Constants.LOG.debug(
-                        "Hassium: vanilla light not ready, drop bridge chunk ({},{})",
-                        chunkPacket.getX(), chunkPacket.getZ());
-                return false;
-            }
+            // 回归原版 trackChunk：不因「光未对齐」丢弃官方整柱包；欠光首包光桥后补。
         }
         if (dimension != null && packet instanceof ClientboundLightUpdatePacket lightPacket
                 && io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate

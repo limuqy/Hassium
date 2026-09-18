@@ -43,7 +43,7 @@ flowchart TD
 | 主线程调度 | `PriorityBlockingQueue`（按玩家距离） | — | `MainThreadDispatcher.execute` |
 | 区块 apply | `ClientMainThreadBudget`（JoinBoost 30ms 窗口 / normal `mainThreadChunkBudgetMs`）；无数量硬顶 | Render thread | `MixinClientTick` |
 | 光照投递 | `ShadowLightCompute` pending/generated/delta/pendingLightUpdates/inflight + 帧尾光桥 | 投递：Netty / 解压后台；消费：后台池 | `submit` / `submitLightDelta` + `ShadowLightCompute` |
-| 影子端注入 + 收敛 | 注入表 + UNKNOWN FULL 票 → per-chunk 两阶段屏障（`initializeLight` → 邻柱 holder `INITIALIZE_LIGHT` parent → `lightChunk`）；`isChunkLightComplete` 不挡首包 | 引擎 mailbox / 后台池 | `ShadowSeedServer.runMainLoop` + `ShadowLightCompute` |
+| 影子端注入 + 收敛 | 注入表 + UNKNOWN FULL 票 → **齐套门 `LightNeighborhoodGate`（3×3 `INITIALIZE_LIGHT` 齐套）→** per-chunk `initializeLight` + `lightChunk`；**禁止去门直算**（2026-09-18 去门实验屋檐黑，已钉死） | 引擎 mailbox / 后台池 | `ShadowSeedServer.runMainLoop` + `ShadowLightCompute` + `LightNeighborhoodGate` |
 | 光照落地 | 帧尾 `drainReady`（渲染前，预算内；光桥只对影子区块包已落地且客户端未卸载的柱发送） | Render thread | `MixinClientTick.drainReady` |
 
 **线程纪律**：Netty 线程只做入队；`ClientMainThreadBudget` 是唯一主线程 apply 闸门（时间预算，无数量硬顶）；`maxChunksPerFrame` 只限缓存读取生产（影子入队 + 影子读盘），不限 apply。
@@ -73,7 +73,7 @@ ClientChunkCache.replaceWithPacketData → renderer
 影子端 = 进程内完整 `MinecraftServer` 上下文（`ShadowSeedServer`），光照由原版 `LightEngine` 计算：
 
 1. **注入**：`ShadowSeedServer.injectChunk` 把权威/缓存/本地生成数据注入影子 `ServerLevel`
-2. **两阶段屏障**：`initializeLight` → 邻柱 holder `INITIALIZE_LIGHT` parent → `lightChunk`；`isChunkLightComplete` 不挡首包（欠光可先落地，光桥后补）
+2. **两阶段屏障 + 齐套门**：注入后 `initializeLight`；**非 REUSE 且未 promote 时必须经 `LightNeighborhoodGate`（3×3 邻柱均过 INITIALIZE）再 `lightChunk`**。齐套后 **`startLightBarrier` 必须从零 `initializeLight+lightChunk`（`nativeLightChunks.remove`）**，禁止复用 phase-1 只跑 LIGHT——2026-09-18 ⑤ 实验：冒烟/spawn 正常，移动后邻域传播屋檐柱部分全黑（用户目视回退）。缺邻时引擎按 Bedrock 挡天光。**齐套门与从零双算均钉死**；验收须含**移动中**的屋檐/洞口，冒烟 PASS 不能代替目视。
 3. **光出口桥**：`MixinServerChunkCache.collectLightUpdate` 捕获影子光更新 → `LightDeltaS2CPacket`（增量掩码，append-only 尾块携带 empty 掩码）
 4. **帧尾落地**：`drainReady` 渲染前预算内把 ready 队列倒进 `handleLevelChunkWithLight`；光桥只对「影子区块包已落地且客户端未卸载」的柱发送
 5. **失败降级**：影子端启动失败（`ShadowServerRegistry.failShadowServer`）→ 关缓存/SeedGen/影子光照，全程原版路径（服务端不剥光——剥光在握手协商）

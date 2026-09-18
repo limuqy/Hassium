@@ -157,8 +157,6 @@ public final class ShadowChunkAcquire {
 
     private static LevelChunkHolder injectedNonPlaceholder(ShadowSeedServer shadow,
                                                            String dimension, int x, int z) {
-        boolean injected = shadow.injectedChunk(dimension, x, z) != null
-                && !shadow.isPlaceholder(dimension, x, z);
-        return new LevelChunkHolder(injected);
+        return new LevelChunkHolder(shadow.injectedChunk(dimension, x, z) != null);
     }
 }

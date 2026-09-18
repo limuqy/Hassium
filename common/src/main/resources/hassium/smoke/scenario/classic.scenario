@@ -1,7 +1,7 @@
-# classic 场景：两轮连服 VD 切换（行为不变迁移自旧 WAIT_JOIN/ROUND_STATS/DISCONNECTING 状态机）
-# round1WaitMs = delayMs*2（R1 喂满 VD20 圆柱：1.20.1–1.21.3=1529，1.21.4+=1573；
-# 不是 41×41=1681 方阵）；round2WaitMs = max(3000, delayMs*2)
-# （R2 预览光 FIFO 先排 VD 内柱，环带 OVD 落地更晚；dump 另等到 ovdLoaded>0）。
+# classic 场景：两轮连服 VD 切换
+# 2026-09-18：round1WaitMs 默认 40s、round2WaitMs 默认 20s（ScenarioEngine；可用
+# hassium.smokeTest.round1WaitMs / round2WaitMs 覆盖）。R1 需喂满 VD20 圆柱
+# （1.20.1–1.21.3=1529，1.21.4+=1573）；R2 缓存/OVD 回填。
 join label=WAIT_JOIN_1 since=start timeoutMs=${joinTimeoutMs}
 fly seconds=${moveSeconds} tag=MOVE_
 wait ms=${round1WaitMs}

@@ -102,16 +102,18 @@ public final class ScenarioEngine {
         }
         Map<String, String> vars = new LinkedHashMap<>();
         vars.put("delayMs", Long.toString(delayMs));
-        vars.put("round1WaitMs", Long.toString(delayMs * 2));
+        // 2026-09-18 用户指定：R1 喂满等待 40s、R2 20s（可用 JVM 属性覆盖）
+        vars.put("round1WaitMs", Long.toString(parseLong(
+                System.getProperty("hassium.smokeTest.round1WaitMs"), 40_000L)));
         // T7 dimension 场景：切维段等待（nether/back 默认 20s；END 段注入/算光更慢默认 30s，
         // 可用 hassium.smokeTest.dimWaitMs / endWaitMs 覆盖）
         vars.put("dimWaitMs", Long.toString(parseLong(
                 System.getProperty("hassium.smokeTest.dimWaitMs"), Math.max(20_000L, delayMs * 2))));
         vars.put("endWaitMs", Long.toString(parseLong(
                 System.getProperty("hassium.smokeTest.endWaitMs"), Math.max(30_000L, delayMs))));
-        // R2 预览光会把 VD 内柱立刻推进 ready FIFO；与 R1 同量等待，
-        // 避免 dump 时 loadedRenderOnly 仍为 0。
-        vars.put("round2WaitMs", Long.toString(Math.max(3_000L, delayMs * 2)));
+        // R2：缓存/OVD 回填，20s 足够（用户 2026-09-18）
+        vars.put("round2WaitMs", Long.toString(parseLong(
+                System.getProperty("hassium.smokeTest.round2WaitMs"), 20_000L)));
         vars.put("reconnectDelayMs", Long.toString(reconnectDelayMs));
         vars.put("joinTimeoutMs", Long.toString(joinTimeoutMs));
         vars.put("moveSeconds", Long.toString(moveSeconds));
@@ -164,8 +166,8 @@ public final class ScenarioEngine {
 
         tickMovement(mc, now);
 
-        // 全局超时：两轮 joinTimeout + R1/R2 各 delayMs*2 等待 + 重连间隔 + R2 dump 等 OVD
-        if (startAtMs > 0L && now - startAtMs > joinTimeoutMs * 2 + delayMs * 5 + reconnectDelayMs) {
+        // 全局超时：两轮 joinTimeout + R1 40s + R2 20s + 重连间隔 + R2 dump 等 OVD
+        if (startAtMs > 0L && now - startAtMs > joinTimeoutMs * 2 + 60_000L + reconnectDelayMs) {
             fail("global timeout in step " + currentDesc(), 3);
             return;
         }

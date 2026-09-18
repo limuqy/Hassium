@@ -101,7 +101,7 @@ public final class VanillaAlignedChunkProvider implements ShadowChunkProvider {
         ShadowSeedServer existingServer = ShadowServerRegistry.getInstance().get();
         if (existingServer != null) {
             LevelChunk material = existingServer.injectedChunk(dimension, pos.x, pos.z);
-            if (material != null && !existingServer.isPlaceholder(dimension, pos.x, pos.z)) {
+            if (material != null) {
                 completeAcquire(dimension, pos, material);
                 return CompletableFuture.completedFuture(material);
             }
@@ -190,6 +190,9 @@ public final class VanillaAlignedChunkProvider implements ShadowChunkProvider {
                         session.clearPullInFlight(pending.dimension, pending.pos);
                     } catch (Throwable ignored) {
                     }
+                    // 出权威：清 compare AWAITING，OVD 环带本地源才不会被闸死
+                    io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
+                            .clear(pending.dimension, pending.pos);
                 }
                 continue;
             }
@@ -197,7 +200,7 @@ public final class VanillaAlignedChunkProvider implements ShadowChunkProvider {
             if (server != null) {
                 LevelChunk material =
                         server.injectedChunk(pending.dimension, pending.pos.x, pending.pos.z);
-                if (material != null && !server.isPlaceholder(pending.dimension, pending.pos.x, pending.pos.z)) {
+                if (material != null) {
                     pendingPulls.remove(key, pending);
                     completeAcquire(pending.dimension, pending.pos, material);
                     continue;

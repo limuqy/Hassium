@@ -13,7 +13,8 @@ import net.minecraft.world.level.ChunkPos;
  * 标记写入：物化桥 seedGen/盘基线 defer、authority acquire 本地基线分支。
  * 标记清除：{@code ShadowPullClient.handleResponse} 成功落地前；
  * 网络权威 packet {@code injectChunk} 成功时；会话 reset / 断连整表清空。
- * OVD 不进本闸（无真服权威比对）。
+ * OVD 不进本闸（无真服权威比对）：{@code publishCachedChunk(renderOnly=true)} 跳过
+ * {@link #blockClientDelivery}，并在 OVD publish 前 clear 残留 AWAITING。
  */
 public final class SeedGenCompareGate {
 

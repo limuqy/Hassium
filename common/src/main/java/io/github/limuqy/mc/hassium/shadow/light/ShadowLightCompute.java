@@ -56,11 +56,11 @@ import net.minecraft.world.level.lighting.LevelLightEngine;
  * <ul>
  *   <li>投递（{@link #submit} / {@link #submitGenerated}）：任意线程（解压后台 /
  *       主线程 / SeedGen 生成池），pos→数据 REPLACE 覆盖（同柱新数据盖旧）</li>
- *   <li>消费（后台池单循环 CAS，管道化）：取批 → 注入 → 请求原版 {@code ChunkMap} 的
- *       {@code ChunkStatus.LIGHT} future（含 holder 依赖）→ 打包回传。本类不直接驱动
- *       {@code LightEngine}，也不创建隔离预览引擎；在途上限
- *       {@link #PIPELINE_MAX_INFLIGHT} 只计等待原版 future 的柱</li>
- *   <li>光照完成（原版 LIGHT future 回调）：{@link #completeLight} exactly-once 收口</li>
+ *   <li>消费（后台池单循环 CAS，管道化）：取批 → 注入 → {@code initializeLightImmediately}
+ *       → 非 REUSE 且未 promote 时入 {@link LightNeighborhoodGate}（3×3 齐套，钉死）
+ *       → {@link #startLightBarrier} 从零 initializeLight+light → {@link #finishLight}
+ *       → {@link #pushReady} 打包。不走 ChunkMap LIGHT future / holder 单写者路径</li>
+ *   <li>光照完成（native light future 回调）：{@link #completeLight} exactly-once 收口</li>
  *   <li>客户端主线程：{@link #drainReady}（帧尾，MixinClientTick）攒批 light 包入
  *       同一 FIFO 回传队列，按到达顺序落地（时间预算）</li>
  * </ul>
@@ -214,75 +214,31 @@ public final class ShadowLightCompute {
     private static final java.util.Set<Long> accountedCacheHits = java.util.concurrent.ConcurrentHashMap.newKeySet();
     /** 光照命中/重算已记账柱（复合键）。邻柱 LIGHT_ONLY 补光会把同一片柱刷成千上万次。 */
     private static final java.util.Set<Long> accountedLights = java.util.concurrent.ConcurrentHashMap.newKeySet();
-    /**
-     * 占位被真实数据顶替后、曾按空气算光的 8 邻（复合键）。
-     * 只登记不立刻算光：同一邻柱被多个占位顶替时按 key 去重，拍头 drain 一次。
-     * 登记时即置邻柱 {@code !isLightCorrect}——park/断连来不及 drain 时 R2 hash 命中
-     * 仍会走 needRelight，不把过亮残差带进下一程。
-     */
-    private static final java.util.Set<Long> pendingPlaceholderNeighborRelight =
-            java.util.concurrent.ConcurrentHashMap.newKeySet();
 
-    /** hash 分流计数（会话累计；断连清零）。冒烟探针用，分辨整柱 miss 是内存漂移还是盘上无槽。 */
+    /** hash 分流计数（会话累计；断连清零）。冒烟探针字段兼容保留；热路径不再写入诊断集合（④）。 */
     private static final AtomicLong hashMemoryHits = new AtomicLong();
     private static final AtomicLong hashMemoryMismatches = new AtomicLong();
     private static final AtomicLong hashDiskHits = new AtomicLong();
     private static final AtomicLong hashDiskMismatches = new AtomicLong();
     private static final AtomicLong hashAbsents = new AtomicLong();
     private static final AtomicLong hashLeftovers = new AtomicLong();
-    /** 哈希分类诊断：按 (维度坐标复合键, 远程 hash) 识别重复元数据与重复分类。 */
-    private record HashObservation(long chunkKey, long remoteHash) {
-    }
-
-    private static final Set<HashObservation> hashEntriesSeen = ConcurrentHashMap.newKeySet();
-    private static final Set<Long> hashChunkKeysSeen = ConcurrentHashMap.newKeySet();
-    private static final Set<HashObservation> hashMemoryMismatchEntries = ConcurrentHashMap.newKeySet();
-    private static final Set<HashObservation> hashDiskMismatchEntries = ConcurrentHashMap.newKeySet();
-    private static final Set<HashObservation> hashLeftoverEntries = ConcurrentHashMap.newKeySet();
     private static final AtomicLong hashEntriesProcessed = new AtomicLong();
     private static final AtomicLong hashEntryDuplicates = new AtomicLong();
     private static final AtomicLong hashMemoryMismatchDuplicates = new AtomicLong();
     private static final AtomicLong hashDiskMismatchDuplicates = new AtomicLong();
     private static final AtomicLong hashLeftoverDuplicates = new AtomicLong();
 
-    private static HashObservation observeHashEntry(long chunkKey, long remoteHash) {
-        hashEntriesProcessed.incrementAndGet();
-        hashChunkKeysSeen.add(chunkKey);
-        HashObservation observation = new HashObservation(chunkKey, remoteHash);
-        if (!hashEntriesSeen.add(observation)) {
-            hashEntryDuplicates.incrementAndGet();
-        }
-        return observation;
-    }
-
-    private static void observeMemoryMismatch(HashObservation observation) {
-        if (!hashMemoryMismatchEntries.add(observation)) {
-            hashMemoryMismatchDuplicates.incrementAndGet();
-        }
-    }
-
-    private static void observeDiskMismatch(HashObservation observation) {
-        if (!hashDiskMismatchEntries.add(observation)) {
-            hashDiskMismatchDuplicates.incrementAndGet();
-        }
-    }
-
-    private static void observeLeftover(HashObservation observation) {
-        if (!hashLeftoverEntries.add(observation)) {
-            hashLeftoverDuplicates.incrementAndGet();
-        }
-    }
-
+    /** ④：HashObservation 集合/observe* 已删；unique 类探针字段恒 0（兼容 schema）。 */
     public static long hashEntriesProcessedCount() {
         return hashEntriesProcessed.get();
     }
 
     public static long hashEntriesUniqueCount() {
-        return hashEntriesSeen.size();
+        return 0L;
     }
 
     public static long hashChunkKeysUniqueCount() {
-        return hashChunkKeysSeen.size();
+        return 0L;
     }
 
     public static long hashEntryDuplicatesCount() {
@@ -290,7 +246,7 @@ public final class ShadowLightCompute {
     }
 
     public static long hashMemoryMismatchUniqueCount() {
-        return hashMemoryMismatchEntries.size();
+        return 0L;
     }
 
     public static long hashMemoryMismatchDuplicatesCount() {
@@ -298,7 +254,7 @@ public final class ShadowLightCompute {
     }
 
     public static long hashDiskMismatchUniqueCount() {
-        return hashDiskMismatchEntries.size();
+        return 0L;
     }
 
     public static long hashDiskMismatchDuplicatesCount() {
@@ -306,15 +262,11 @@ public final class ShadowLightCompute {
     }
 
     public static long hashLeftoverUniqueCount() {
-        return hashLeftoverEntries.size();
+        return 0L;
     }
 
     public static long hashLeftoverUniqueChunkKeysCount() {
-        Set<Long> keys = new HashSet<>();
-        for (HashObservation observation : hashLeftoverEntries) {
-            keys.add(observation.chunkKey());
-        }
-        return keys.size();
+        return 0L;
     }
 
     public static long hashLeftoverDuplicatesCount() {
@@ -528,7 +480,6 @@ public final class ShadowLightCompute {
         fullApplyTraces.clear();
         ignoredApplyRetries.clear();
         // R2：上一会话 LIGHT/Promote 凭据作废，整柱 pack 须重新过齐套+两阶段（原版 isLighted 口径）
-        lightCompletedAfterLightTask.clear();
         LightNeighborhoodGate.clear();
     }
 
@@ -553,7 +504,6 @@ public final class ShadowLightCompute {
         shadowApplyEpochs.clear();
         fullApplyTraces.clear();
         lightFollowUps.clear();
-        EMPTY_LIGHT_EVIDENCE_DUMPED.clear();
         bridgeDeferSinceMs.clear();
         ignoredApplyRetries.clear();
     }
@@ -597,23 +547,9 @@ public final class ShadowLightCompute {
      *  清光路径使用。 */
     private static final int ENGINE_TASK_LOW_WATER = 450;
     /**
-     * 清光会一次性向原版 sorter 投递大量 PRE 任务；在下一柱前把队列压回低水位，
-     * 避免超过 vanilla sorter 的并发阈值后出现任务错序与空光层。
+     * B5（2026-09-18 夜③）：清光后 sorter 水位由引擎任务调度自行消化；
+     * {@code awaitEngineTaskDrain} no-op 与 drainAfterClear 调度已删除。
      */
-    /**
-     * B5：原版节奏不在此阻塞等 lightTasks 排水（历史上主线程 5s/柱会卡死）。
-     * 清光后的 sorter 水位由引擎任务调度自行消化；保留签名兼容调用方，恒 no-op。
-     */
-    public static void awaitEngineTaskDrain(net.minecraft.server.level.ThreadedLevelLightEngine engine) {
-        // no-op
-    }
-
-    /** @param timeoutMs 已忽略；见 {@link #awaitEngineTaskDrain(ThreadedLevelLightEngine)}。 */
-    public static void awaitEngineTaskDrain(net.minecraft.server.level.ThreadedLevelLightEngine engine,
-                                     long timeoutMs) {
-        // no-op
-    }
-
 
     /** 管道低水位：在途低于此值才由完成回调重新 pump（= 1 批：低水位→满水位恰好补一批，
      *  避免每完成一块就一次 executor 往返）。 */
@@ -716,45 +652,21 @@ public final class ShadowLightCompute {
     }
 
     /**
-     * 本会话 LIGHT 任务 POST 完成（对齐原版 {@code setLightCorrect(true)} 时机）。
-     * 整柱客户端打包门：未 Promote 且未 POST 的柱不得 pack。
-     */
-    private static final java.util.Set<Long> lightCompletedAfterLightTask =
-            ConcurrentHashMap.newKeySet();
-
-    /**
-     * 原版语义整柱交付门（所有 shadow 打包出口共用）：
-     * <ul>
-     *   <li>{@code chunk.isLightCorrect()} —— 对齐 {@code ChunkStatus.isLighted} 的必要条件</li>
-     *   <li>本会话 {@code LightNeighborhoodGate} 已 Promote，或 {@code finishLight} POST 已记账
-     *       —— 对齐 {@code ChunkStatus.LIGHT}（range=1）完成后才 {@code setLightCorrect(true)}</li>
-     * </ul>
-     * 未就绪时调用方必须转入两阶段光队列，不得 REUSE/整柱 pack（否则 INITIALIZE 空层
-     * 经 emptyYMask 写成客户端 skyTop=0，屋檐黑）。
+     * 整柱 REUSE/桥交付弱门：只看 {@code isLightCorrect()}。
+     * {@code lightCompletedAfterLightTask} 集合已于 ④ 删除（只写不读）。
      */
     public static boolean isVanillaAlignedClientPackReady(String dimension, ChunkPos pos,
                                                           net.minecraft.world.level.chunk.LevelChunk chunk) {
-        if (pos == null || chunk == null) {
-            return false;
-        }
-        if (!chunk.isLightCorrect()) {
-            return false;
-        }
-        String dim = dimension == null ? currentDimension() : dimension;
-        long key = DimensionKey.key(dim, pos.x, pos.z);
-        return LightNeighborhoodGate.wasPromoted(key) || lightCompletedAfterLightTask.contains(key);
+        return pos != null && chunk != null && chunk.isLightCorrect();
     }
 
-    /** finishLight / 原版光完成后记账：允许整柱打包。 */
+    /** ④：完成记账集合已删；保留空方法兼容 finishLight/publish 调用点。 */
     public static void markClientPackLightCompleted(long key) {
-        lightCompletedAfterLightTask.add(key);
+        // no-op（诊断集合已剥离）
     }
 
     public static void markClientPackLightCompleted(String dimension, ChunkPos pos) {
-        if (dimension == null || pos == null) {
-            return;
-        }
-        lightCompletedAfterLightTask.add(DimensionKey.key(dimension, pos.x, pos.z));
+        // no-op（诊断集合已剥离）
     }
 
     /**
@@ -806,9 +718,6 @@ public final class ShadowLightCompute {
     /** 现在就能开屏障的投递。 */
     private static boolean hasStartablePendingWork() {
         if (!pending.isEmpty() || !pendingDeltas.isEmpty() || !generated.isEmpty()) {
-            return true;
-        }
-        if (!pendingPlaceholderNeighborRelight.isEmpty()) {
             return true;
         }
         for (Long key : pendingLightUpdates.keySet()) {
@@ -925,9 +834,13 @@ public final class ShadowLightCompute {
             notePublishBlocked(renderOnly, "engineDisabledOrShadowFailed", pos);
             return false;
         }
-        // SeedGen 方案 A：权威 compare 落地前禁止本地柱进真实客户端
+        // SeedGen 方案 A：权威 compare 落地前禁止本地柱进真实客户端。
+        // OVD renderOnly 不进本闸（无真服权威比对）：出权威后 AWAITING 残留不得挡住环带回填；
+        // 顺带 clear，避免重进权威时 drainAuthorityAcquires 命中 isAwaiting 死等。
         String gateDim = dimension == null ? currentDimension() : dimension;
-        if (io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
+        if (renderOnly) {
+            io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate.clear(gateDim, pos);
+        } else if (io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
                 .blockClientDelivery(gateDim, pos.x, pos.z)) {
             notePublishBlocked(renderOnly, "seedGenAwaitingCompare", pos);
             return false;
@@ -938,8 +851,7 @@ public final class ShadowLightCompute {
         String resolvedDim = dimension == null ? currentDimension() : dimension;
         ShadowSeedServer serverForFlight = ShadowServerRegistry.getInstance().getOrCreate();
         boolean hasLocalMaterial = serverForFlight != null
-                && serverForFlight.injectedChunk(resolvedDim, pos.x, pos.z) != null
-                && !serverForFlight.isPlaceholder(resolvedDim, pos.x, pos.z);
+                && serverForFlight.injectedChunk(resolvedDim, pos.x, pos.z) != null;
         if (!renderOnly && !hasLocalMaterial && networkInFlight.contains(
                 DimensionKey.key(resolvedDim, pos.x, pos.z))) {
             return false;
@@ -961,11 +873,6 @@ public final class ShadowLightCompute {
             return false;
         }
         net.minecraft.world.level.chunk.LevelChunk chunk = server.injectedChunk(resolved, pos.x, pos.z);
-        // 空气空壳占位柱不得交付客户端：它是光照齐套的临时占位，不是真实区块数据。
-        if (chunk != null && server.isPlaceholder(resolved, pos.x, pos.z)) {
-            notePublishBlocked(renderOnly, "placeholderChunk", pos);
-            return false;
-        }
         TraceOrigin origin = TraceOrigin.SHADOW_MEMORY_CACHE;
         if (chunk == null) {
             // 后台读盘：回程洪峰下 tryAcquireCacheRead 可能失败——**不得**因此返回 false。
@@ -1148,11 +1055,6 @@ public final class ShadowLightCompute {
         hashMemoryMismatchDuplicates.set(0);
         hashDiskMismatchDuplicates.set(0);
         hashLeftoverDuplicates.set(0);
-        hashEntriesSeen.clear();
-        hashChunkKeysSeen.clear();
-        hashMemoryMismatchEntries.clear();
-        hashDiskMismatchEntries.clear();
-        hashLeftoverEntries.clear();
     }
 
 
@@ -1602,19 +1504,40 @@ public final class ShadowLightCompute {
             accountVisibleNetworkIngress(resolved, pos,
                     resolvedOrigin == TraceOrigin.REMOTE_PULL);
         }
-        // 原版交付门：isLightCorrect + 本会话 LIGHT（Promote/POST）完成后才 REUSE 打包；
-        // 否则进齐套门两阶段（INITIALIZE → 邻域齐套 → propagate → finishLight POST → pack）。
+        // 【钉死】有引擎光且可复用 → REUSE；否则必须齐套门（禁止去门直算，见 MEMORY Rules）。
         if (isVanillaAlignedClientPackReady(resolved, pos, chunk)) {
             generated.put(key, new GenEntry(chunk, level, isLightReusable(server, pos, chunk), false, resolvedOrigin));
             pump();
             return;
         }
-        // 进齐套门控：等 3×3 邻域都过 INITIALIZE_LIGHT 后再跑 LIGHT 交付
-        //（对齐原版 ChunkStatus.LIGHT 的 range=1 依赖；缺邻会被引擎当基岩挡光）。
         initializeLightImmediately(server, key, chunk, level);
         LightNeighborhoodGate.enqueue(key, resolved, pos,
                 new GateContext(null, chunk, level,
                         LightMetric.RECOMPUTE, false, resolvedOrigin));
+        pump();
+    }
+
+    /**
+     * 光任务入队：可复用光才直接 REUSE pack；否则必须 {@link LightNeighborhoodGate} 齐套后再算光。
+     * <b>禁止</b>改为「一律立刻 lightChunk」——屋檐黑实测（见 MEMORY Rules / LightNeighborhoodGate）。
+     */
+    static void submitLightNoNeighborhoodGate(long key, LevelChunk chunk,
+                                              net.minecraft.server.level.ServerLevel level,
+                                              boolean lightReuse, boolean renderOnly,
+                                              TraceOrigin origin) {
+        if (chunk == null || level == null) {
+            return;
+        }
+        String dim = DimensionKey.dimensionOf(key);
+        ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
+        if (lightReuse && chunk.isLightCorrect()) {
+            generated.put(key, new GenEntry(chunk, level, true, renderOnly, origin));
+            pump();
+            return;
+        }
+        initializeLightImmediately(ShadowServerRegistry.getInstance().get(), key, chunk, level);
+        LightNeighborhoodGate.enqueue(key, dim, pos,
+                new GateContext(null, chunk, level, LightMetric.RECOMPUTE, renderOnly, origin));
         pump();
     }
 
@@ -1975,7 +1898,6 @@ public final class ShadowLightCompute {
                 List<LightTask> lightTasks = new ArrayList<>();
                 // 先扫描齐套队列：邻柱后到可能让等待中的柱齐套
                 pumpGateReady(server, lightTasks);
-                drainPlaceholderNeighborRelight(server, lightTasks);
                 for (Map.Entry<Long, PendingEntry> e : batch) {
                     // 复合键解维：pending 键携带维度，服务端查询/引擎操作全部路由到该维度。
                     String dimension = DimensionKey.dimensionOf(e.getKey());
@@ -2008,23 +1930,12 @@ public final class ShadowLightCompute {
                                 continue;
                             }
                             SmokeChunkTrace.recordShadowInjected(dimension, pos);
-                            // 已有正确光的柱：跳过门控，直接进光屏障交付（复用缓存光）。
-                            if (!needRelight) {
-                                generated.put(e.getKey(), new GenEntry(existing, server.level(dimension),
-                                        true, false,
-                                        pendingEntry.traceOrigin() != null
-                                                ? pendingEntry.traceOrigin()
-                                                : traceOrigin(TraceOrigin.SHADOW_MEMORY_CACHE)));
-                                continue;
-                            }
-                            // 进齐套门控：等 3×3 邻域都过 INITIALIZE_LIGHT 后再跑 LIGHT
-                            initializeLightImmediately(server, e.getKey(), existing, server.level(dimension));
-                            LightNeighborhoodGate.enqueue(e.getKey(), dimension, pos,
-                                    new GateContext(null, existing,
-                                            server.level(dimension), LightMetric.RECOMPUTE, false,
-                                            pendingEntry.traceOrigin() != null
-                                                    ? pendingEntry.traceOrigin()
-                                                    : traceOrigin(TraceOrigin.SHADOW_MEMORY_CACHE)));
+                            // 已有正确光：直接 REUSE；无光/需重算：一轮光后 pack（compare 已确认）。
+                            submitLightNoNeighborhoodGate(e.getKey(), existing,
+                                    server.level(dimension), !needRelight, false,
+                                    pendingEntry.traceOrigin() != null
+                                            ? pendingEntry.traceOrigin()
+                                            : traceOrigin(TraceOrigin.SHADOW_MEMORY_CACHE));
                             continue;
                         }
                         // hash 已知且不匹配：影子副本过期，覆盖注入（走下方 injectChunk）。
@@ -2044,12 +1955,8 @@ public final class ShadowLightCompute {
                     }
                     accountVisibleNetworkIngress(dimension, pos, staleRepush);
                     LevelChunk injected = server.injectedChunk(dimension, pos.x, pos.z);
-                    // 进齐套门控：等 3×3 邻域都过 INITIALIZE_LIGHT 后再跑 LIGHT
-                    initializeLightImmediately(server, e.getKey(), injected, server.level(dimension));
-                    LightNeighborhoodGate.enqueue(e.getKey(), dimension, pos,
-                            new GateContext(pendingEntry, injected,
-                                    server.level(dimension), LightMetric.RECOMPUTE, false,
-                                    pendingEntry.traceOrigin()));
+                    submitLightNoNeighborhoodGate(e.getKey(), injected, server.level(dimension),
+                            false, false, pendingEntry.traceOrigin());
                 }
                 // 分段增量应用：本地基线 chunk 上就地覆盖变更 section + heightmaps + BE，
                 // 变更 section 清光（applySectionDelta 内）→ 与注入共享下方光屏障。
@@ -2235,8 +2142,8 @@ public final class ShadowLightCompute {
                                           LightTask t, long deadlineMs) {
         ChunkPos barrierPos = new ChunkPos(DimensionKey.chunkXOf(t.key), DimensionKey.chunkZOf(t.key));
         String barrierDim = DimensionKey.dimensionOf(t.key);
-        // 原版 ChunkStatus.LIGHT range=1：非 REUSE 且本会话未 Promote 时，不得直接算光/打包。
-        // GENERATED→startLightBarrier 绕过齐套 = 缺邻当 Bedrock → 屋檐 skyTop=0（vapack 实测）。
+        // 【钉死】非 REUSE 且未 promote：必须入 LightNeighborhoodGate，等 3×3 INITIALIZE 再 light。
+        // 2026-09-18 去门实验导致屋檐黑+无补光；用户目视回退后恢复——禁止再拆（见项目 MEMORY Rules）。
         if (t.source != LightSource.LIGHT_ONLY
                 && t.metric != LightMetric.REUSE_CACHE
                 && t.chunk != null
@@ -2244,7 +2151,9 @@ public final class ShadowLightCompute {
             if (t.level != null) {
                 initializeLightImmediately(server, t.key, t.chunk, t.level);
             }
-            LightNeighborhoodGate.enqueue(t.key, barrierDim, barrierPos,
+            LightNeighborhoodGate.enqueue(t.key, DimensionKey.dimensionOf(t.key),
+                    new net.minecraft.world.level.ChunkPos(
+                            DimensionKey.chunkXOf(t.key), DimensionKey.chunkZOf(t.key)),
                     new GateContext(t.token, t.chunk, t.level,
                             t.metric, t.renderOnly, t.traceOrigin));
             return;
@@ -2254,17 +2163,13 @@ public final class ShadowLightCompute {
         inf.submittedAtNs = System.nanoTime();
         inflightLight.put(t.key, inf);
         try {
-            // 自驱两阶段（唯一路径）：曾经的"holder 单写者"分支已退役——实测 holder 100% 在场但
-            // 73.6% 的柱在 1s 内到不了 LIGHT（其 LIGHT 被同一条 ~100 柱/s 的波次串着走，探针柱
-            // 实测 11s 后才点亮），等满宽限后仍走本路径算光 → 只赚到每柱 1s 延迟 + 双写照旧。
             net.minecraft.server.level.ServerLevel level = t.level != null
                     ? t.level : server.overworld();
-            // 必须"从零两阶段"：INITIALIZE_LIGHT 装空 DataLayer + LIGHT 传播。复用注入时那次
-            // INITIALIZE_LIGHT、只跑 LIGHT 会留下檐口残差——实测探针柱 (-13,3) 引擎层
-            // SELF-z0 从 11 12 11 退化成 0 0 0（swc5 vs swc7，单变量 A/B）。两阶段把它拉回
-            // 11 12 11，且交付/耗时不受影响（swc7/swc8：R1 1529、R2 1085、进服 ~0.7–0.8s，
-            // LIGHT_CALL 与 lightSegRecalc 反而更少）。
-            nativeLightChunks.remove(t.key); // 只摘表：不再复用第一阶段的 nativeChunk
+            // 【钉死 · ⑤ 已回退 2026-09-18】禁止「复用 phase-1 只跑 LIGHT」。
+            // 运动目视：无天光、靠邻域传播的屋檐柱部分全黑（spawn 附近冒烟可正常）。
+            // 与历史 swc 一致：必须从零 INITIALIZE_LIGHT + LIGHT；nativeLightChunks.remove。
+            // 齐套门仍钉死保留——门与本段是两回事。
+            nativeLightChunks.remove(t.key);
             inf.nativeChunk = io.github.limuqy.mc.hassium.compat.ShadowServerCompat
                     .createNativeLightChunk(level, t.chunk,
                             lightChunkHasExistingLight(t.metric == LightMetric.REUSE_CACHE));
@@ -2401,13 +2306,6 @@ public final class ShadowLightCompute {
     private static final int MAX_LIGHT_FOLLOW_UPS = 2;
     private static final ConcurrentHashMap<Long, Integer> lightFollowUps = new ConcurrentHashMap<>();
 
-    /**
-     * 空光取证：每柱只 dump 一次（只读探针，不改控制流）。
-     * 与 {@link #lightFollowUps} 同生命周期；断连/切维清空以便下一会话重采。
-     */
-    private static final java.util.Set<Long> EMPTY_LIGHT_EVIDENCE_DUMPED =
-            ConcurrentHashMap.newKeySet();
-
     private static boolean requeueLightFollowUp(long key) {
         int n = lightFollowUps.merge(key, 1, Integer::sum);
         if (n > MAX_LIGHT_FOLLOW_UPS) {
@@ -2415,166 +2313,6 @@ public final class ShadowLightCompute {
             return false;
         }
         return true;
-    }
-
-    /**
-     * 空光取证（只读）：isLightReusable 三步拆解 + heightmap + 引擎层非 0 计数 + 邻域形态。
-     * 供复现「RECOMPUTE 后 sky 仍空 / topY=-64」链路；每柱一次。
-     */
-    private static void noteEmptyLightEvidence(LightTask task, ShadowSeedServer server,
-                                               boolean willRequeue) {
-        if (task == null || task.chunk == null || task.level == null) {
-            return;
-        }
-        if (!DebugLogger.isEnabled(DebugLogger.LogType.CHUNK_APPLY)) {
-            return;
-        }
-        long key = task.key;
-        if (!EMPTY_LIGHT_EVIDENCE_DUMPED.add(key)) {
-            return;
-        }
-        try {
-            ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
-            String dimension = DimensionKey.dimensionOf(key);
-            LevelChunk chunk = task.chunk;
-            boolean lightCorrect = chunk.isLightCorrect();
-            boolean completeLayers = server != null && server.hasCompleteLightLayers(pos, chunk);
-            boolean usable = server != null && server.hasUsableEngineLight(pos, chunk);
-            Integer followUps = lightFollowUps.get(key);
-            int followUpN = followUps == null ? 0 : followUps;
-            boolean engineConverged = server != null && server.isLightConverged(task.level);
-
-            int top88 = chunk.getHeight(net.minecraft.world.level.levelgen.Heightmap.Types.WORLD_SURFACE, 8, 8);
-            int top00 = chunk.getHeight(net.minecraft.world.level.levelgen.Heightmap.Types.WORLD_SURFACE, 0, 0);
-            int top15 = chunk.getHeight(net.minecraft.world.level.levelgen.Heightmap.Types.WORLD_SURFACE, 15, 15);
-            int nonAirSec = 0;
-            for (net.minecraft.world.level.chunk.LevelChunkSection section : chunk.getSections()) {
-                if (section != null && !section.hasOnlyAir()) {
-                    nonAirSec++;
-                }
-            }
-
-            LevelLightEngine lightEngine = task.level.getChunkSource().getLightEngine();
-            boolean hasSky = task.level.dimensionType().hasSkyLight();
-            int minBlockY = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinBlockY(task.level);
-            int highY = io.github.limuqy.mc.hassium.compat.LevelHeightCompat
-                    .getMaxBlockYExclusive(task.level) - 2;
-            int bx = pos.getMinBlockX() + 8;
-            int bz = pos.getMinBlockZ() + 8;
-            int highSky = hasSky
-                    ? lightEngine.getLayerListener(LightLayer.SKY)
-                            .getLightValue(new net.minecraft.core.BlockPos(bx, highY, bz))
-                    : -1;
-            int surfaceY = Math.min(Math.max(top88 + 1, minBlockY + 1), highY);
-            int surfaceSky = hasSky
-                    ? lightEngine.getLayerListener(LightLayer.SKY)
-                            .getLightValue(new net.minecraft.core.BlockPos(bx, surfaceY, bz))
-                    : -1;
-            boolean columnSurfaceReady = false;
-            try {
-                columnSurfaceReady = server != null
-                        && server.isColumnSurfaceLightReady(pos, chunk, task.level);
-            } catch (Throwable ignored) {
-                columnSurfaceReady = false;
-            }
-
-            int minSec = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(task.level);
-            int maxSec = io.github.limuqy.mc.hassium.compat.LevelHeightCompat
-                    .getMaxSectionExclusive(task.level);
-            StringBuilder layers = new StringBuilder();
-            for (int secY = minSec; secY < maxSec && layers.length() < 400; secY++) {
-                net.minecraft.world.level.chunk.LevelChunkSection section =
-                        chunk.getSection(chunk.getSectionIndexFromSectionY(secY));
-                boolean sectionNonAir = section != null && !section.hasOnlyAir();
-                if (!sectionNonAir) {
-                    continue;
-                }
-                SectionPos sp = SectionPos.of(pos, secY);
-                DataLayer skyLayer = hasSky
-                        ? lightEngine.getLayerListener(LightLayer.SKY).getDataLayerData(sp)
-                        : null;
-                DataLayer blockLayer = lightEngine.getLayerListener(LightLayer.BLOCK)
-                        .getDataLayerData(sp);
-                layers.append(" y=").append(secY)
-                        .append(" sky=").append(describeDataLayer(skyLayer))
-                        .append(" block=").append(describeDataLayer(blockLayer));
-            }
-
-            StringBuilder neighbors = new StringBuilder();
-            for (int dx = -1; dx <= 1; dx++) {
-                for (int dz = -1; dz <= 1; dz++) {
-                    if (dx == 0 && dz == 0) {
-                        continue;
-                    }
-                    int nx = pos.x + dx;
-                    int nz = pos.z + dz;
-                    long nKey = DimensionKey.key(dimension, nx, nz);
-                    char c;
-                    if (server != null && server.isPlaceholder(dimension, nx, nz)) {
-                        c = 'P';
-                    } else if (ShadowLightCompute.isLightInitPassed(nKey)) {
-                        c = '.';
-                    } else if (server != null && server.injectedChunk(dimension, nx, nz) != null) {
-                        c = 'I';
-                    } else {
-                        c = 'M';
-                    }
-                    neighbors.append(c);
-                }
-            }
-
-            long elapsedMs = task.submittedAtNs > 0L
-                    ? (System.nanoTime() - task.submittedAtNs) / 1_000_000L
-                    : -1L;
-            DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
-                    "[SHADOW_LIGHT_EVID] ({}, {}) dim={} metric={} willRequeue={} followUps={} "
-                            + "elapsedMs={} isLightCorrect={} completeLayers={} hasUsable={} "
-                            + "engineConverged={} columnSurfaceReady={}",
-                    pos.x, pos.z, dimension, task.metric, willRequeue, followUpN, elapsedMs,
-                    lightCorrect, completeLayers, usable, engineConverged, columnSurfaceReady);
-            DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
-                    "[SHADOW_LIGHT_EVID] ({}, {}) heightmap top8x8={} top0x0={} top15x15={} "
-                            + "nonAirSec={} minSec={} maxSec={} hasSky={}",
-                    pos.x, pos.z, top88, top00, top15, nonAirSec, minSec, maxSec, hasSky);
-            DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
-                    "[SHADOW_LIGHT_EVID] ({}, {}) highY={} highSky={} surfaceY={} surfaceSky={} "
-                            + "minBlockY={}",
-                    pos.x, pos.z, highY, highSky, surfaceY, surfaceSky, minBlockY);
-            DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
-                    "[SHADOW_LIGHT_EVID] ({}, {}) nonAirLayers:{}",
-                    pos.x, pos.z, layers.length() == 0 ? " none" : layers);
-            DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
-                    "[SHADOW_LIGHT_EVID] ({}, {}) neighbors[NW,N,NE,W,E,SW,S,SE]={} "
-                            + "(.=init I=injected M=missing P=placeholder)",
-                    pos.x, pos.z, neighbors);
-        } catch (Throwable t) {
-            DebugLogger.warn(DebugLogger.LogType.ASYNC,
-                    "[SHADOW_LIGHT_EVID] dump failed ({}, {}): {}",
-                    DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key),
-                    t.toString());
-        }
-    }
-
-    /** DataLayer 紧凑描述：null / empty / nz=<非 0 字节数>。 */
-    private static String describeDataLayer(DataLayer layer) {
-        if (layer == null) {
-            return "null";
-        }
-        try {
-            byte[] data = layer.getData();
-            if (data == null) {
-                return "empty";
-            }
-            int nz = 0;
-            for (byte b : data) {
-                if (b != 0) {
-                    nz++;
-                }
-            }
-            return nz == 0 ? "zero" : "nz=" + nz;
-        } catch (Throwable t) {
-            return "err";
-        }
     }
 
     private static void dropQueuedLights(ChunkPos pos) {
@@ -3425,9 +3163,7 @@ public final class ShadowLightCompute {
         lightInitialized.clear();
         lightInitPassed.clear();
         LightNeighborhoodGate.clear();
-        lightCompletedAfterLightTask.clear();
         nativeLightChunks.clear();
-        pendingPlaceholderNeighborRelight.clear();
         requestedMisses.clear();
         accountedIngress.clear();
         networkInFlight.clear();
@@ -3437,7 +3173,6 @@ public final class ShadowLightCompute {
         shadowApplyEpochs.clear();
         fullApplyTraces.clear();
         ignoredApplyRetries.clear();
-        EMPTY_LIGHT_EVIDENCE_DUMPED.clear();
         bridgeDeferSinceMs.clear();
         consumeRunning.set(false);
         io.github.limuqy.mc.hassium.protocol.ShadowPullClient.reset();
@@ -3581,96 +3316,6 @@ public final class ShadowLightCompute {
     public enum LightMetric {
         REUSE_CACHE,
         RECOMPUTE
-    }
-
-    /**
-    /**
-     * 占位被真实数据顶替：登记 8 邻中「已注入、非占位、isLightCorrect」的柱。
-     * 不在此同步算光——拍头 {@link #drainPlaceholderNeighborRelight} 合并去重，避免爬坡期
-     * 一次占位顶替放大成 8 次同步整柱 LIGHT。
-     */
-    public static void notePlaceholderReplaced(ShadowSeedServer server, String dimension, ChunkPos pos) {
-        if (server == null || dimension == null || pos == null) {
-            return;
-        }
-        int registered = 0;
-        for (int dx = -1; dx <= 1; dx++) {
-            for (int dz = -1; dz <= 1; dz++) {
-                if (dx == 0 && dz == 0) {
-                    continue;
-                }
-                int nx = pos.x + dx;
-                int nz = pos.z + dz;
-                LevelChunk neighbor = server.injectedChunk(dimension, nx, nz);
-                if (neighbor == null || server.isPlaceholder(dimension, nx, nz)) {
-                    continue;
-                }
-                if (!neighbor.isLightCorrect()) {
-                    continue; // 本就要重算（已在门控/屏障路径）
-                }
-                long nKey = DimensionKey.key(dimension, nx, nz);
-                neighbor.setLightCorrect(false);
-                io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes
-                        .markLightDirty(dimension, new ChunkPos(nx, nz));
-                pendingPlaceholderNeighborRelight.add(nKey);
-                registered++;
-            }
-        }
-        if (registered > 0) {
-            DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
-                    "[SHADOW_PLACEHOLDER] Replaced ({}, {}) dim={} registered {} neighbors for relight",
-                    pos.x, pos.z, dimension, registered);
-            pump();
-        }
-    }
-
-    /** park：丢掉未 drain 的邻柱重算登记（邻柱已标 !isLightCorrect，R2 仍会续算）。 */
-    public static void clearPendingPlaceholderNeighborRelight() {
-        pendingPlaceholderNeighborRelight.clear();
-    }
-
-    /**
-     * 拍头消化占位顶替邻柱：清光 + 同批整柱重算（不经过齐套门控——邻柱自身 3×3
-     * 已在各自路径齐套过，这里只修「按空气算出的过亮」残差）。
-     * 已有 pending/generated 的柱不重复提交；仅光屏障在途则留队下轮再试。
-     */
-    private static void drainPlaceholderNeighborRelight(ShadowSeedServer server,
-                                                        List<LightTask> lightTasks) {
-        if (server == null || pendingPlaceholderNeighborRelight.isEmpty()) {
-            return;
-        }
-        for (Long key : java.util.List.copyOf(pendingPlaceholderNeighborRelight)) {
-            if (!pendingPlaceholderNeighborRelight.remove(key)) {
-                continue;
-            }
-            if (hasQueuedBlockWork(key)) {
-                continue; // pending/generated 会走完整算光
-            }
-            if (inflightLight.containsKey(key)) {
-                pendingPlaceholderNeighborRelight.add(key); // 屏障在途：下轮再试
-                continue;
-            }
-            String dimension = DimensionKey.dimensionOf(key);
-            if (dimension == null) {
-                continue;
-            }
-            ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
-            LevelChunk neighbor = server.injectedChunk(dimension, pos.x, pos.z);
-            if (neighbor == null || server.isPlaceholder(dimension, pos.x, pos.z)) {
-                continue;
-            }
-            net.minecraft.server.level.ServerLevel level = server.level(dimension);
-            if (level == null) {
-                continue;
-            }
-            server.forceNeighborLightReset(pos, neighbor);
-            lightTasks.add(new LightTask(key, LightSource.GATE, null, neighbor, level,
-                    LightMetric.RECOMPUTE, false,
-                    traceOrigin(TraceOrigin.SHADOW_MEMORY_CACHE)));
-            DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
-                    "[SHADOW_PLACEHOLDER] Neighbor relight queued ({}, {}) dim={}",
-                    pos.x, pos.z, dimension);
-        }
     }
 
     private static class LightTask {

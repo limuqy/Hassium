@@ -26,8 +26,9 @@ public class MixinClientLevel {
         io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute
                 .onClientChunkUnloaded(pos, dim);
         // 清光桥凭据；若影子仍在 tracking 窗内则入重发队列（§6.0）
+        // 必须传入正在卸的 ClientLevel 维 id，与 Light 侧一致
         io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession.getInstance()
-                .onClientChunkUnloaded(pos);
+                .onClientChunkUnloaded(pos, dim);
         hassium$logChunkUnload(pos);
     }
 

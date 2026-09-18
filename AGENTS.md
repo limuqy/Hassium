@@ -140,6 +140,13 @@ fabric/ | forge/ | neoforge/
   详见 [`docs/mod-compat.md`](docs/mod-compat.md) §7/§7b。
 - 优先 `@Inject` cancellable，避免 `@Overwrite`
 
+## 算光红线（钉死）
+
+- **`LightNeighborhoodGate`（3×3 齐套后再 `lightChunk`）禁止拆除/旁路**。非 REUSE 且未 promote 时必须入齐套门；缺邻时引擎按 Bedrock 挡天光 → 屋檐/洞口黑且可能无补光。
+- **`startLightBarrier` 禁止复用 phase-1 `nativeLightChunks` 只跑 LIGHT**：必须 `nativeLightChunks.remove` + 从零 INITIALIZE_LIGHT+LIGHT。2026-09-18 ⑤ 复用实验：冒烟/spawn 正常，**移动后**邻域传播屋檐柱部分全黑（用户目视回退）。
+- 2026-09-18 去门实验：冒烟可 PASS，但**游戏内屋檐变黑**；用户目视回退后恢复。**冒烟绿不能作为拆门/复用 phase-1 的依据**；验收须含移动中的屋檐/洞口。
+- 锚点：`shadow/light/LightNeighborhoodGate.java`、`ShadowLightCompute.startLightBarrier` / `submitLightNoNeighborhoodGate` / `enqueueInjectedForLight`。详见 `docs/client-chunk-light-flow.md` §4。
+
 ## 配置红线
 
 键集真相源：`ConfigSchema`；审计表见 [`docs/config-audit.md`](docs/config-audit.md)。Fabric 双文件 `hassium-client.toml` / `hassium-server.toml`；**物理客户端双文件合并**（client 配客户端行为，server 供集成服务器/局域网；UI 只显示客户端键）；专用服仅 server。Forge/NeoForge 物理客户端双注册（CLIENT + COMMON），专用服仅 COMMON。

@@ -401,8 +401,7 @@ public final class ShadowTrackingSession {
             }
             net.minecraft.world.level.chunk.LevelChunk injected =
                     shadow.injectedChunk(currentDimension, pos.x, pos.z);
-            boolean material = injected != null
-                    && !shadow.isPlaceholder(currentDimension, pos.x, pos.z);
+            boolean material = injected != null;
             if (material) {
                 skippedMaterial++;
                 // 已 compare 成功：允许响应侧/补投交付；禁止再 mark（会把已在光管线的柱钉死）
@@ -727,12 +726,27 @@ public final class ShadowTrackingSession {
      * 窗内只清离开标记；窗外登记后由 reclaim 摘 inject（等价原版 Forget 后服务端卸）。
      */
     public void onClientChunkUnloaded(ChunkPos pos) {
-        if (pos == null || boundServer == null || currentDimension == null) {
+        onClientChunkUnloaded(pos, null);
+    }
+
+    /**
+     * @param dimension 正在 unload 的 ClientLevel 维 id；null 回落 currentDimension。
+     *                  切维后旧世界 unload 不能读已 reseat 的 currentDimension（inject/回收键会打错维）。
+     */
+    public void onClientChunkUnloaded(ChunkPos pos, String dimension) {
+        if (pos == null || boundServer == null) {
             return;
         }
-        long key = DimensionKey.key(currentDimension, pos.x, pos.z);
-        boolean stillWanted = inVanillaVisibleShape(pos.x, pos.z) || inOvdWindow(pos.x, pos.z);
-        if (boundServer.injectedChunk(currentDimension, pos.x, pos.z) == null) {
+        String dim = dimension != null ? dimension : currentDimension;
+        if (dim == null) {
+            return;
+        }
+        long key = DimensionKey.key(dim, pos.x, pos.z);
+        // 非当前维：玩家已离开，旧维 OVD/权威几何不适用 → 按离开登记 reclaim
+        boolean sameDim = dim.equals(currentDimension);
+        boolean stillWanted = sameDim
+                && (inVanillaVisibleShape(pos.x, pos.z) || inOvdWindow(pos.x, pos.z));
+        if (boundServer.injectedChunk(dim, pos.x, pos.z) == null) {
             outsideSinceMs.remove(key);
             return;
         }
@@ -1104,8 +1118,7 @@ public final class ShadowTrackingSession {
         if (shadow == null || dimension == null || pos == null || chunk == null) {
             return;
         }
-        boolean alreadyMaterialized = shadow.injectedChunk(dimension, pos.x, pos.z) != null
-                && !shadow.isPlaceholder(dimension, pos.x, pos.z);
+        boolean alreadyMaterialized = shadow.injectedChunk(dimension, pos.x, pos.z) != null;
         // 磁盘命中柱的 hash 在 scheduleChunkLoad 读盘时由 MixinRegionFile 回填；
         // 生成柱无 hash → dirty（saveAll 落盘）。1.20.1 无 getPersistedStatus，按 hash 判别。
         boolean diskHit = io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes
@@ -1173,8 +1186,7 @@ public final class ShadowTrackingSession {
         }
         net.minecraft.world.level.chunk.LevelChunk material =
                 shadow.injectedChunk(dimension, pos.x, pos.z);
-        boolean deliverableMaterial = material != null
-                && !shadow.isPlaceholder(dimension, pos.x, pos.z);
+        boolean deliverableMaterial = material != null;
         if (!deliverableMaterial) {
             // A1-②：无本地可交付基线 → 权威 FULL
             DebugLogger.info(DebugLogger.LogType.NETWORK,
@@ -1287,6 +1299,8 @@ public final class ShadowTrackingSession {
         // 形状扫描在途登记清除：柱已注入，下轮扫描不会再拉
         sweepInFlight.remove(DimensionKey.key(dimension, pos.x, pos.z));
         if (!inVanillaVisibleShape(pos.x, pos.z)) {
+            // 拉回时已出权威窗：清 AWAITING，交给 OVD 本地源（禁止再挂 compare）
+            io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate.clear(dimension, pos);
             return;
         }
         DebugLogger.info(DebugLogger.LogType.NETWORK,

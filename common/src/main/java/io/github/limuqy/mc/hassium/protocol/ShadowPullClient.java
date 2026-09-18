@@ -332,9 +332,25 @@ public final class ShadowPullClient {
                     buffer.release();
                 }
             } else if (result.kind() == ShadowPullResponseS2CPacket.Kind.UNCHANGED) {
+                // 先 compare 落地，再允许光/交付（禁止「算完光再 compare」）。
                 io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
                         .confirm(response.dimension(), pos);
-                boolean published = ShadowLightCompute.publishCachedChunk(response.dimension(), pos);
+                var shadow = io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry
+                        .getInstance().get();
+                net.minecraft.world.level.chunk.LevelChunk baseline = shadow == null ? null
+                        : shadow.injectedChunk(response.dimension(), pos.x, pos.z);
+                boolean published;
+                if (baseline != null && !baseline.isLightCorrect()) {
+                    // 本地生成/基线尚未算光：confirm 后进一轮光再 pack（不再二次 compare）
+                    published = ShadowLightCompute.submitPreLight(
+                            io.github.limuqy.mc.hassium.shadow.track.ShadowChunkSource.CACHE_SNAPSHOT,
+                            pos, baseline,
+                            shadow.level(response.dimension()),
+                            io.github.limuqy.mc.hassium.platform.client.TraceOrigin.LOCAL_GENERATION,
+                            false);
+                } else {
+                    published = ShadowLightCompute.publishCachedChunk(response.dimension(), pos);
+                }
                 releaseProviderInflight(response.dimension(), pos, published);
                 if (!published) {
                     Constants.LOG.warn("[SHADOW_PULL] Cache baseline unavailable for ({}, {}), retrying FULL",
@@ -375,9 +391,6 @@ public final class ShadowPullClient {
                     .getInstance().get();
             if (server != null && dimension != null && pos != null) {
                 material = server.injectedChunk(dimension, pos.x, pos.z);
-                if (material != null && server.isPlaceholder(dimension, pos.x, pos.z)) {
-                    material = null;
-                }
             }
             if (material != null) {
                 io.github.limuqy.mc.hassium.shadow.track.VanillaAlignedChunkProvider

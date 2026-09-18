@@ -11,12 +11,17 @@ import net.minecraft.world.level.ChunkPos;
 
 /**
  * 光照齐套门控：对齐原版 {@code ChunkStatus.LIGHT} 的 3×3 邻域依赖语义。
- * <p>
- * 原版 {@code ChunkStatus.LIGHT} 的 {@code range=1 + hasLoadDependencies=true} 要求
+ *
+ * <p><b>【钉死 · 禁止拆除/旁路】</b>（2026-09-18 用户目视确认）：本门不得删除、不得在
+ * {@code startLightBarrier} 未 promote 时直接 {@code lightChunk}。实验「去齐套门以求首包更快」
+ * 导致<strong>屋檐/洞口变黑且无后续光更新</strong>；回退后光照恢复正常。缺邻时
+ * {@code LightEngine.getState} 对 null chunk 返回 {@code Blocks.BEDROCK}，天光进不了檐下。
+ * 冒烟统计 PASS <b>不能</b>证明可拆本门——必须以游戏内屋檐/洞口为准。
+ *
+ * <p>原版 {@code ChunkStatus.LIGHT} 的 {@code range=1 + hasLoadDependencies=true} 要求
  * 切比雪夫距离 ≤1 的邻柱达到 {@code INITIALIZE_LIGHT} 后才跑 LIGHT 任务。本类在影子端
  * 复刻同一语义：注入后不立即算光，等 3×3 邻域齐套后再提交原版
- * {@code initializeLight + lightChunk} 一次算对，消除「缺邻当基岩挡光」的屋檐/洞口残差
- * （{@code LightEngine.getState} 对 null chunk 返回 {@code Blocks.BEDROCK}）。
+ * {@code initializeLight + lightChunk} 一次算对，消除「缺邻当基岩挡光」的屋檐/洞口残差。
  * <p>
  * <b>齐套判定</b>（对每个 3×3 邻柱）：
  * <ul>

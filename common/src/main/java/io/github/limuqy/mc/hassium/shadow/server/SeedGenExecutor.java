@@ -61,8 +61,10 @@ public final class SeedGenExecutor {
     }
 
     /**
-     * 权威窗内的本地生成：先比对权威，再算光交付。
-     * OVD / 磁盘命中不走这条（OVD 无权威；盘上柱直接复用后 compare）。
+     * 权威窗内的本地生成：materialize 后<strong>先 compare，再算光交付</strong>。
+     * <p>
+     * 比对落地前禁止进入光管线/整柱 pack——否则 UNCHANGED 之外的裁决会让已算光作废、
+     * 权威 FULL 再算一次（浪费）。OVD / 磁盘命中不走这条。
      */
     public static boolean deferLightUntilAuthority(boolean freshLocalWorldgen,
                                                    boolean inVanillaVisibleShape) {

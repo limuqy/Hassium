@@ -128,14 +128,6 @@ public class ShadowSeedServer extends MinecraftServer {
             injectedChunks = new java.util.concurrent.ConcurrentHashMap<>();
 
     /**
-     * 空气空壳占位柱集合（{@link DimensionKey} 复合键）：权威范围外邻柱的光照齐套占位。
-     * 占位柱 = 全空气 LevelChunk，天光透过（地表正确，洞穴边缘偏亮）。
-     * 不进客户端交付集、不进磁盘缓存、不参与 chunkHash；真实数据到达时由
-     * {@link #injectChunk} 替换并从本集合移除。
-     */
-    private final java.util.Set<Long> placeholderChunks = java.util.concurrent.ConcurrentHashMap.newKeySet();
-
-    /**
      * ChunkCache 实例 → 维度 id（懒解析后缓存；仅影子上下文使用）。
      * <p>
      * F17 根因修复：{@code MixinServerChunkCache} 的两座桥（getChunk / getChunkForLighting）
@@ -463,15 +455,9 @@ public class ShadowSeedServer extends MinecraftServer {
             io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes.markContentDirty(key);
             chunk.setLightCorrect(false);
             ShadowCacheEviction.recordAccess(dimension, pos);
-            if (!fresh) {
-                drainAfterClear(level);
-            }
             // 悬置柱放行：数据到位后原版加载链恢复推进（LIGHT→FULL→playerLoadedChunk 桥，
             // R2 重连比对触达的前提；holder 永卡 EMPTY 会让 tracking 静默失明）
             ShadowChunkMapCompat.completeSuspendedLoad(dimension, pos, chunk);
-            if (clearPlaceholder(dimension, pos, key)) {
-                ShadowLightCompute.notePlaceholderReplaced(this, dimension, pos);
-            }
             // S3 光照缓存：网络注入后 setLightCorrect(false) → 记重算
             io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute
                     .accountLightFromChunk(dimension, pos, chunk);
@@ -902,64 +888,8 @@ public class ShadowSeedServer extends MinecraftServer {
         io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes
                 .markLightDirty(dimensionId(chunkLevel(chunk)), pos);
         clearChunkLight(pos, chunk);
-        awaitLightTaskDrain(chunkLevel(chunk));
+        // B5③：清光后不再同步/异步等 lightTasks 排水；引擎自行调度 sorter。
     }
-    /** B5：清光后不再同步等 lightTasks 排水（原版柱级交付节奏）。 */
-    private void awaitLightTaskDrain(ServerLevel level) {
-        // no-op
-    }
-
-    /** 上次异步排水投递时刻（节流去重：间隔内不重复投递；无「任务被取消后标志位卡死」的失败模式）。 */
-    private volatile long lastAsyncDrainScheduledMs;
-
-    /** 异步排水节流间隔。 */
-    private static final long ASYNC_DRAIN_MIN_INTERVAL_MS = 500L;
-    /** 异步排水时长上限：远小于 smoke 强退窗口(2s)与执行器关机等待(3s)，保证挂不住关机序列。 */
-    private static final long ASYNC_DRAIN_TIMEOUT_MS = 500L;
-
-    /**
-     * 清光后的水位控制，但**不得在客户端主线程上同步等**。
-     * <p>
-     * 主线程调用链：{@code MixinClientPacketListener.handleLevelChunkWithLight} HEAD →
-     * {@code ShadowVanillaLightPipeline.submitVisible} → {@code injectPreLight} → 本方法；
-     * lightTasks 越过水位时每柱白等最长 {@code CONVERGENCE_WAIT_TIMEOUT_MS}=5s = 客户端整卡死
-     * （2026-09-16 判严 isLightReusable 实测）。主线程路径改为投递**节流的**短时长异步排水
-     * ——「清光后把队列压回低水位」的 sorter 防错序语义保留，只是不阻塞帧；后台调用方
-     * （consumeLoop 等）保持同步排水。无后台执行器（冷启动）/已停（断连竞态）时宁可漏一次
-     * 排水也不阻塞主线程（漏排水的后果是任务错序窗口，由后续排水收敛）。
-     */
-    private void drainAfterClear(ServerLevel level) {
-        net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
-        if (mc == null || !mc.isSameThread()) {
-            awaitLightTaskDrain(level);
-            return;
-        }
-        long now = System.currentTimeMillis();
-        if (now - lastAsyncDrainScheduledMs < ASYNC_DRAIN_MIN_INTERVAL_MS) {
-            return; // 近期已有排水：本柱的清光任务会与之合并压回水位
-        }
-        lastAsyncDrainScheduledMs = now;
-        io.github.limuqy.mc.hassium.concurrent.HassiumTaskExecutor executor =
-                io.github.limuqy.mc.hassium.concurrent.HassiumTaskExecutor.getClient();
-        if (executor == null || !executor.isRunning()) {
-            return;
-        }
-        final ThreadedLevelLightEngine lightEngine;
-        try {
-            lightEngine = (ThreadedLevelLightEngine) level.getChunkSource().getLightEngine();
-        } catch (Throwable ignored) {
-            return; // 引擎不可用：跳过本次排水
-        }
-        try {
-            // SAFE_TO_CANCEL + 500ms 上限双保险：断连清理会取消它；即便在 cancelAll 之后才
-            // 投递（无人取消），也绝无可能 park 进关机窗口（flyrt16/17 实证）。
-            executor.submit(() -> ShadowLightCompute.awaitEngineTaskDrain(lightEngine, ASYNC_DRAIN_TIMEOUT_MS),
-                    io.github.limuqy.mc.hassium.concurrent.TaskCategory.SAFE_TO_CANCEL);
-        } catch (java.util.concurrent.RejectedExecutionException ignored) {
-            // 执行器已停（断连竞态）：跳过本次排水。
-        }
-    }
-
 
     /**
      * 应用服务端分段增量（SectionDeltaS2CPacket）到已注入区块。
@@ -1285,18 +1215,7 @@ public class ShadowSeedServer extends MinecraftServer {
         return injectedChunks.get(DimensionKey.key(dimension, x, z));
     }
 
-    /** B4：空气空壳占位已退役；任何柱都不得以 placeholder 参与交付判定。 */
-    public boolean isPlaceholder(String dimension, int x, int z) {
-        return false;
-    }
-
-    /**
-     * B4：不再注入空气空壳占位（原光照齐套邻柱门）。保留签名兼容调用方，恒 no-op。
-     * 权威数据只来自 pull/seedGen/盘；缺邻柱由原版光引擎自行传播，不造假空气柱。
-     */
-    public boolean injectPlaceholder(String dimension, int x, int z) {
-        return false;
-    }
+    /** B4：空气空壳占位退役；isPlaceholder/injectPlaceholder 已于 2026-09-18 夜②删除。 */
 
     /**
      * 维度取 level（CONTRACTS §2）：三维度可取；未知维度返回 null。
@@ -1444,45 +1363,12 @@ public class ShadowSeedServer extends MinecraftServer {
         });
         // 悬置柱放行（同 injectChunk）：读盘/生成柱入表即恢复原版加载链
         ShadowChunkMapCompat.completeSuspendedLoad(dimension, pos, chunk);
-        if (clearPlaceholder(dimension, pos, key)) {
-            ShadowLightCompute.notePlaceholderReplaced(this, dimension, pos);
-        }
         // S3 光照缓存：读盘完整光（isLightCorrect）→ 命中，否则重算
         io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute
                 .accountLightFromChunk(dimension, pos, chunk);
     }
 
-    /**
-     * 真实数据已就位：撤掉空气空壳占位标记。
-     * <p>
-     * 占位标记是「该柱当前内容是齐套用的临时空气壳」的判据，被下游多处（{@code publishCachedChunk}、
-     * tracking 的 drainSelections / drainRedeliver / tryServeOvdLocal / onChunkMaterialized / shape sweep）
-     * 用来判定「未物化」。不撤会让该柱**永久**被当未物化：缓存命中路径拒绝交付、
-     * tracking 反复重拉、redeliver 永久跳过——每轮都白付一次网络往返 + 一次多余算光。
-     *
-     * @return true = 旧柱曾是占位（调用方应触发 8 邻光残差登记）
-     */
-    private boolean clearPlaceholder(String dimension, ChunkPos pos, long key) {
-        if (placeholderChunks.remove(key)) {
-            DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
-                    "[SHADOW_PLACEHOLDER] Cleared placeholder ({}, {}) dim={} on real data",
-                    pos.x, pos.z, dimension);
-            return true;
-        }
-        return false;
-    }
-
-    /**
-     * 占位顶替后邻柱强制重算前置：清光 + {@code isLightCorrect=false}。
-     * 引擎只加不减，邻柱曾按空气占位算出的过亮 DataLayer 不会自发回撤。
-     */
-    public void forceNeighborLightReset(ChunkPos pos, LevelChunk chunk) {
-        if (chunk == null || pos == null) {
-            return;
-        }
-        clearChunkLight(pos, chunk);
-        chunk.setLightCorrect(false);
-    }
+    /** B4：空气空壳占位已退役；注入源与 isPlaceholder/injectPlaceholder 均已删除（2026-09-18 夜②）。 */
 
     /**
      * 与原版 {@code ChunkSerializer} 对齐：{@code isLightCorrect} 决定落盘是否写
@@ -1648,7 +1534,6 @@ public class ShadowSeedServer extends MinecraftServer {
         }
         long key = DimensionKey.key(dimension, pos.x, pos.z);
         injectedChunks.remove(key, chunk);
-        placeholderChunks.remove(key); // 占位柱卸载：标记随柱一起走，不得留在表里
         if (unmountIdle && mgr != null) {
             mgr.unmountIdleRegions();
         }
@@ -1828,9 +1713,7 @@ public class ShadowSeedServer extends MinecraftServer {
     public void confirmLightsCorrectIfConverged() {
         for (Map.Entry<Long, LevelChunk> entry : injectedChunks.entrySet()) {
             LevelChunk chunk = entry.getValue();
-            if (chunk == null || isPlaceholder(DimensionKey.dimensionOf(entry.getKey()),
-                    DimensionKey.chunkXOf(entry.getKey()),
-                    DimensionKey.chunkZOf(entry.getKey()))) {
+            if (chunk == null) {
                 continue;
             }
             ChunkPos pos = chunk.getPos();
@@ -2023,7 +1906,7 @@ public class ShadowSeedServer extends MinecraftServer {
     public void deleteChunk(String dimension, ChunkPos pos) {
         long key = DimensionKey.key(dimension, pos.x, pos.z);
         injectedChunks.remove(key);
-        placeholderChunks.remove(key); // 磁盘清理连带撤占位标记，避免残留键挡住后续真实注入
+        // 磁盘清理连带摘注入表（B4 占位标记已删除）
         if (!ownShutdownInProgress
                 && !ShadowServerRegistry.getInstance().isPreviousShutdownComplete()) {
             io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes.remove(dimension, pos);
@@ -2069,13 +1952,6 @@ public class ShadowSeedServer extends MinecraftServer {
      */
     void clearHotStateAfterPark() {
         ShadowChunkMapCompat.clearSuspendedLoads();
-        // 占位成对摘：只清标记会让 isPlaceholder 对仍驻留的空气壳变假 → publish 误交付；
-        // 空气壳对 R2 内存 hash 命中无价值，与「保留真实柱」不冲突。
-        for (Long key : java.util.List.copyOf(placeholderChunks)) {
-            injectedChunks.remove(key);
-            placeholderChunks.remove(key);
-        }
-        ShadowLightCompute.clearPendingPlaceholderNeighborRelight();
         java.util.concurrent.ConcurrentHashMap<String, io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager> map = storages;
         if (map != null) {
             for (io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager mgr : map.values()) {

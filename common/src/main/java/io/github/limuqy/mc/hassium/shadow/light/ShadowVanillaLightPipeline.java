@@ -66,9 +66,8 @@ public final class ShadowVanillaLightPipeline {
         net.minecraft.world.level.chunk.LevelChunk existing =
                 server.injectedChunk(resolvedDimension, pos.x, pos.z);
         if (existing != null && existing.isLightCorrect()) {
-            // 原版交付门：本会话 LIGHT（Promote/POST）完成后才 REUSE publish，否则进两阶段光
-            if (ShadowLightCompute.isVanillaAlignedClientPackReady(resolvedDimension, pos, existing)
-                    && ShadowLightCompute.isLightReusable(server, pos, existing)) {
+            // 回归原版：有引擎光且可复用则直接 publish；不再等齐套 promote。
+            if (ShadowLightCompute.isLightReusable(server, pos, existing)) {
                 if (ShadowLightCompute.publishCachedChunk(resolvedDimension, pos)) {
                     SmokeChunkTrace.recordShadowInjected(resolvedDimension, pos);
                     if (source == ShadowChunkSource.REMOTE_FULL) {
@@ -76,7 +75,6 @@ public final class ShadowVanillaLightPipeline {
                     }
                     return;
                 }
-                // publishCachedChunk 失败（in-flight / 维度不匹配等）：回退正常注入路径
             } else {
                 ShadowLightCompute.enqueueInjectedForLight(resolvedDimension, pos, origin);
                 if (source == ShadowChunkSource.REMOTE_FULL) {

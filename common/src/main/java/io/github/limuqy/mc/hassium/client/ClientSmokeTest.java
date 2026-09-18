@@ -15,7 +15,8 @@ import org.slf4j.LoggerFactory;
  * <ul>
  *   <li>{@code -Dhassium.smokeTest=true} 开启</li>
  *   <li>{@code -Dhassium.smokeScenario=classic|seedgen|dimension} 场景选择（可选）</li>
- *   <li>{@code -Dhassium.smokeTest.delayMs=6000} 每轮进服后等待毫秒（默认 10000；ROUND1 窗口=delayMs×2，ROUND2=max(3000,delayMs)）</li>
+ *   <li>{@code -Dhassium.smokeTest.delayMs=6000} 进服后通用等待（默认 10000）；classic 场景等待：
+ *       R1={@code round1WaitMs} 默认 40s、R2={@code round2WaitMs} 默认 20s，可用同名 JVM 属性覆盖</li>
  *   <li>{@code -Dhassium.smokeTest.reconnectDelayMs=3000} 两轮间隔毫秒（默认 3000）</li>
  *   <li>{@code -Dhassium.smokeTest.joinTimeoutMs=120000} 未进服超时（默认 120s）</li>
  *   <li>{@code -Dhassium.smokeTest.host=127.0.0.1:25565} 重连目标地址</li>

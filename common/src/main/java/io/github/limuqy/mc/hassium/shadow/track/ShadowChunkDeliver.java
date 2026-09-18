@@ -40,7 +40,8 @@ public final class ShadowChunkDeliver {
                     pos.x, pos.z, dimension);
             return false;
         }
-        if (io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
+        // OVD renderOnly 不进 compare 闸（与 publishCachedChunk 对齐）
+        if (!renderOnly && io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
                 .isAwaiting(dimension, pos)) {
             DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
                     "[SHADOW_DELIVER] skip seedGenAwaitingCompare ({}, {}) dim={}",

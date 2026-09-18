@@ -150,7 +150,7 @@ public final class ShadowColumnStore {
 - `sweepVisibleShape` / `sweepOvdRing`（OVD 已冻结）
 - 权威声明作为采集驱动（`ChunkAuthorityClient` 可留 no-op）
 - `pendingSelections` 自 pull、`ShadowChunkAcquire` 批发射
-- `LightNeighborhoodGate` / `parkFullDelivery` **主交付门**（探针可留）→ **2026-09-18 已物理删除**
+- ~~`LightNeighborhoodGate` / `parkFullDelivery` **主交付门**~~ → **【纠偏 2026-09-18 夜】齐套门未删除且已钉死**：去门实验导致屋檐黑，用户目视回退；`parkFullDelivery` 可删，**齐套门禁止拆除/旁路**（见 `AGENTS.md` 算光红线、`client-chunk-light-flow.md`、项目 MEMORY Rules）。
 - 客户端 reclaim 定时器作主路径
 
 **必须保留**
@@ -214,14 +214,13 @@ public final class ShadowColumnStore {
 
 ### 其它 S 阶段（未做）
 
-- [x] **S3 算光归 status 主路径（2026-09-18，已实现）**  
-  - **交付**：去 `LightNeighborhoodGate` / `parkFullDelivery` 主门；inject → `initializeLightImmediately` → `generated` 光屏障 → 引擎产出即 `pushReady`（原版光是什么就发什么）  
-  - **光照缓存统计**：迁到 `MixinChunkMap.scheduleChunkLoad` → `ShadowLightCompute.accountLightAtScheduleLoad`：读盘/注入且 `isLightCorrect`+引擎层齐 = 命中（`lightReuseShadow`），否则重算（`lightCacheMiss`）；光屏障提交不再按 REUSE/RECOMPUTE 记账  
-  - **门禁**【已验证】编译矩阵绿；classic `1.20.1_fabric_I_s3classic` **PASS**；flyrt `1.20.1_fabric_s3flyrt2` **PASS**（`clientDarkRegressionChunks=0`；exit 0）。首飞光照缓存 **22.2%**（命中 371 / 重算 1297——scheduleChunkLoad 口径：读盘完整光 vs 重算）。  
-  - **并发修复**：`playerLoadedChunk` 桥内 `ClientboundLevelChunkWithLightPacket` 构造改持 `chunkLock`（与 flush `ChunkSerializer.pack` 互斥；s3flyrt 首轮 ThreadingDetector FAIL 已消失）。  
-  - **未验证**：R2 cache-only 的光照缓存可能为 0/0（重连路径未必再进 `scheduleChunkLoad`）；1.21.1 classic/flyrt 未跑。  
-  - **记账完善（2026-09-18）**：统一 `accountLightFromChunk`（`isLightCorrect` → 命中 / 否则重算），挂到 `scheduleChunkLoad` / `injectChunk` / `injectLoadedChunk` / `publishCachedChunk`（含异步读盘）；按柱首记去重。classic `1.20.1_fabric_I_s3lightacct` **PASS**【已验证】：R1 光照 **0%**（命中 0 / 重算 1671）；R2 光照 **100%**（命中 **486** / 重算 0）。  
-  - **物理删除（2026-09-18）**：`LightNeighborhoodGate.java`、`GateContext`/`pumpGateReady`、park 一族及单测门控用例；`common` 内无引用【已验证】。classic `1.20.1_fabric_I_s3strip` **PASS**；flyrt `1.20.1_fabric_s3stripflyrt` **PASS**（darkRegression=0）。
+- [x] **S3 算光路径（部分落地；齐套门状态以代码+红线为准）**  
+  - **交付现状（2026-09-18 夜纠偏）**：**保留 `LightNeighborhoodGate`（钉死）**——非 REUSE 且未 promote 必须 3×3 齐套后再 `lightChunk`；`parkFullDelivery` 历史主门已不在现行路径。inject → `initializeLightImmediately` → 齐套门 → `startLightBarrier`（从零 init+light）→ `pushReady`。  
+  - **光照缓存统计**：迁到 `MixinChunkMap.scheduleChunkLoad` → `ShadowLightCompute.accountLightAtScheduleLoad`（见下历史段）。  
+  - **门禁**【已验证】（历史 s3 轮次）编译矩阵绿；classic `s3classic` / flyrt `s3flyrt2` PASS。  
+  - **并发修复**：`playerLoadedChunk` 桥内构造包持 `chunkLock`（ThreadingDetector）。  
+  - **历史实验段（勿当现状）**：2026-09-18 曾尝试「去齐套门、引擎产出即 pushReady」——冒烟可 PASS 但**游戏内屋檐/洞口黑且无补光**；用户目视后**回退并钉死齐套门**。下文「物理删除 LightNeighborhoodGate」为该实验态记录，**与当前仓库不符**。  
+  - **记账**：`accountLightFromChunk` 等仍挂 scheduleChunkLoad / inject / publish。classic `s3lightacct` 曾 PASS（R2 光照命中 100%）。  
 - [ ] S5 可选：Provider 内 compare 优化、连接转发接法 A、client/server 包迁移  
 
 **S0 修订记录**
@@ -229,5 +228,6 @@ public final class ShadowColumnStore {
 - 2026-09-18：取块改为 **始终异步 acquire + 始终 compare/FULL**（原版 IOWorker 本就是 future）。  
 - 2026-09-18：权威声明整族降级；P5=false；shadow 包迁移；死代码物理删；编译矩阵绿。  
 - 2026-09-18：待办 A/B/C 划入**后续会话**，见本节。  
+- **2026-09-18 夜【纠偏】**：S3 文中「物理删除 `LightNeighborhoodGate`」为去门实验记录；**现行代码保留齐套门且用户钉死禁止拆除**（屋檐黑目视实证）。以 `AGENTS.md` 算光红线与 `client-chunk-light-flow.md` 为准。  
 
 相关：[`docs/architecture.md`](../architecture.md) §6 · [`docs/chunk-cache.md`](../chunk-cache.md) · [`handoff-common-repackage-shadow.md`](handoff-common-repackage-shadow.md) · [`docs/client-chunk-light-flow.md`](../client-chunk-light-flow.md)
