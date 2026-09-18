@@ -285,15 +285,6 @@ public final class ShadowTrackingSession {
         return currentDimension;
     }
 
-    /** 影子主循环泵读取的当前跟踪维度 level（无会话/未跟踪返回 null）。 */
-    public static ServerLevel trackedLevel() {
-        ShadowTrackingSession s = INSTANCE;
-        if (s.virtualPlayer == null || s.boundServer == null) {
-            return null;
-        }
-        return s.boundServer.level(s.currentDimension);
-    }
-
     /**
      * 影子主循环每轮调用：消费待同步状态 + 节流驱动 chunk 系统簿记 + 分批发 pull 请求。
      * 仅影子主循环线程可调。
@@ -643,7 +634,15 @@ public final class ShadowTrackingSession {
         }
     }
 
-    /** OVD 诊断观察坐标：cheb==serverVD+2 的环中点（vdplus1 缺柱形态）。 */
+    /**
+     * OVD 诊断观察坐标：cheb==serverVD+2 的环中点。
+     * <p>
+     * 取 +2 而非 +1：{@code serverVD+1} 环只有对角部分落在环带内，四边中段属于权威形状
+     * （被 {@code inOvdWindow} 排除），环带 sweep 永远不会枚举到；{@code serverVD+2} 才是环带里
+     * 第一条完整环。权威侧 {@code serverVD+1} 中段的缺口不走本观察点，由
+     * {@code TRACE_ENCLOSED_HOLE} 门禁与 {@code drainAuthorityAcquires} 的
+     * {@code submitted/published/material} 计数把守（2026-09-18 根因即该环）。
+     */
     private static boolean isOvdWatchCoord(int x, int z) {
         ShadowTrackingSession s = INSTANCE;
         if (s == null || s.serverViewDistance <= 0) {
@@ -680,9 +679,10 @@ public final class ShadowTrackingSession {
         if (chunk == null) {
             ovdMissRetryAt.put(DimensionKey.key(dimension, x, z), System.currentTimeMillis() + 2_000L);
             ShadowChunkMapCompat.failSuspendedLoad(dimension, pos);
-            recordOvdMissOnce(dimension, pos);
-            DebugLogger.info(DebugLogger.LogType.NETWORK,
-                    "[OVD_PATH] disk-miss ({}, {}) dim={}", x, z, dimension);
+            if (recordOvdMissOnce(dimension, pos)) {
+                DebugLogger.info(DebugLogger.LogType.NETWORK,
+                        "[OVD_PATH] disk-miss ({}, {}) dim={}", x, z, dimension);
+            }
             return;
         }
         boolean diskHit = io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes
@@ -867,11 +867,6 @@ public final class ShadowTrackingSession {
         return Math.min(base, MAX_VIEW_DISTANCE);
     }
 
-    private static boolean isOvdConfigActive() {
-        HassiumConfigService cfg = HassiumConfigService.getInstance();
-        return cfg.isClientCacheEnabled() && cfg.isViewDistanceExtensionEnabled();
-    }
-
     /** 权威窗：原版可见形状（pull / bootGrid / sweep 唯一几何）。中心与真服 tracking 同轴。 */
     private boolean inVanillaVisibleShape(int x, int z) {
         if (serverViewDistance <= 0) {
@@ -1010,11 +1005,14 @@ public final class ShadowTrackingSession {
         }
     }
 
-    private void recordOvdMissOnce(String dimension, ChunkPos pos) {
+    /** 本会话首次记录该柱 OVD 缺盘；返回 true = 首次（调用方据此按需打日志，避免 2s 冷却期内刷屏）。 */
+    private boolean recordOvdMissOnce(String dimension, ChunkPos pos) {
         long key = io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z);
-        if (ovdMissCounted.add(key)) {
-            io.github.limuqy.mc.hassium.metrics.NetworkStats.recordOvdMiss();
+        if (!ovdMissCounted.add(key)) {
+            return false;
         }
+        io.github.limuqy.mc.hassium.metrics.NetworkStats.recordOvdMiss();
+        return true;
     }
 
     /** 统一 pull 分组（§3.2）：经 ShadowChunkAcquire；无权威让位门。 */

@@ -193,15 +193,6 @@ public class NetworkStats {
     }
 
     /**
-     * OVD（renderOnly）柱已进入客户端/影子服务计数：只进 applied 来源和
-     * （{@code getClientApplied += ovdLoaded}）与 ovdLoaded，**不计** landed、**不计** cacheHit。
-     */
-    public static void recordOvdChunkServiced(int chunkX, int chunkZ) {
-        // ovdLoaded 已由 ShadowTrackingSession.recordOvdLoadedOnce 在 publish 成功时记账；
-        // 此处仅作文档锚点，避免误调 recordChunkApplied 把 OVD 打进 landed。
-    }
-
-    /**
      * 记录服务端直推（server_push）且实际落地的权威区块。
      * 直推不经过全量请求/缓存命中/本地生成/增量任一分母入口，独立计数并入分母。
      */
