@@ -74,6 +74,7 @@ ClientChunkCache.replaceWithPacketData → renderer
 
 1. **注入**：`ShadowSeedServer.injectChunk` 把权威/缓存/本地生成数据注入影子 `ServerLevel`
 2. **两阶段屏障 + 齐套门**：注入后 `initializeLight`；**非 REUSE 且未 promote 时必须经 `LightNeighborhoodGate`（3×3 邻柱均过 INITIALIZE）再 `lightChunk`**。齐套后 **`startLightBarrier` 必须从零 `initializeLight+lightChunk`（`nativeLightChunks.remove`）**，禁止复用 phase-1 只跑 LIGHT——2026-09-18 ⑤ 实验：冒烟/spawn 正常，移动后邻域传播屋檐柱部分全黑（用户目视回退）。缺邻时引擎按 Bedrock 挡天光。**齐套门与从零双算均钉死**；验收须含**移动中**的屋檐/洞口，冒烟 PASS 不能代替目视。
+   - **天光光源表不变量（2026-09-19 钉死）**：注入柱的 `ChunkSkyLightSources` 必须已填。网络路径由 `LevelChunk.replaceWithPacketData` 重填，**读盘路径 `ChunkSerializer.read` 不会**（`ShadowSeedServer.injectLoadedChunk` 已补 `initializeLightSources()`）。表全 0 时 `getHighestLowestSourceY()` 返回 `NEGATIVE_INFINITY`，`SkyLightEngine.setLightEnabled(pos, true)` 会把 `[minLightSection, maxLightSection)` 的整柱空层 `fill(15)`；而 `lightChunk(lit=true)` 跳过 `propagateLightSources`，坏光无人纠偏 → 落盘 `0xFF×2048` + R2 复用该缓存即整片异常亮。观测锚点：`debug.lightVerify` 的 `SKY-SOURCES highestLowestSourceY=`（`-2147483648` = 表未填）。
 3. **光出口桥**：`MixinServerChunkCache.collectLightUpdate` 捕获影子光更新 → `LightDeltaS2CPacket`（增量掩码，append-only 尾块携带 empty 掩码）
 4. **帧尾落地**：`drainReady` 渲染前预算内把 ready 队列倒进 `handleLevelChunkWithLight`；光桥只对「影子区块包已落地且客户端未卸载」的柱发送
 5. **失败降级**：影子端启动失败（`ShadowServerRegistry.failShadowServer`）→ 关缓存/SeedGen/影子光照，全程原版路径（服务端不剥光——剥光在握手协商）

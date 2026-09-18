@@ -1346,6 +1346,12 @@ public class ShadowSeedServer extends MinecraftServer {
             io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes.markPersisted(key);
         }
         ShadowLightCompute.withChunkLock(pos, () -> {
+            // 天光光源表不变量：网络注入路径由 replaceWithPacketData 重填，读盘路径
+            // （ChunkSerializer.read）不会。表全 0 时 getHighestLowestSourceY() 返回
+            // NEGATIVE_INFINITY，光屏障 initializeLight(..., lit=true) 触发的
+            // SkyLightEngine.setLightEnabled(true) 会把整柱（含上下 padding 段）的空层
+            // fill(15)——磁盘上的正确天光被抹成全 15（R2 整片异常亮的根因）。
+            chunk.initializeLightSources();
             this.injectedChunks.put(key, chunk);
             if (io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes.get(dimension, pos) == null) {
                 try {

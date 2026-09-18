@@ -234,6 +234,11 @@ public final class ShadowLightProbe {
                     server.overworld().getChunkSource().getLightEngine();
             StringBuilder sb = new StringBuilder();
             sb.append(PREFIX).append("ENGINE-SNAPSHOT\n");
+            // 天光光源表读数：NEGATIVE_INFINITY(-2147483648) = 表未填（读盘柱旧缺陷），
+            // 此时 SkyLightEngine.setLightEnabled(true) 会把整柱 fill(15)。
+            sb.append(PREFIX).append("SKY-SOURCES highestLowestSourceY=")
+                    .append(chunk.getSkyLightSources().getHighestLowestSourceY())
+                    .append('\n');
             appendEngineLayers(sb, "SNAP", engine);
             appendClientReadings(sb);
             Constants.LOG.info("{}", sb);
