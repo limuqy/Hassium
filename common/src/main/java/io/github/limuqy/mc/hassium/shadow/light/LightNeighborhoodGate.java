@@ -42,13 +42,17 @@ public final class LightNeighborhoodGate {
      * 邻域齐套超时（毫秒）：自**邻域最后一次变化**起算（见
      * {@link AwaitingEntry#lastProgressAtMs}）。
      * <p>
-     * 2s：正常齐套实测约 1s 内完成（lightdiag `waited=1036ms / sinceProgress=9ms`），
-     * 拉长只惩罚**最外圈**——那里的邻柱永远不会被 acquire（`neighbors=[MMMM....]`），
-     * 门控干等会把该柱的落地推到窗口外（classic 实测：10s 门控 + 1s 宽限 → 42 柱
-     * `TRACE_EXPECTED_NOT_PRESENT`/`TRACE_INJECTED_NOT_READY` 落在外圈）。
-     * 超时后仍不注入占位，只放行本柱 LIGHT。
+     * 2s：正常齐套实测约 1s 内完成。外圈另有 {@link #NEIGHBORHOOD_HARD_TIMEOUT_MS}
+     * 与「窗口外邻柱不等待」兜底——否则波前爬坡时 lastProgress 一直被推进，
+     * 最外圈永远等不来视距外邻柱 → injectedNotReady（vapack2 R1 实测 67 柱）。
      */
     public static final long NEIGHBORHOOD_TIMEOUT_MS = 2_000L;
+
+    /**
+     * 硬超时：自**入队时刻**起算，无论邻域是否仍在变化。
+     * 外圈邻柱在权威窗外时永远不会 inject，必须在有限时间内放行本柱 LIGHT。
+     */
+    public static final long NEIGHBORHOOD_HARD_TIMEOUT_MS = 4_000L;
 
     /**
      * 待齐套队列：复合键 → 等待上下文。consumeLoop 注入后入队，齐套后出队提交算光。
@@ -58,6 +62,9 @@ public final class LightNeighborhoodGate {
 
     /** 已打印过阻塞诊断的键（每条目只记一次，避免逐帧刷屏）。随 awaiting 同生命周期。 */
     private static final java.util.Set<Long> blockedLogged = ConcurrentHashMap.newKeySet();
+
+    /** 本会话已齐套放行过的柱（单调；clear 时清空）。交付门：未 Promote 不得整柱打包。 */
+    private static final java.util.Set<Long> promoted = ConcurrentHashMap.newKeySet();
 
     private LightNeighborhoodGate() {
     }
@@ -130,7 +137,16 @@ public final class LightNeighborhoodGate {
      */
     public static void enqueue(long key, String dimension, ChunkPos pos, Object context) {
         long now = System.currentTimeMillis();
-        awaiting.put(key, new AwaitingEntry(key, dimension, pos, now, context));
+        // REPLACE 保留**首次**入队时刻：publish/光路径会反复 enqueue 同一柱，
+        // 若每次重置 enqueuedAtMs/lastProgress，外圈硬超时永远到不了 → injectedNotReady。
+        awaiting.compute(key, (k, prev) -> {
+            long enqueuedAt = prev != null ? prev.enqueuedAtMs() : now;
+            AwaitingEntry entry = new AwaitingEntry(key, dimension, pos, enqueuedAt, context);
+            if (prev != null) {
+                entry.noteProgress(prev.lastProgressAtMs());
+            }
+            return entry;
+        });
         noteNeighborhoodProgress(dimension, pos, now);
         DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
                 "[LIGHT_GATE] Enqueue ({}, {}) dim={} pending={}",
@@ -163,6 +179,19 @@ public final class LightNeighborhoodGate {
     public static void clear() {
         awaiting.clear();
         blockedLogged.clear();
+        promoted.clear();
+    }
+
+    /** 本会话是否已齐套放行（对齐 ChunkStatus.LIGHT range=1 完成后的交付门）。 */
+    public static boolean wasPromoted(long key) {
+        return promoted.contains(key);
+    }
+
+    public static boolean wasPromoted(String dimension, ChunkPos pos) {
+        if (dimension == null || pos == null) {
+            return false;
+        }
+        return promoted.contains(DimensionKey.key(dimension, pos.x, pos.z));
     }
 
     /** 当前待齐套数量（诊断 / 冒烟探针）。 */
@@ -195,11 +224,17 @@ public final class LightNeighborhoodGate {
         long waitedMs = now - entry.enqueuedAtMs();
         // 超时自「邻域最后一次变化」起算：邻柱还在陆续到达就不降级（见 AwaitingEntry）。
         long sinceProgressMs = now - Math.max(entry.enqueuedAtMs(), entry.lastProgressAtMs());
-        boolean timedOut = sinceProgressMs >= NEIGHBORHOOD_TIMEOUT_MS;
-        // 诊断态：方向序 NW,N,NE,W,E,SW,S,SE；'.'=就绪 'I'=已注入未过 INIT 'M'=未注入
+        // 硬超时：以**首次入队**为基准（enqueue REPLACE 不重置），防止外圈被反复入队拖死
+        boolean timedOut = sinceProgressMs >= NEIGHBORHOOD_TIMEOUT_MS
+                || waitedMs >= NEIGHBORHOOD_HARD_TIMEOUT_MS;
+        // 诊断态：方向序 NW,N,NE,W,E,SW,S,SE；'.'=就绪 'I'=已注入未过 INIT
+        // 'M'=窗内未注入 'X'=权威窗外（不会 acquire，不参与等待）
         StringBuilder neighbors = new StringBuilder(8);
         int injectedNotInit = 0;
-        int notInjected = 0;
+        int notInjected = 0; // 仅统计**窗内**未注入
+        int outsideWindow = 0;
+        io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession session =
+                io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession.getInstance();
         for (int dx = -1; dx <= 1; dx++) {
             for (int dz = -1; dz <= 1; dz++) {
                 if (dx == 0 && dz == 0) {
@@ -217,22 +252,32 @@ public final class LightNeighborhoodGate {
                     injectedNotInit++;
                     continue;
                 }
-                neighbors.append('M'); // 未注入：等超时后放行（不再空气占位）
+                // 权威交付窗外的邻柱永远不会被 acquire：不等待（原版外圈也会用空邻传播）
+                boolean wanted = session == null
+                        || session.isAuthorityPullEligible(nx, nz)
+                        || io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession
+                                .isDeliverableToClient(nx, nz);
+                if (!wanted) {
+                    neighbors.append('X');
+                    outsideWindow++;
+                    continue;
+                }
+                neighbors.append('M'); // 窗内未注入：等超时后放行（不再空气占位）
                 notInjected++;
             }
         }
+        // 窗外缺邻不挡齐套；窗内仍缺则等 soft/hard 超时
         if ((injectedNotInit > 0 || notInjected > 0) && !timedOut) {
             logBlockedOnce(key, dimension, pos, waitedMs, neighbors,
-                    injectedNotInit, notInjected);
+                    injectedNotInit, notInjected + outsideWindow);
             return null;
         }
-        // 退役空气占位：缺邻按引擎空 section 参与传播（对齐原版），不再把全空气柱
-        // 标成 lightCorrect 当权威邻域。超时仅放行本柱 LIGHT。
-        if (notInjected > 0) {
+        if (notInjected > 0 || outsideWindow > 0) {
             DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
-                    "[LIGHT_GATE] Promote ({}, {}) dim={} missing={} timedOut={} "
-                            + "waited={}ms sinceProgress={}ms (no placeholders)",
-                    pos.x, pos.z, dimension, notInjected, timedOut, waitedMs, sinceProgressMs);
+                    "[LIGHT_GATE] Promote ({}, {}) dim={} missingInWindow={} outsideWindow={} "
+                            + "timedOut={} waited={}ms sinceProgress={}ms (no placeholders)",
+                    pos.x, pos.z, dimension, notInjected, outsideWindow,
+                    timedOut, waitedMs, sinceProgressMs);
         } else {
             DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
                     "[LIGHT_GATE] Promote ({}, {}) dim={} neighborhood ready "
@@ -244,6 +289,7 @@ public final class LightNeighborhoodGate {
             return null;
         }
         blockedLogged.remove(key);
+        promoted.add(key);
         return entry.context();
     }
 

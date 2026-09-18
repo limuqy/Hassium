@@ -527,6 +527,9 @@ public final class ShadowLightCompute {
         shadowApplyEpochs.clear();
         fullApplyTraces.clear();
         ignoredApplyRetries.clear();
+        // R2：上一会话 LIGHT/Promote 凭据作废，整柱 pack 须重新过齐套+两阶段（原版 isLighted 口径）
+        lightCompletedAfterLightTask.clear();
+        LightNeighborhoodGate.clear();
     }
 
     /**
@@ -710,6 +713,48 @@ public final class ShadowLightCompute {
             return false;
         }
         return server.hasUsableEngineLight(pos, chunk);
+    }
+
+    /**
+     * 本会话 LIGHT 任务 POST 完成（对齐原版 {@code setLightCorrect(true)} 时机）。
+     * 整柱客户端打包门：未 Promote 且未 POST 的柱不得 pack。
+     */
+    private static final java.util.Set<Long> lightCompletedAfterLightTask =
+            ConcurrentHashMap.newKeySet();
+
+    /**
+     * 原版语义整柱交付门（所有 shadow 打包出口共用）：
+     * <ul>
+     *   <li>{@code chunk.isLightCorrect()} —— 对齐 {@code ChunkStatus.isLighted} 的必要条件</li>
+     *   <li>本会话 {@code LightNeighborhoodGate} 已 Promote，或 {@code finishLight} POST 已记账
+     *       —— 对齐 {@code ChunkStatus.LIGHT}（range=1）完成后才 {@code setLightCorrect(true)}</li>
+     * </ul>
+     * 未就绪时调用方必须转入两阶段光队列，不得 REUSE/整柱 pack（否则 INITIALIZE 空层
+     * 经 emptyYMask 写成客户端 skyTop=0，屋檐黑）。
+     */
+    public static boolean isVanillaAlignedClientPackReady(String dimension, ChunkPos pos,
+                                                          net.minecraft.world.level.chunk.LevelChunk chunk) {
+        if (pos == null || chunk == null) {
+            return false;
+        }
+        if (!chunk.isLightCorrect()) {
+            return false;
+        }
+        String dim = dimension == null ? currentDimension() : dimension;
+        long key = DimensionKey.key(dim, pos.x, pos.z);
+        return LightNeighborhoodGate.wasPromoted(key) || lightCompletedAfterLightTask.contains(key);
+    }
+
+    /** finishLight / 原版光完成后记账：允许整柱打包。 */
+    public static void markClientPackLightCompleted(long key) {
+        lightCompletedAfterLightTask.add(key);
+    }
+
+    public static void markClientPackLightCompleted(String dimension, ChunkPos pos) {
+        if (dimension == null || pos == null) {
+            return;
+        }
+        lightCompletedAfterLightTask.add(DimensionKey.key(dimension, pos.x, pos.z));
     }
 
     /**
@@ -1557,11 +1602,10 @@ public final class ShadowLightCompute {
             accountVisibleNetworkIngress(resolved, pos,
                     resolvedOrigin == TraceOrigin.REMOTE_PULL);
         }
-        // 已有完整引擎光的柱（缓存命中 / relight 后）：跳过门控，直接进光屏障交付。
-        // 门控只对需要重算光的柱有意义——已亮柱走门控会白等 3s 超时。
-        // isLightCorrect 单独不够：层未安装时 REUSE 会打包空光。
-        if (isLightReusable(server, pos, chunk)) {
-            generated.put(key, new GenEntry(chunk, level, true, false, resolvedOrigin));
+        // 原版交付门：isLightCorrect + 本会话 LIGHT（Promote/POST）完成后才 REUSE 打包；
+        // 否则进齐套门两阶段（INITIALIZE → 邻域齐套 → propagate → finishLight POST → pack）。
+        if (isVanillaAlignedClientPackReady(resolved, pos, chunk)) {
+            generated.put(key, new GenEntry(chunk, level, isLightReusable(server, pos, chunk), false, resolvedOrigin));
             pump();
             return;
         }
@@ -1703,6 +1747,8 @@ public final class ShadowLightCompute {
                         pos.x, pos.z);
                 return;
             }
+            // 原版 holder LIGHT 完成 = 本会话可 pack
+            markClientPackLightCompleted(dimension, pos);
             // S3：原版光——status/引擎产出即交付，无收敛停车门。
             runBuildOnShadowMain(pos, () -> {
                 ClientboundLevelChunkWithLightPacket packet;
@@ -1798,10 +1844,9 @@ public final class ShadowLightCompute {
         if (dimension == null || !DimensionKey.isCacheableDimension(dimension)) {
             return false;
         }
-        // 光照缓存命中锚点：引擎光已收敛且层已安装才 REUSE，否则 RECOMPUTE。
-        // 仅 isLightCorrect 会把空层当已亮，打出 skyTop=0 整柱。
-        ShadowSeedServer reuseServer = ShadowServerRegistry.getInstance().get();
-        boolean lightReuse = isLightReusable(reuseServer, pos, chunk);
+        // 原版交付门（ChunkStatus.LIGHT 完成前不整柱 pack）：未就绪 → lightReuse=false → 两阶段光。
+        boolean lightReuse = isVanillaAlignedClientPackReady(dimension, pos, chunk)
+                && isLightReusable(ShadowServerRegistry.getInstance().get(), pos, chunk);
         long key = DimensionKey.key(dimension, pos.x, pos.z);
         // 同柱已有网络来源（SERVER_PUSH/REMOTE_PULL）时禁止被 cache publish 覆盖来源——
         // 否则 R1 首进全量推送会被改写成 MEMORY_CACHE 假全命中。
@@ -2188,6 +2233,22 @@ public final class ShadowLightCompute {
      */
     private static void startLightBarrier(ShadowSeedServer server,
                                           LightTask t, long deadlineMs) {
+        ChunkPos barrierPos = new ChunkPos(DimensionKey.chunkXOf(t.key), DimensionKey.chunkZOf(t.key));
+        String barrierDim = DimensionKey.dimensionOf(t.key);
+        // 原版 ChunkStatus.LIGHT range=1：非 REUSE 且本会话未 Promote 时，不得直接算光/打包。
+        // GENERATED→startLightBarrier 绕过齐套 = 缺邻当 Bedrock → 屋檐 skyTop=0（vapack 实测）。
+        if (t.source != LightSource.LIGHT_ONLY
+                && t.metric != LightMetric.REUSE_CACHE
+                && t.chunk != null
+                && !LightNeighborhoodGate.wasPromoted(t.key)) {
+            if (t.level != null) {
+                initializeLightImmediately(server, t.key, t.chunk, t.level);
+            }
+            LightNeighborhoodGate.enqueue(t.key, barrierDim, barrierPos,
+                    new GateContext(t.token, t.chunk, t.level,
+                            t.metric, t.renderOnly, t.traceOrigin));
+            return;
+        }
         InflightLight inf = new InflightLight(t.key, t.source, t.token,
                 t.chunk, t.level, deadlineMs, t.metric, t.renderOnly, t.traceOrigin);
         inf.submittedAtNs = System.nanoTime();
@@ -2296,13 +2357,13 @@ public final class ShadowLightCompute {
                 LightWork work = task.token instanceof LightWork w ? w : null;
                 pushLightReady(pos, task.level, task.chunk, converged, work);
             } else {
-                // B2 原版节奏：本柱 light 任务完成即打包交付；空光/欠光不 requeue 挡首包，
-                // 余量走光桥后补（与 docs/chunk-load-optimization.md d 锚点一致）。
+                // 对齐原版 lightChunk POST：先记「本会话 LIGHT 完成」，再整柱打包。
                 if (server != null && task.chunk != null && !task.chunk.isLightCorrect()
                         && server.hasCompleteLightLayers(pos, task.chunk)
                         && server.hasUsableEngineLight(pos, task.chunk)) {
                     server.syncLightCorrect(task.chunk, true);
                 }
+                markClientPackLightCompleted(task.key);
                 if (server != null && !isLightReusable(server, pos, task.chunk)) {
                     DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
                             "[SHADOW_LIGHT] pack after light task (non-ideal light) ({}, {}) metric={}",
@@ -3364,6 +3425,7 @@ public final class ShadowLightCompute {
         lightInitialized.clear();
         lightInitPassed.clear();
         LightNeighborhoodGate.clear();
+        lightCompletedAfterLightTask.clear();
         nativeLightChunks.clear();
         pendingPlaceholderNeighborRelight.clear();
         requestedMisses.clear();
