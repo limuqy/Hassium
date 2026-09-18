@@ -313,10 +313,6 @@ public final class ShadowTrackingSession {
             return;
         }
         applyViewDistanceIfChanged(shadow);
-        // P5 票驱动已默认关闭（S0 专用服模型）
-        ChunkPos ticketCenter = virtualPlayer.chunkPosition();
-        ShadowTicketDriver.consumeOnShadowLoop(shadow, currentDimension,
-                ticketCenter.x, ticketCenter.z, serverViewDistance, effectiveClientVD);
         long now = System.currentTimeMillis();
         if (now - lastChunkTickMs >= CHUNK_TICK_INTERVAL_MS) {
             lastChunkTickMs = now;
@@ -959,12 +955,6 @@ public final class ShadowTrackingSession {
      */
     private void applyViewDistanceIfChanged(ShadowSeedServer shadow) {
         int desired = resolveViewDistance();
-        // P5 接管臂（实验性，默认关闭）：只钝化「ChunkMap 的 tracking 半径」，不钝化驱动的
-        // 方形半径（驱动照旧拿 resolveViewDistance() 的真值）。这样压小 tracking 不再连坐
-        // 饿死 OVD 环——整张方形仍由驱动提供，缺口若有就是驱动本身的问题。
-        if (ShadowTicketDriver.trackingSelectionNeutralized()) {
-            desired = ShadowTicketDriver.NEUTRALIZED_VIEW_DISTANCE;
-        }
         if (desired == appliedViewDistance) {
             return;
         }
@@ -1353,7 +1343,6 @@ public final class ShadowTrackingSession {
         ShadowChunkMapCompat.clearSuspendedLoads();
         io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate.clearAll();
         io.github.limuqy.mc.hassium.protocol.ShadowPullClient.clearPullFailure(null, null);
-        ShadowTicketDriver.requestClear();
         s.ovdCounted.clear();
         s.ovdMissCounted.clear();
         s.ovdMissRetryAt.clear();
