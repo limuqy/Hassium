@@ -381,9 +381,13 @@ public final class ShadowTrackingSession {
             return;
         }
         int range = serverViewDistance;
+        // 形状外接盒 = range+1（原版 updatePlayerStatus 同款）：轴向 |d|=range+1 的柱属于权威形状，
+        // 但 inOvdBand 把它们排除在环带之外 → 必须在本驱动枚举，否则两侧都不交付。
+        // 实测 serverVD=10/clientVD=16：漏掉 44 柱 → 客户端在权威窗外一圈出现封闭虚空。
+        int box = ChunkShapeCompat.boundingRadius(range);
         java.util.List<ChunkPos> enter = new java.util.ArrayList<>();
-        for (int x = center.x - range; x <= center.x + range; x++) {
-            for (int z = center.z - range; z <= center.z + range; z++) {
+        for (int x = center.x - box; x <= center.x + box; x++) {
+            for (int z = center.z - box; z <= center.z + box; z++) {
                 if (!ChunkShapeCompat.contains(center.x, center.z, range, x, z)) {
                     continue;
                 }

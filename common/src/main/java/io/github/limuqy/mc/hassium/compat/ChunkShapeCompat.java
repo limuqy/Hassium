@@ -30,6 +30,21 @@ public final class ChunkShapeCompat {
     }
 
     /**
+     * 原版形状的切比雪夫外接半径 = {@code range + 1}。
+     * <p>
+     * {@link #contains} 对齐的 {@code ChunkMap.isChunkInRange} 内含 {@code |d| - 1} 折算，故沿四条
+     * 轴线方向形状可延伸到 {@code |d| = range + 1}（range=10 时 {@code (11, |dz|<=5)} 等共 44 柱在内）。
+     * 原版 {@code ChunkMap.updatePlayerStatus} 的枚举循环正因此写 {@code ±(viewDistance + 1)}。
+     * <p>
+     * <b>凡「按方形循环 + {@link #contains} 过滤」的枚举，循环半径必须用本值</b>：用 {@code range}
+     * 会漏掉每边中段，而这些柱又被 {@link #inOvdBand} 判给权威侧 → 两侧都不交付，客户端出现
+     * 封闭虚空（实测 serverVD=10 / clientVD=16：环带外侧 44 柱永不投递）。
+     */
+    public static int boundingRadius(int range) {
+        return range + 1;
+    }
+
+    /**
      * OVD 环带判定：(x,z) 落在 client 半径的切比雪夫窗内、且**不在** authority 半径的原版形状内。
      * <p>
      * 收口理由：该判据原先在 {@code ShadowTrackingSession#inOvdWindow} 手搓（切比雪夫 + {@link #contains}），

@@ -85,8 +85,15 @@ A1-③ seedGen 开 + 有缓存
 | Provider inflight 超时 + 并发上限 + 超时冷却 | 已编译 | 24 在途；15s 超时；20s 冷却；非终态业务逻辑 |
 | UNCHANGED/ERROR `releaseProviderInflight` | 已编译 | 防 inflight 死锁 |
 | unload 不再入 redeliver 队列 | 已编译 | A5 半清理；方法仍残留待删 |
+| **权威驱动枚举漏环（R2 封闭虚空根因）** | 已编译 + 冒烟验证 | `drainAuthorityAcquires` 方形循环半径用了 `range`，而原版形状沿轴线可伸到 `range+1`（`ChunkMap.isChunkInRange` 的 `|d|-1` 折算；原版 `updatePlayerStatus` 循环即 `±(vd+1)`）→ `shape(VD)\cheb(VD)` 那 4 段（VD=10 时 44 柱）既不在权威驱动枚举里，又被 `inOvdBand` 判成「权威柱」→ 两侧都不投递。改 `ChunkShapeCompat.boundingRadius(range)`。实证：`1.20.1_fabric_I_ovdpath2` R2 `present` 1041→1085（= cheb(16) − 4 个 vanilla 切角），`TRACE_ENCLOSED_HOLE` 消失；R1 1469→1529 = \|shape(20)\| |
 
 **未闭环**：A1 三条链未按 §1 实现；A3/A5/A4 未清完；B1–B5/B7 未做。
+
+**2026-09-18 追加闭环（已验证）**：R2「权威窗外一圈封闭虚空」的根因即上表末行——权威驱动枚举
+少一圈（`range` vs 形状外接盒 `range+1`），与 OVD/光照/候选几何无关。复现口径：
+`1.20.1_fabric_I_ovdpath1`（FAIL，44 洞 / comp=11@r2，连续 6 场同签名）→ 改后 `ovdpath2`（PASS，
+封闭洞 0）。**残余（不触门禁）**：R2 `ovdMiss=4` = `cheb(clientVD)` 的 4 个对角柱，落在
+`shape(clientVD)` 之外（vanilla 也不会送），且 R1 交付过却未落盘——成因未查，另外单列。
 
 **残留风险（【推断】）**：WINDOW_PUMP 删除后，若 pull 响应/materialize/桥都未覆盖「inject/盘有柱且客户端无该柱」，可能再出现脚下/前缘空洞 → **M1 必须先于继续删路径**。
 
