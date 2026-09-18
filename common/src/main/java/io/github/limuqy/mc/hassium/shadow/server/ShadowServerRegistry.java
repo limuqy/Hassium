@@ -24,7 +24,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * WorldLoader 与 login/握手并行；消费闸仍由 {@link ShadowLightCompute#isEnabled()}
  * （需握手）把守。无握手约 3s 后关停投机实例（原版服不常驻）。
  * <p>
- * 断连默认 {@link #parkForReuse()}：save 脏柱 + 清热表，保留实例与 session.lock；
+ * 断连默认 {@link #parkForReuse()}（现=完整 {@link #shutdown()}，2026-09-18 起不做滞留保活）；
  * 同 serverId 重进直接复用（跳过 WorldLoader）。空闲约 {@link #IDLE_TIMEOUT_MS} 或换服
  * 再走 {@link #shutdown()}。
  */
@@ -414,41 +414,14 @@ public final class ShadowServerRegistry {
 
 
     /**
-     * 断连保活：在调用线程刷脏落盘，再清热表、不 halt、不放 session.lock。
-     * 必须等 saveAll 结束再返回，这样 finalize 才能先写缓存再关执行器。
-     * 同 serverId 重进经 {@link #getOrCreate()} 复用。空闲 {@link #IDLE_TIMEOUT_MS} 后
-     * {@link #shutdown()}。
+     * 断连：**不再 park 保活**（2026-09-18 用户：退出服务器后影子端不做滞留）。
+     * 直接完整 {@link #shutdown()}：saveAll → halt → 关存储；重连经 getOrCreate 新建并读盘。
+     * 保留方法名以兼容全部调用点（ClientLifecycleHelper / 投机取消等）。
      */
     public void parkForReuse() {
-        final ShadowSeedServer s;
-        final long epoch;
-        synchronized (lock) {
-            s = server;
-            if (s == null) {
-                return;
-            }
-            parked = true;
-            unparkPermitted = false;
-            epoch = parkEpoch.incrementAndGet();
-            client().setShadowServerReady(false);
-        }
         DebugLogger.info(DebugLogger.LogType.ASYNC,
-                "[SHADOW] Parking shadow server for reuse (serverId={})", boundServerId);
-        try {
-            // previousShutdownComplete 仍为 true：无需 beginShutdownSave 即可落盘
-            s.saveAll();
-            synchronized (lock) {
-                // 快速重进已 unpark（parkEpoch 已变）→ 不得清新会话热表
-                if (parked && parkEpoch.get() == epoch) {
-                    s.clearHotStateAfterPark();
-                }
-            }
-        } catch (Throwable t) {
-            Constants.LOG.warn("Hassium: Shadow park save/clear failed; keeping instance", t);
-        }
-        if (parked && parkEpoch.get() == epoch) {
-            scheduleIdleTimeout(IDLE_TIMEOUT_MS);
-        }
+                "[SHADOW] Disconnect: full shutdown (no park/reuse) serverId={}", boundServerId);
+        shutdown();
     }
 
     private void scheduleIdleTimeout(long timeoutMs) {
