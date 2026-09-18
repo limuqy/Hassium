@@ -215,6 +215,10 @@ public final class SeedGenLevelCompat {
         long tStemNs = System.nanoTime();
         ShadowSeedServer server = ShadowSeedServer.create(
                 Thread.currentThread(), access, repo, stem, seed, worldRoot);
+        // C2ME OpenCL accel：其全局上下文只挂在 MinecraftServer.runServer() HEAD，
+        // 影子端不走 runServer → 必须在 createLevels（ChunkMap.<init>）之前补齐，
+        // 否则 C2ME 的 ChunkMap postInit 直接抛 ISE（见 C2meOpenClCompat）。
+        io.github.limuqy.mc.hassium.compat.mods.C2meOpenClCompat.armFor(server);
         server.initServer();
         // 镜像集成服：把影子实例写入加载器全局 currentServer 槽（仅空槽）。
         // TF 等 mod 的 getOverworldSeed() 经 requireNonNull(getCurrentServer()) 取种子，
@@ -689,6 +693,10 @@ public final class SeedGenLevelCompat {
                 Constants.LOG.warn("Hassium: Shadow level close failed for {}", level.dimension(), e);
             }
         }
+        // C2ME OpenCL accel：设备随影子端生命周期（C2ME 语义 = postStopServer closeAllDevices）。
+        // 必须晚于各维度 chunk 源关闭（chunk system 仍可能持有设备引用），
+        // 否则重连反复建端会累积 GPU 上下文（见 C2meOpenClCompat）。
+        io.github.limuqy.mc.hassium.compat.mods.C2meOpenClCompat.releaseFor(server);
         WorldStem stem = server.stem();
         closeQuietly(stem, null);
         // 目录锁已在步骤 1 释放（幂等；此处不再重复 close）。
