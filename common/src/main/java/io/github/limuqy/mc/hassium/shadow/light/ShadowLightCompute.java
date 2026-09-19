@@ -2203,9 +2203,12 @@ public final class ShadowLightCompute {
                         "[SHADOW_LIGHT] barrier reuse phase-1, skip INITIALIZE ({}, {}) dim={}",
                         DimensionKey.chunkXOf(t.key), DimensionKey.chunkZOf(t.key), barrierDim);
                 inf.nativeChunk = phase1;
+                final java.util.Map<net.minecraft.world.level.chunk.LevelChunk, Boolean> relaxed1 =
+                        relaxNeighborLightFlags(inf);
                 io.github.limuqy.mc.hassium.compat.ShadowServerCompat
                         .completeNativeLight(level, inf.nativeChunk)
                         .whenComplete((ignored, throwable) -> {
+                            restoreNeighborLightFlags(relaxed1);
                             if (throwable != null) {
                                 abortLight(t.key, throwable);
                             } else {
@@ -2216,6 +2219,7 @@ public final class ShadowLightCompute {
                 return;
             }
             probeInitBarrier.incrementAndGet();
+            final java.util.Map<net.minecraft.world.level.chunk.LevelChunk, Boolean>[] relaxed2Box = new java.util.Map[1];
             inf.nativeChunk = io.github.limuqy.mc.hassium.compat.ShadowServerCompat
                     .createNativeLightChunk(level, t.chunk,
                             lightChunkHasExistingLight(t.metric == LightMetric.REUSE_CACHE));
@@ -2231,9 +2235,13 @@ public final class ShadowLightCompute {
                         // 标记点就该在**真正跑完 INITIALIZE 的地方**，不依赖调用方是否代标。
                         lightInitPassed.add(t.key);
                     })
-                    .thenCompose(ignored -> io.github.limuqy.mc.hassium.compat.ShadowServerCompat
-                            .completeNativeLight(level, inf.nativeChunk))
+                    .thenCompose(ignored -> {
+                        relaxed2Box[0] = relaxNeighborLightFlags(inf);
+                        return io.github.limuqy.mc.hassium.compat.ShadowServerCompat
+                                .completeNativeLight(level, inf.nativeChunk);
+                    })
                     .whenComplete((ignored, throwable) -> {
+                        restoreNeighborLightFlags(relaxed2Box[0]);
                         if (throwable != null) {
                             abortLight(t.key, throwable);
                         } else {
@@ -2246,6 +2254,82 @@ public final class ShadowLightCompute {
         }
     }
 
+
+    /** 该维影子端引擎是否被外部光照引擎（Starlight / ScalableLux）替换。 */
+    private static boolean isForeignEngineActive(String dimension) {
+        try {
+            io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer server =
+                    io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry.getInstance().get();
+            net.minecraft.server.level.ServerLevel level = server == null ? null : server.level(dimension);
+            return level != null && io.github.limuqy.mc.hassium.compat.mods.ForeignLightEngine
+                    .isForeign(level.getLightEngine());
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
+    /**
+     * 外部光照引擎下，**LIGHT 步期间**把 3×3 邻柱临时标成 {@code isLightCorrect=true}，
+     * 让 Starlight 的 {@code SkyStarLightEngine.canUseChunk} 放行它们；返回原值供还原。
+     * <p>
+     * <b>为什么</b>：`canUseChunk` 只接受 {@code status>=LIGHT && isLightCorrect()} 的柱，
+     * {@code setupCaches} 对不满足的邻柱直接 {@code continue}（不进 cache）→ 本柱那一侧的横向光
+     * 永远拿不到（屋檐 0，无 mod 为 13）。而 Hassium 的 S5 把 {@code isLightCorrect} 当**落盘判据**，
+     * 只在 3×3 真齐全时置真 —— **同一个标志被两种语义共用**：Starlight 要的是「数据可用」，
+     * S5 要的是「可安全落盘」。这里只为**算光期**提供前者，跑完立刻还原（不写 NBT、不改落盘判据）。
+     * <p>
+     * 邻柱 nibble 若确实还没算过（全 NULL），本柱照样拿不到那一侧的光——那是对的（无光可给）；
+     * 一旦邻柱算过（哪怕未被标 clean），本柱就能拿到。非外部引擎为 no-op。
+     */
+    private static java.util.Map<net.minecraft.world.level.chunk.LevelChunk, Boolean>
+            relaxNeighborLightFlags(InflightLight inf) {
+        java.util.Map<net.minecraft.world.level.chunk.LevelChunk, Boolean> prev = new java.util.HashMap<>();
+        try {
+            if (inf.level == null || inf.chunk == null) {
+                return prev;
+            }
+            String dimension = DimensionKey.dimensionOf(inf.key);
+            if (!isForeignEngineActive(dimension)) {
+                return prev;
+            }
+            io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer server =
+                    io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry.getInstance().get();
+            if (server == null) {
+                return prev;
+            }
+            ChunkPos pos = inf.chunk.getPos();
+            for (int dx = -1; dx <= 1; dx++) {
+                for (int dz = -1; dz <= 1; dz++) {
+                    if (dx == 0 && dz == 0) {
+                        continue;
+                    }
+                    net.minecraft.world.level.chunk.LevelChunk n =
+                            server.injectedChunk(dimension, pos.x + dx, pos.z + dz);
+                    if (n == null) {
+                        continue;
+                    }
+                    prev.put(n, n.isLightCorrect());
+                    if (!n.isLightCorrect()) {
+                        n.setLightCorrect(true);
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+            // 诊断/兼容失败不得影响算光
+        }
+        return prev;
+    }
+
+    /** 还原 {@link #relaxNeighborLightFlags} 改过的标志。 */
+    private static void restoreNeighborLightFlags(
+            java.util.Map<net.minecraft.world.level.chunk.LevelChunk, Boolean> prev) {
+        for (java.util.Map.Entry<net.minecraft.world.level.chunk.LevelChunk, Boolean> e : prev.entrySet()) {
+            if (Boolean.FALSE.equals(e.getValue())) {
+                e.getKey().setLightCorrect(false);
+            }
+        }
+        prev.clear();
+    }
 
     /**
      * 外部光照引擎（Starlight / ScalableLux）下把 LIGHT 步写在 native light chunk 上的
@@ -3239,4 +3323,6 @@ public final class ShadowLightCompute {
                             boolean renderOnly,
                             TraceOrigin traceOrigin) {}
 }
+
+
 
