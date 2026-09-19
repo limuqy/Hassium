@@ -30,17 +30,6 @@ public final class ShadowOfficialPacketBridge {
     public static volatile boolean enabled = true;
 
     /**
-     * 【临时实验 S1-EXP-B】true = 断掉 B 族**整柱包**转发（Forget/光照增量不受影响），
-     * 用来验证 A 族（{@code publishCachedChunk} 路径）是否已完全覆盖 B 族交付。
-     * <p>
-     * 判据：断掉后跑同一冒烟场景，若 `区块加载/R2 超视渲染/光照重算` 与基线一字不差
-     * → B 族冗余，可整族删除；若掉数 → B 族承重，保留。
-     * <p>
-     * <b>实验结束后必须删除本字段及其引用</b>（不是长期开关）。
-     */
-    private static final boolean EXP_DISABLE_BUILT_PACKET = false;
-
-    /**
      * 影子端官方包 → 真实客户端。
      * <p>
      * <b>维度闸</b>：原版 {@code ClientboundLevelChunkWithLightPacket} /
@@ -75,9 +64,6 @@ public final class ShadowOfficialPacketBridge {
         // （ready -> drainReady -> applyReadyChunk，与 A 族 publish 路径同一条）：
         // 几何门 / 客户端 apply 时间预算 / 维度闸复检 / 重试上限 / landed 记账全部共用。
         if (packet instanceof ClientboundLevelChunkWithLightPacket chunkPacket) {
-            if (EXP_DISABLE_BUILT_PACKET) {
-                return false;
-            }
             // 回归原版 trackChunk：不因「光未对齐」丢弃官方整柱包；欠光首包由后续整柱重交付补。
             // 来源维未知（sourceDimension==null）时退回客户端当前维 —— 与旧行为等价
             // （旧路径同样只在 forward 处做一次闸；未知即不闸）。

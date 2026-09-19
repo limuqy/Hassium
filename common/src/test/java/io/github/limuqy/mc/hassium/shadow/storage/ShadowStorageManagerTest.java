@@ -269,19 +269,6 @@ class ShadowStorageManagerTest {
     }
 
     @Test
-    @DisplayName("活柱与 RegionCache 同时存在时，活柱不以无压缩 NBT 镜像")
-    void liveColumnHasNoUncompressedNbtMirror() {
-        ChunkPos pos = new ChunkPos(8, 8);
-        injected.add(ChunkPos.asLong(pos.x, pos.z));
-        ShadowStorageHashes.put(pos, 11L);
-        manager.markContentDirty(pos);
-        assertFalse(manager.hasUncompressedMirror(pos));
-        persistIngest(pos);
-        assertFalse(manager.hasUncompressedMirror(pos));
-        assertTrue(manager.mountedRegionCount() <= 1);
-    }
-
-    @Test
     @DisplayName("lightDirty 时 content hash 仍 hit")
     void lightDirtyDoesNotBlockContentHit() {
         ChunkPos pos = new ChunkPos(2, 3);

@@ -761,23 +761,6 @@ public final class ShadowLightCompute {
         return pos != null && chunk != null && chunk.isLightCorrect();
     }
 
-    /** ④：完成记账集合已删；保留空方法兼容 finishLight/publish 调用点。 */
-    public static void markClientPackLightCompleted(long key) {
-        // no-op（诊断集合已剥离）
-    }
-
-    public static void markClientPackLightCompleted(String dimension, ChunkPos pos) {
-        // no-op（诊断集合已剥离）
-    }
-
-    /**
-     * 空 REUSE 不得整柱交付（无论客户端是否已有该柱）：
-     * 卸载后 redeliver 时 epoch 已清，按「已落地」门控会漏掉，出生点回访成片黑块。
-     */
-    public static boolean shouldSkipEmptyReuseRepush(LightMetric metric, boolean lightReusable) {
-        return metric == LightMetric.REUSE_CACHE && !lightReusable;
-    }
-
     /**
      * 远程 hash 已知且相同，或无远程 hash 时，已落地柱无需重复整柱推送。
      */
@@ -1594,7 +1577,7 @@ public final class ShadowLightCompute {
      * 光任务入队：可复用光才直接 REUSE pack；否则必须 {@link LightNeighborhoodGate} 齐套后再算光。
      * <b>禁止</b>改为「一律立刻 lightChunk」——屋檐黑实测（见 MEMORY Rules / LightNeighborhoodGate）。
      */
-    static void submitLightNoNeighborhoodGate(long key, LevelChunk chunk,
+    static void submitLightReuseOrGate(long key, LevelChunk chunk,
                                               net.minecraft.server.level.ServerLevel level,
                                               boolean lightReuse, boolean renderOnly,
                                               TraceOrigin origin) {
@@ -1721,50 +1704,6 @@ public final class ShadowLightCompute {
     public static boolean isLightInitPassed(long key) {
         return lightInitPassed.contains(key);
     }
-
-    /**
-     * 原版 LIGHT 步 {@code isLighted = persisted >= LIGHT && isLightCorrect}。
-     * 注入柱 persisted 恒为 FULL，剥光包 isLightCorrect=false，native FULL 不能当已算光。
-     */
-    public static boolean nativeFullMeansLighted(boolean persistedAtLeastLight, boolean lightCorrect) {
-        return persistedAtLeastLight && lightCorrect;
-    }
-
-
-    /** 原版 ChunkHolder LIGHT future 完成后的可见发布入口。 */
-    public static void publishNativeLightResult(String dimension, ChunkPos pos, LevelChunk chunk,
-                                         net.minecraft.server.level.ServerLevel level,
-                                         TraceOrigin origin) {
-        try {
-            // B6：与 deliverLocal / pushReady 同一口径
-            if (!ShadowTrackingSession.isDeliverableToClient(pos.x, pos.z)) {
-                DebugLogger.info(DebugLogger.LogType.LIGHT,
-                        "[SHADOW_LIGHT] native light skip outside authority window ({}, {})",
-                        pos.x, pos.z);
-                return;
-            }
-            if (io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
-                    .blockClientDelivery(dimension, pos.x, pos.z)) {
-                DebugLogger.info(DebugLogger.LogType.LIGHT,
-                        "[SHADOW_LIGHT] native light skip seedGenAwaitingCompare ({}, {})",
-                        pos.x, pos.z);
-                return;
-            }
-            // 原版 holder LIGHT 完成 = 本会话可 pack
-            markClientPackLightCompleted(dimension, pos);
-            // S3：原版光——status/引擎产出即交付，无收敛停车门。
-            runBuildOnShadowMain(pos, () -> {
-                ClientboundLevelChunkWithLightPacket packet;
-                packet = withChunkLock(pos, () -> SeedGenChunkCodec.buildPacket(chunk, level));
-                offerReady(DimensionKey.key(dimension, pos.x, pos.z), pos, packet,
-                        true, false, origin);
-            });
-        } catch (Throwable failure) {
-            noteSingleColumnFailure("[SHADOW_CHUNK] publish native light failed ({}, {}) dim={}",
-                    pos.x, pos.z, dimension, failure);
-        }
-    }
-
 
     /**
      * 自定义维度透传：绕过影子管线，主线程直接原版落地（与 Compare+Pull
@@ -2000,7 +1939,7 @@ public final class ShadowLightCompute {
                             }
                             SmokeChunkTrace.recordShadowInjected(dimension, pos);
                             // 已有正确光：直接 REUSE；无光/需重算：一轮光后 pack（compare 已确认）。
-                            submitLightNoNeighborhoodGate(e.getKey(), existing,
+                            submitLightReuseOrGate(e.getKey(), existing,
                                     server.level(dimension), !needRelight, false,
                                     pendingEntry.traceOrigin() != null
                                             ? pendingEntry.traceOrigin()
@@ -2024,7 +1963,7 @@ public final class ShadowLightCompute {
                     }
                     accountVisibleNetworkIngress(dimension, pos, staleRepush);
                     LevelChunk injected = server.injectedChunk(dimension, pos.x, pos.z);
-                    submitLightNoNeighborhoodGate(e.getKey(), injected, server.level(dimension),
+                    submitLightReuseOrGate(e.getKey(), injected, server.level(dimension),
                             false, false, pendingEntry.traceOrigin());
                 }
                 // 分段增量应用：本地基线 chunk 上就地覆盖变更 section + heightmaps + BE，
@@ -2370,7 +2309,6 @@ public final class ShadowLightCompute {
                     && server.hasUsableEngineLight(pos, task.chunk)) {
                 server.syncLightCorrect(task.chunk, true);
             }
-            markClientPackLightCompleted(task.key);
             if (server != null && !isLightReusable(server, pos, task.chunk)) {
                 DebugLogger.info(DebugLogger.LogType.LIGHT,
                         "[SHADOW_LIGHT] pack after light task (non-ideal light) ({}, {}) metric={}",

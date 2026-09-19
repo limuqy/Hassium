@@ -46,36 +46,5 @@ public final class ShadowChunkDeliver {
         // 专用服语义：本地已有柱 = 服务端已 load → 直接投递客户端。
         return ShadowLightCompute.publishCachedChunk(dimension, pos, localGeneration, renderOnly);
     }
-
-    /** OVD 窗本地源（冻结：仅保留兼容入口，默认配置应关 OVD）。 */
-    public static boolean deliverOvd(String dimension, ChunkPos pos) {
-        if (dimension == null || pos == null) {
-            return false;
-        }
-        if (!ShadowTrackingSession.isDeliverableToClient(pos.x, pos.z)) {
-            return false;
-        }
-        return ShadowLightCompute.publishOvdCachedChunk(dimension, pos);
-    }
-
-    /**
-     * 窗内 compare 保鲜：本地已交付后向真服比对（§3.2 保新鲜；防抖在 ShadowLightCompute）。
-     * 重入交付请走 {@link ShadowTrackingSession#tryReentryCompare}（交付前 compare）。
-     */
-    public static void refreshCompare(String dimension, ChunkPos pos) {
-        if (dimension == null || pos == null) {
-            return;
-        }
-        if (ShadowTrackingSession.getInstance().tryReentryCompare(dimension, pos, "refresh")) {
-            return;
-        }
-        if (!ShadowLightCompute.tryRequestMiss(dimension, pos)) {
-            return;
-        }
-        if (!ShadowTrackingSession.getInstance()
-                .markPullInFlightForAcquire(dimension, pos, System.currentTimeMillis())) {
-            return;
-        }
-        ShadowChunkAcquire.pullOne(dimension, pos, true);
-    }
 }
+

@@ -6,7 +6,6 @@
     "mixins": [
         "shadow.MixinRegionFile",
         "shadow.MixinChunkSerializer",
-        "shadow.MixinIOWorker",
         "shadow.MixinLevelChunk",
         "shadow.RegionFileAccessor",
         "shadow.ChunkMapAccessor",

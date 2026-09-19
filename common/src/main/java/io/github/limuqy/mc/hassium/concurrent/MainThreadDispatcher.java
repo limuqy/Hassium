@@ -45,11 +45,8 @@ public final class MainThreadDispatcher {
     public static final int OP_CHUNK_APPLY = 0;
     /** 向服务端请求区块数据（无数据负载）。同位置互取代。 */
     public static final int OP_REQUEST = 1;
-    /**
-     * 影子端光照更新包 apply（ShadowLightCompute 光照更新桥梁）。同位置互取代，
-     * 不与 OP_CHUNK_APPLY 互相取代（light 包不顶掉全量 apply）。3 号语义归本常量独占。
-     */
-    public static final int OP_LIGHT_UPDATE = 3;
+    // 3 号语义（OP_LIGHT_UPDATE，影子端光照增量包 apply）已随光桥退役删除：
+    // 现在每次推送的都是**完整光**（随整柱包），不存在独立的 light 增量载荷。
 
     /**
      * 构造队列键：{@code pos} + 任务语义 {@code op}。

@@ -48,20 +48,6 @@ class ShadowLightComputeTimingRegressionTest {
     }
 
     @Test
-    @DisplayName("P0：空 REUSE 一律改重算（不依赖客户端是否已落地）")
-    void emptyReusePackIsAlwaysSkipped() {
-        assertTrue(ShadowLightCompute.shouldSkipEmptyReuseRepush(
-                ShadowLightCompute.LightMetric.REUSE_CACHE, false));
-        assertFalse(ShadowLightCompute.shouldSkipEmptyReuseRepush(
-                ShadowLightCompute.LightMetric.REUSE_CACHE, true),
-                "引擎确有可用光时允许 REUSE");
-        assertFalse(ShadowLightCompute.shouldSkipEmptyReuseRepush(
-                ShadowLightCompute.LightMetric.RECOMPUTE, false),
-                "RECOMPUTE 路径不拦（首包要交方块）");
-    }
-
-
-    @Test
     @DisplayName("磁盘命中续算：只看 isLightCorrect（NBT isLightOn），不另管脏表")
     void diskNeedRelightFollowsIsLightCorrectOnly() {
         assertFalse(ShadowLightCompute.diskNeedRelight(true),
@@ -111,17 +97,6 @@ class ShadowLightComputeTimingRegressionTest {
         assertFalse(ShadowChunkMapCompat.shouldSkipVanillaChunkParse(false, false),
                 "专用服非影子存档仍可混有原版槽");
     }
-
-    @Test
-    @DisplayName("剥光注入柱 persisted=FULL 且 isLightCorrect=false：native FULL 不能当已算光")
-    void strippedInjectNativeFullDoesNotMeanLighted() {
-        assertFalse(ShadowLightCompute.nativeFullMeansLighted(true, false),
-                "FULL + 欠光：vanilla 只 load，不会 generate LIGHT");
-        assertTrue(ShadowLightCompute.nativeFullMeansLighted(true, true),
-                "磁盘已亮柱：native FULL 才等于已算光");
-        assertFalse(ShadowLightCompute.nativeFullMeansLighted(false, false));
-    }
-
 
     @Test
     @DisplayName("FULL 取数：注入表未命中不得把票扩散 ProtoChunk 交给 ServerLevel.getChunk")

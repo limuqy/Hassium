@@ -268,9 +268,7 @@ public final class ShadowStorageManager implements AutoCloseable {
         }
     }
 
-    public boolean hasUncompressedMirror(ChunkPos pos) {
-        return false;
-    }
+
 
     /**
      * 影子上下文：把原版 {@code RegionFile} 已编码的 type126 槽收进映像，不写 .mca。

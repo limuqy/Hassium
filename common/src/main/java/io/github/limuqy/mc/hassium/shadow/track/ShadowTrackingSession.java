@@ -1220,9 +1220,6 @@ public final class ShadowTrackingSession {
         }
     }
 
-    /** OVD 环带扫描（冻结：仅统计，不 pull / 不 tryServeOvdLocal）。 */
-
-
     /**
      * 本地生成优先（§6 供给路径）：门控开时 boot/sweep 不对无基线柱发
      * authoritative-full，交给影子 tracking 触发 vanilla worldgen（真实种子）。

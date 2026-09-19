@@ -25,14 +25,6 @@ public final class ShadowVanillaLightPipeline {
                 traceOrigin == null ? TraceOrigin.SERVER_PUSH : traceOrigin);
     }
 
-    /** 缓存快照的 packet 入口；与远程 full 共享同一 pre-LIGHT 路径。 */
-    public static void submitCacheSnapshot(String dimension, ChunkPos pos,
-                                           ClientboundLevelChunkWithLightPacket packet,
-                                           TraceOrigin traceOrigin) {
-        submit(dimension, pos, packet, ShadowChunkSource.CACHE_SNAPSHOT,
-                traceOrigin == null ? TraceOrigin.SHADOW_DISK_CACHE : traceOrigin);
-    }
-
     /** 影子端尚未装配时不把一次竞态误判为永久失败。 */
     public static boolean shouldFailShadowWhenServerUnavailable() {
         return false;
