@@ -2209,6 +2209,7 @@ public final class ShadowLightCompute {
                             if (throwable != null) {
                                 abortLight(t.key, throwable);
                             } else {
+                                attachForeignLight(inf);
                                 completeLight(inf, true);
                             }
                         });
@@ -2236,6 +2237,7 @@ public final class ShadowLightCompute {
                         if (throwable != null) {
                             abortLight(t.key, throwable);
                         } else {
+                            attachForeignLight(inf);
                             completeLight(inf, true);
                         }
                     });
@@ -2244,6 +2246,28 @@ public final class ShadowLightCompute {
         }
     }
 
+
+    /**
+     * 外部光照引擎（Starlight / ScalableLux）下把 LIGHT 步写在 native light chunk 上的
+     * nibble 数组搬回**交付柱**（{@code inf.chunk}）。
+     * <p>
+     * 原版引擎把光存在引擎自己的 SectionPos 存储里，{@code getDataLayerData(sp)} 与柱实例无关，
+     * 所以 {@code createNativeLightChunk} 造一次性 ProtoChunk 无所谓；Starlight 血缘把光存在
+     * **柱实例自己的 {@code getSkyNibbles()}** 上，而交付包用的注入柱与 reader 看的都是关卡里那一份柱
+     * → 不搬就是扔（实测 1.21.1 fabric + ScalableLux：1290/1400 包 {@code skyOmitted=26}，客户端全 15）。
+     * 数组是 SWMR 对象，共享引用即可，无需深拷。非外部引擎为 no-op（反射拿不到访问器）。
+     */
+    private static void attachForeignLight(InflightLight inf) {
+        try {
+            io.github.limuqy.mc.hassium.compat.mods.ForeignLightEngine
+                    .copyLightNibbles(inf.nativeChunk, inf.chunk);
+        } catch (Throwable t) {
+            DebugLogger.warn(DebugLogger.LogType.LIGHT,
+                    "[SHADOW_LIGHT] attach foreign light failed ({}, {})",
+                    inf.chunk == null ? 0 : inf.chunk.getPos().x,
+                    inf.chunk == null ? 0 : inf.chunk.getPos().z);
+        }
+    }
 
     /** 原版 LIGHT future 完成后的唯一完成收口。 */
     private static boolean completeLight(InflightLight inf, boolean converged) {
@@ -3215,3 +3239,4 @@ public final class ShadowLightCompute {
                             boolean renderOnly,
                             TraceOrigin traceOrigin) {}
 }
+

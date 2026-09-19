@@ -60,6 +60,76 @@ public final class ForeignLightEngine {
         return !isForeign(engine);
     }
 
+    /**
+     * 反射取外部引擎挂在**柱实例**上的 nibble 数组（{@code ExtendedChunk}）；非 Starlight 血缘返回 null。
+     * <p>
+     * 为什么不能走 {@code engine.getLayerListener(SKY).getDataLayerData(sp)}：Starlight 的 reader 用
+     * {@code ServerWorldMixin.getAnyChunkImmediately → chunkMap.getVisibleChunkIfPresent} 反查柱，
+     * 影子端注入的柱大多不是「可见 holder」→ 返回 null → 整包 0 光。实测（1.21.1 fabric + ScalableLux，
+     * 1400 柱）：交付柱上明明有 8 UNINIT + 3 INIT 的真数据（{@code avgUninit=8 avgInit=2}），
+     * 同一引擎同一批 SectionPos 的 reader 却 {@code readerNonNull=0}。故改从柱上直取。
+     */
+    public static Object[] nibbles(net.minecraft.world.level.chunk.ChunkAccess chunk, boolean sky) {
+        if (chunk == null) {
+            return null;
+        }
+        try {
+            return (Object[]) chunk.getClass()
+                    .getMethod(sky ? "getSkyNibbles" : "getBlockNibbles")
+                    .invoke(chunk);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** 反射把单个 nibble 转成 vanilla {@code DataLayer}（Starlight 语义：NULL/HIDDEN → null）。 */
+    public static net.minecraft.world.level.chunk.DataLayer toVanillaNibble(Object nibble) {
+        if (nibble == null) {
+            return null;
+        }
+        try {
+            return (net.minecraft.world.level.chunk.DataLayer) nibble.getClass()
+                    .getMethod("toVanillaNibble")
+                    .invoke(nibble);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /**
+     * 把外部引擎写在 {@code from} 上的 nibble 数组搬到 {@code to}（反射，无 Starlight 时返回 false）。
+     * <p>
+     * <b>为什么必须搬</b>：原版光照存在**引擎自己的 SectionPos 索引存储**里，
+     * {@code getDataLayerData(sp)} 与柱实例无关；Starlight 血缘把光照存在
+     * {@code chunk.getSkyNibbles()/getBlockNibbles()}（{@code ExtendedChunk}）**柱实例自己的数组**上，
+     * 而 reader 用 {@code getAnyChunkNow(x,z)} 反查**关卡里那一份柱**。
+     * 影子端算光走的是 {@code createNativeLightChunk} 造的一次性 ProtoChunk，
+     * 于是「算出的光」落在 ProtoChunk 上、reader 与交付包看的是注入柱 → 全 NULL → 整包省略 → 客户端读 15。
+     * 把数组引用搬回交付柱即恢复原版语义（数组是 SWMR 对象，共享引用即可，无需深拷）。
+     */
+    public static boolean copyLightNibbles(net.minecraft.world.level.chunk.ChunkAccess from,
+                                           net.minecraft.world.level.chunk.ChunkAccess to) {
+        if (from == null || to == null || from == to) {
+            return false;
+        }
+        boolean any = false;
+        for (String layer : new String[]{"SkyNibbles", "BlockNibbles"}) {
+            try {
+                java.lang.reflect.Method get = from.getClass().getMethod("get" + layer);
+                Object value = get.invoke(from);
+                if (value == null) {
+                    continue;
+                }
+                java.lang.reflect.Method set = to.getClass().getMethod("set" + layer, get.getReturnType());
+                set.invoke(to, value);
+                any = true;
+            } catch (Throwable ignored) {
+                // 该版本/该引擎没有这个访问器 → 跳过
+            }
+        }
+        return any;
+    }
+
     private static Class<?> load(String className) {
         try {
             return Class.forName(className, false, ForeignLightEngine.class.getClassLoader());
