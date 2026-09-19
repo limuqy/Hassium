@@ -10,10 +10,17 @@ import net.minecraft.network.protocol.game.ClientboundForgetLevelChunkPacket;
 import net.minecraft.client.multiplayer.ClientPacketListener;
 
 /**
- * 接法 B：影子专用服产出的官方包 → 真实客户端 {@link ClientPacketListener}。
+ * 影子专用服产出的官方包 → 真实客户端 {@link ClientPacketListener}。
  * <p>
  * 影子上下文 {@code trackChunk} / {@code playerLoadedChunk} / {@code sendChunk}
  * 在此转发，不再依赖 dummy Connection 丢弃后的 publish 旁路作为主路径。
+ * <p>
+ * <b>【2026-09-19 统一交付出口】</b>整柱包不再 {@code mc.execute} 直落，改为入影子
+ * {@code ready} 队列（{@code ready -> drainReady -> applyReadyChunk}），与 A 族
+ * {@code publishCachedChunk} 路径共用同一条出口：几何门 / 客户端 apply 预算 / 维度闸复检 /
+ * 重试上限 / landed 记账全部单点化。见
+ * {@link io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute#offerBuiltChunkPacket}。
+ * 仅非整柱载荷（Forget / 光照增量）仍直落——Forget 必须立即生效，不能等帧尾预算。
  */
 public final class ShadowOfficialPacketBridge {
 
@@ -21,6 +28,17 @@ public final class ShadowOfficialPacketBridge {
 
     /** 是否允许桥接（S3；false 时回落 publish 管线）。 */
     public static volatile boolean enabled = true;
+
+    /**
+     * 【临时实验 S1-EXP-B】true = 断掉 B 族**整柱包**转发（Forget/光照增量不受影响），
+     * 用来验证 A 族（{@code publishCachedChunk} 路径）是否已完全覆盖 B 族交付。
+     * <p>
+     * 判据：断掉后跑同一冒烟场景，若 `区块加载/R2 超视渲染/光照重算` 与基线一字不差
+     * → B 族冗余，可整族删除；若掉数 → B 族承重，保留。
+     * <p>
+     * <b>实验结束后必须删除本字段及其引用</b>（不是长期开关）。
+     */
+    private static final boolean EXP_DISABLE_BUILT_PACKET = false;
 
     /**
      * 影子端官方包 → 真实客户端。
@@ -53,16 +71,22 @@ public final class ShadowOfficialPacketBridge {
                     packet.getClass().getSimpleName(), sourceDimension, dimension);
             return false;
         }
-        if (dimension != null && packet instanceof ClientboundLevelChunkWithLightPacket chunkPacket) {
-            if (io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
-                    .blockClientDelivery(dimension, chunkPacket.getX(), chunkPacket.getZ())) {
-                Constants.LOG.debug(
-                        "Hassium: seedGen awaiting compare, drop bridge chunk ({},{})",
-                        chunkPacket.getX(), chunkPacket.getZ());
+        // 【2026-09-19 统一交付出口】整柱包改走影子 ready 队列
+        // （ready -> drainReady -> applyReadyChunk，与 A 族 publish 路径同一条）：
+        // 几何门 / 客户端 apply 时间预算 / 维度闸复检 / 重试上限 / landed 记账全部共用。
+        if (packet instanceof ClientboundLevelChunkWithLightPacket chunkPacket) {
+            if (EXP_DISABLE_BUILT_PACKET) {
                 return false;
             }
             // 回归原版 trackChunk：不因「光未对齐」丢弃官方整柱包；欠光首包由后续整柱重交付补。
+            // 来源维未知（sourceDimension==null）时退回客户端当前维 —— 与旧行为等价
+            // （旧路径同样只在 forward 处做一次闸；未知即不闸）。
+            return io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute
+                    .offerBuiltChunkPacket(sourceDimension != null ? sourceDimension : dimension,
+                            chunkPacket);
         }
+        // 非整柱载荷不占 ready 槽，仍直落：Forget 必须立即生效（不能等帧尾预算）；
+        // 光照增量已随光桥删除不再产生（保留判据为防御）。
         if (dimension != null && packet instanceof ClientboundLightUpdatePacket lightPacket
                 && io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
                         .blockClientDelivery(dimension, lightPacket.getX(), lightPacket.getZ())) {

@@ -1078,9 +1078,138 @@ public class ShadowSeedServer extends MinecraftServer {
     }
 
     /**
+     * 影子读盘**并发上限**（信号量）。见 {@link #loadFromDiskAsync}。
+     * <p>
+     * <b>为什么必须有</b>（handoff §8.5，2026-09-19 三次实测）：客户端执行器是
+     * {@code ThreadPerTaskExecutor}（虚拟线程，**无上限**），而 {@code loadFromDisk} 走完整
+     * {@code ChunkSerializer.read}（含逐 section 的 {@code PoiManager.checkConsistencyWithBlocks}）。
+     * 实测：32 个 carrier 被占满、CPU **28.6 核**；间隔 5 s 两次 thread dump 的带栈线程
+     * **身份集合完全相同** ⟹ 不是「读得多」，是**同一批线程永久不返回**；且**退出服务器后
+     * 依旧**（客户端已无任何远程 TCP 连接），因为栈里没有阻塞调用，中断标志打不断它。
+     * <p>
+     * 取值：{@code max(2, min(8, 核数/4))}——最多吃掉机器的 1/4，且绝对不超过 8。
+     * 余量留给渲染线程 / 主线程 / 影子主循环。
+     * <p>
+     * <b>许可语义 = 「读盘线程正在跑」</b>：读盘段结束（无论成败）才归还。若读盘卡死，
+     * 该许可**永久不归还**——这是刻意的：它把「无限自旋」的受害面上限钉在 N 个核，
+     * 而不是让 32 个线程一起烧。槽位耗尽时新请求按「**无缓存**」直接回调（用户口径），
+     * 不排队。
+     */
+    private static final java.util.concurrent.Semaphore DISK_READ_PERMITS =
+            new java.util.concurrent.Semaphore(
+                    Math.max(2, Math.min(8, Runtime.getRuntime().availableProcessors() / 4)));
+
+    /**
+     * 单次影子读盘的**硬超时**（毫秒）：超时即按「**无缓存**」回调（用户口径，2026-09-19）。
+     * <p>
+     * 依据：正常读盘是亚秒级（§8.5 记 0.5 CPU-秒）；8 s 已远超任何「冷挂载 / 网络抖动」量级，
+     * 真触发就是 §8.5 那个不返回的读盘路径。超时后调用方走正常 miss 路径
+     * （{@code onDiskPublishMiss} → {@code DISK_READ_EMPTY}），本圈不再重读该柱——
+     * 即「当作无缓存」。<b>刻意不归还许可</b>：读盘线程仍在烧 CPU，归还等于放弃并发上限。
+     */
+    private static final long DISK_READ_TIMEOUT_MS = 8_000L;
+
+    /** 读盘超时定时器（单线程 daemon）。 */
+    private static final java.util.concurrent.ScheduledExecutorService DISK_READ_TIMER =
+            java.util.concurrent.Executors.newSingleThreadScheduledExecutor(r -> {
+                Thread t = new Thread(r, "hassium-shadow-disk-timeout");
+                t.setDaemon(true);
+                return t;
+            });
+
+    /** 读盘异常（超时 / 槽位耗尽）计数与日志节流。 */
+    private static final java.util.concurrent.atomic.AtomicLong DISK_READ_ANOMALIES =
+            new java.util.concurrent.atomic.AtomicLong();
+    private static final java.util.concurrent.atomic.AtomicLong DISK_READ_ANOMALY_LOG_MS =
+            new java.util.concurrent.atomic.AtomicLong(0L);
+
+    /**
+     * 【定点打点】在途读盘：key → (进入时刻, 柱坐标)。诊断 §8.5 的「进去不出来」。
+     * <p>
+     * 判据（2026-09-19 取证结论已确认为**真自旋**：同一批 32 个虚拟线程在 139 s 与 705 s
+     * 两次 dump 中身份与栈完全一致，相隔 9.5 分钟 ⟹ 进去不出来，不是高频调用）：
+     * <ul>
+     *   <li>{@code entered ≈ returned} 且本表恒非空 ⟹ 自旋；</li>
+     *   <li>{@code entered >> returned} ⟹ 高频调用（量的问题）。</li>
+     * </ul>
+     * 本表同时给出**卡住的柱坐标**——那才是能拿去复现 / 查盘上 NBT 的东西。
+     */
+    private record DiskReadInFlight(long startMs, ChunkPos pos, String dimension) {
+    }
+
+    private static final java.util.concurrent.ConcurrentHashMap<Long, DiskReadInFlight> DISK_READ_INFLIGHT =
+            new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.concurrent.atomic.AtomicLong DISK_READ_ENTERED =
+            new java.util.concurrent.atomic.AtomicLong();
+    private static final java.util.concurrent.atomic.AtomicLong DISK_READ_RETURNED =
+            new java.util.concurrent.atomic.AtomicLong();
+
+    /** 超过此耗时才认为「不正常」，打点才出声（正常读盘亚秒级）。 */
+    private static final long DISK_READ_STUCK_WARN_MS = 3_000L;
+
+    /** 打点看门狗周期（毫秒）。 */
+    private static final long DISK_READ_WATCHDOG_INTERVAL_MS = 5_000L;
+
+    static {
+        DISK_READ_TIMER.scheduleAtFixedRate(ShadowSeedServer::reportStuckDiskReads,
+                DISK_READ_WATCHDOG_INTERVAL_MS, DISK_READ_WATCHDOG_INTERVAL_MS,
+                java.util.concurrent.TimeUnit.MILLISECONDS);
+    }
+
+    /**
+     * 定点打点看门狗：把「在途超过 {@link #DISK_READ_STUCK_WARN_MS}」的读盘连坐标一起报出来。
+     * 正常态（无长耗时在途）静默，只在异常态出声，避免变成新的日志风暴。
+     */
+    private static void reportStuckDiskReads() {
+        if (DISK_READ_INFLIGHT.isEmpty()) {
+            return;
+        }
+        long now = System.currentTimeMillis();
+        long oldestMs = 0L;
+        java.util.List<String> stuck = new java.util.ArrayList<>(4);
+        for (java.util.Map.Entry<Long, DiskReadInFlight> e : DISK_READ_INFLIGHT.entrySet()) {
+            DiskReadInFlight inf = e.getValue();
+            long elapsed = now - inf.startMs();
+            if (elapsed > oldestMs) {
+                oldestMs = elapsed;
+            }
+            if (elapsed >= DISK_READ_STUCK_WARN_MS && stuck.size() < 8) {
+                stuck.add("(" + inf.pos().x + "," + inf.pos().z + ") " + elapsed + "ms "
+                        + inf.dimension());
+            }
+        }
+        if (oldestMs < DISK_READ_STUCK_WARN_MS) {
+            return; // 无异常长耗时：静默
+        }
+        LOGGER.warn("Hassium: [SHADOW_DISK] stuck reads inflight={} oldest={}ms entered={} returned={} "
+                        + "slotsFree={} | {}",
+                DISK_READ_INFLIGHT.size(), oldestMs, DISK_READ_ENTERED.get(), DISK_READ_RETURNED.get(),
+                DISK_READ_PERMITS.availablePermits(), stuck);
+    }
+
+    private static void logDiskReadAnomaly(String kind, ChunkPos pos) {
+        long n = DISK_READ_ANOMALIES.incrementAndGet();
+        long now = System.currentTimeMillis();
+        long last = DISK_READ_ANOMALY_LOG_MS.get();
+        if ((n == 1L || now - last >= 5_000L) && DISK_READ_ANOMALY_LOG_MS.compareAndSet(last, now)) {
+            LOGGER.warn("Hassium: shadow disk read {} ({}, {}) treated as no-cache — total {}; "
+                            + "if this keeps growing the shadow read path is stuck (handoff §8.5)",
+                    kind, pos.x, pos.z, n);
+        }
+    }
+
+    /**
      * 后台读盘 + 主线程回调。客户端主线程 miss（权威 hash 命中 / UNCHANGED）不得
      * 同步堵在 region 冷挂载与 NBT 解析上。无客户端执行器时退化为同步
      * {@link #loadFromDisk} 并在调用线程回调。
+     * <p>
+     * <b>三重护栏</b>（见 {@link #DISK_READ_PERMITS} / {@link #DISK_READ_TIMEOUT_MS}）：
+     * <ol>
+     *   <li>并发上限：拿不到许可 → 立即按「无缓存」回调，不排队；</li>
+     *   <li>硬超时：到点按「无缓存」回调，结果丢弃；</li>
+     *   <li>恰一次回调：超时与真实完成竞争，由 {@code settled} 保证只有一个生效。</li>
+     * </ol>
+     * 三者都收敛到「当作无缓存」，因此调用方（{@code scheduleAsyncDiskPublish}）无需区分。
      */
     public void loadFromDiskAsync(String dimension, ChunkPos pos,
                                   java.util.function.Consumer<LevelChunk> callback) {
@@ -1091,18 +1220,52 @@ public class ShadowSeedServer extends MinecraftServer {
             callback.accept(sync);
             return;
         }
+        // 护栏①：并发上限。拿不到许可 = 读盘通道已满（可能被卡死的读盘占死）→ 当作无缓存。
+        if (!DISK_READ_PERMITS.tryAcquire()) {
+            logDiskReadAnomaly("rejected (no slot)", pos);
+            dispatchDiskReadResult(pos, callback, null);
+            return;
+        }
+        java.util.concurrent.atomic.AtomicBoolean settled =
+                new java.util.concurrent.atomic.AtomicBoolean(false);
+        // 【定点打点】登记在途：看门狗据此报出「卡住的柱坐标 + 已卡多久」。
+        long inflightKey = DimensionKey.key(dimension, pos.x, pos.z);
+        DISK_READ_INFLIGHT.put(inflightKey,
+                new DiskReadInFlight(System.currentTimeMillis(), pos, dimension));
+        DISK_READ_ENTERED.incrementAndGet();
+        // 护栏②：硬超时。到期即按无缓存回调；许可**不归还**（读盘线程仍在跑）。
+        DISK_READ_TIMER.schedule(() -> {
+            if (settled.compareAndSet(false, true)) {
+                logDiskReadAnomaly("timeout", pos);
+                dispatchDiskReadResult(pos, callback, null);
+            }
+        }, DISK_READ_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
         executor.submit(() -> {
             LevelChunk loaded = null;
             try {
                 loaded = loadFromDisk(dimension, pos);
             } catch (Throwable t) {
                 LOGGER.debug("Hassium: async loadFromDisk failed for ({}, {})", pos.x, pos.z, t);
+            } finally {
+                // 读盘段已结束（成败都算）→ 归还额度 + 摘在途登记。
+                // 卡死时走不到这里：额度被永久占用（自旋受害面上限），在途登记也留着供看门狗报点。
+                DISK_READ_INFLIGHT.remove(inflightKey);
+                DISK_READ_RETURNED.incrementAndGet();
+                DISK_READ_PERMITS.release();
             }
-            LevelChunk result = loaded;
-            io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.execute(
-                    () -> callback.accept(result), pos,
-                    io.github.limuqy.mc.hassium.concurrent.TaskCategory.SAFE_TO_CANCEL);
+            // 护栏③：已超时则丢弃本次结果（调用方已按无缓存走过），避免双回调。
+            if (settled.compareAndSet(false, true)) {
+                dispatchDiskReadResult(pos, callback, loaded);
+            }
         }, io.github.limuqy.mc.hassium.concurrent.TaskCategory.SAFE_TO_CANCEL);
+    }
+
+    private static void dispatchDiskReadResult(ChunkPos pos,
+                                               java.util.function.Consumer<LevelChunk> callback,
+                                               LevelChunk value) {
+        io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.execute(
+                () -> callback.accept(value), pos,
+                io.github.limuqy.mc.hassium.concurrent.TaskCategory.SAFE_TO_CANCEL);
     }
 
     /** 官方加载产物为 ProtoChunk（ChunkSerializer.read 语义）：FULL 转换同款。 */
@@ -1294,6 +1457,20 @@ public class ShadowSeedServer extends MinecraftServer {
     /** B4：空气空壳占位已退役；注入源与 isPlaceholder/injectPlaceholder 均已删除（2026-09-18 夜②）。 */
 
     /**
+     * 已打印过「被 I2 扣下」诊断的柱（**每柱一次**，避免逐帧刷屏）。
+     * <p>
+     * 为什么要收敛：{@link #syncLightCorrect} 由 {@code confirmLightsCorrectIfConverged}
+     * 在 {@code drainReady} 里**每帧**对整张注入表调用一次；非权威柱必然被扣下，
+     * 于是同一批柱每秒重复打几千行（实测占单次飞行日志 **95%+**，把日志本身变成
+     * 主线程的负担）。
+     * <p>
+     * 摘除时机 = 该柱**不再**被扣（{@link #syncLightCorrect} 走到实际置位分支）→ 下次再被
+     * 扣下时会重新打印一行；会话结束（{@link #saveAll()}）整表清空。
+     */
+    private final java.util.Set<Long> withheldLogged =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /**
      * 与原版 {@code ChunkSerializer} 对齐：{@code isLightCorrect} 决定落盘是否写
      * {@code isLightOn}。热路径只标脏；定时/退出从 ChunkMap 刷当前层。光环/交付柱同一语义。
      */
@@ -1304,9 +1481,27 @@ public class ShadowSeedServer extends MinecraftServer {
         if (chunk.isLightCorrect() == correct) {
             return;
         }
-        chunk.setLightCorrect(correct);
         ChunkPos pos = chunk.getPos();
         String dimension = LevelCompat.getDimensionId(chunkLevel(chunk));
+        long key = io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z);
+        // 【I2 唯一收口（2026-09-19）】只有「3×3 全在场时算出的光」才是权威的，才允许标
+        // isLightCorrect=true。本方法是全仓**唯一**把该标志置真的地方（另两个调用点
+        // persistAfterClientLightPush / confirmLightsCorrectIfConverged 都经此），
+        // 而它随 NBT 落盘成 isLightOn → 后续会话 diskNeedRelight=false 直接复用 →
+        // **一条降级放行的坏光会被永久复用**（"R2 仍有黑柱"的候选机制，handoff §0.2）。
+        // 清位（correct=false）不受限：作废永远安全。
+        if (correct && !ShadowLightCompute.isColumnLightAuthoritative(dimension, pos)) {
+            // 每柱只打一次：本柱一旦被扣过就不再重复（见 withheldLogged）。
+            if (withheldLogged.add(key)) {
+                DebugLogger.info(DebugLogger.LogType.LIGHT,
+                        "[SHADOW_LIGHT] withhold isLightCorrect (not authoritative) ({}, {}) dim={}",
+                        pos.x, pos.z, dimension);
+            }
+            return;
+        }
+        // 不再被扣（权威 / 清位）：撤掉「已打印」标记，将来重新被扣时再报一次。
+        withheldLogged.remove(key);
+        chunk.setLightCorrect(correct);
         if (correct) {
             persistLightReady(dimension, pos);
         } else {
@@ -1483,6 +1678,8 @@ public class ShadowSeedServer extends MinecraftServer {
      */
     public void saveAll() {
         long saveStartNs = System.nanoTime();
+        // 会话结束：撤掉逐柱诊断去重标记，下一会话同柱被扣时仍能各报一次。
+        withheldLogged.clear();
         int dirty = io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes.dirtyKeys().size();
         LOGGER.debug("Hassium: Shadow saveAll start, injected={} dirty={} shadow={}",
                 injectedChunks.size(), dirty,

@@ -123,6 +123,13 @@ public abstract class MixinPlayerChunkSender {
         if (io.github.limuqy.mc.hassium.server.RuntimeServerContext.isShadowServerContext()) {
             // S3 接法 B：影子上下文官方包转发真实客户端，不进 dummy、也不走真服抑制逻辑
             // （带来源维度：原版区块/光照包无维度字段，跨维直通会把旧维度柱落进新维度）
+            // <p>
+            // 【2026-09-19 观察】本分支**当前不可达**：同类的
+            // {@link #hassium$skipShadowChunkPackets} 是 {@code sendChunk} 的
+            // {@code @Inject(at = HEAD, cancellable = true)} 且影子上下文直接 {@code ci.cancel()}
+            // → 方法体不执行，本 {@code @Redirect} 站点永不触达。1.21.1+ 的实际 B 族入口是
+            // {@code MixinChunkMap.playerLoadedChunk}。保留本分支不删：删它零收益（本就不可达），
+            // 而一旦上方 HEAD 取消将来被放开，这里仍是正确的转发点。
             io.github.limuqy.mc.hassium.shadow.track.ShadowOfficialPacketBridge
                     .forwardToRealClient(packet,
                             io.github.limuqy.mc.hassium.compat.LevelCompat

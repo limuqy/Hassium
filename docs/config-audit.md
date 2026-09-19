@@ -23,9 +23,9 @@
 
 键名前缀：区块核心 `chunk.*` / 服务端传输面 `master.*` / 存储 `storage.*` / 兼容 `compat.*` / 调试 `debug.*`。说明列与 `ConfigSchema` commentZh 一致（= TOML 注释中文行）。
 
-### A. CLIENT 键（client.toml / client spec，25 键）
+### A. CLIENT 键（client.toml / client spec，26 键）
 
-**A1. chunk.\*（14 键，区块核心）**
+**A1. chunk.\*（15 键，区块核心）**
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
@@ -43,6 +43,8 @@
 | `chunk.seedGenEnabled` | `false` | 是否启用 SeedGen（本地生成 pristine 区块；需双端同版本，默认关）。服务端开启时会下发世界种子 |
 | `chunk.viewDistanceExtensionEnabled` | `true` | 超视渲染 OVD（影子双窗：clientRD>serverVD 时本地源回填环带） |
 | `chunk.maxRenderDistance` | `16` | 超视渲染 effective clientRD 上限 |
+| `chunk.lightHaloRadius` | `1` | 光照光环半径（环）：计算/拉取域 = 服务端视距 + 此值，专供权威边界柱补齐 3×3 邻域（对齐原版 `ChunkStatus.LIGHT` range=1）；只算不交付。0=关（回退旧语义）。上限 1 = `ShadowPullRadii.AUTHORITY_MARGIN − 1`（客户端窗口 `contains(VD+R)` 的切比雪夫外接盒是 `cheb ≤ VD+R+1`，服务端签发是 `cheb ≤ VD+AUTHORITY_MARGIN`，对齐要求 `R+1 ≤ AUTHORITY_MARGIN`） |
+
 
 **A2. debug.\*（CLIENT 10 键；与 SERVER 同名键共用路径，scope 隔离）**
 
@@ -138,14 +140,14 @@
 
 | 分类（前缀） | scope | 键数 | 默认关 / 特殊 |
 |------|--------|------|----------------|
-| `chunk.*` | CLIENT | 14 | `seedGenEnabled`=false |
+| `chunk.*` | CLIENT | 15 | `seedGenEnabled`=false |
 | `debug.*` | CLIENT | 10 | 全 false（`networkMetricsAutoReset`=true） |
 | `storage.*` | SERVER | 2 | `enabled`=false |
 | `master.*` | SERVER | 17 | `enabledOnLan`=false；`entity*` 键族 = 实体网络优化 **9 键**（分层更新总开关 + 两张逗号分隔档位表 + 每档热点阈值/倍率 + 倍率上限 + 帧预算压力 + 错峰，默认全开） |
 | `compat.*` | SERVER | 2 | `requireClientMod`=false |
 | `debug.*` | SERVER | 5 | 全 false |
 | `chunk.lightStrip` / `chunk.seedGenEnabled` | SERVER | 2 | `seedGenEnabled`=false |
-| **合计** | | **52** | |
+| **合计** | | **53** | |
 
 ## 五、审计方法
 

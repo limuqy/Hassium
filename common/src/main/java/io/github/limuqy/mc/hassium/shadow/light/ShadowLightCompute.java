@@ -148,6 +148,44 @@ public final class ShadowLightCompute {
     private static final ConcurrentHashMap<Long, net.minecraft.world.level.chunk.ChunkAccess>
             nativeLightChunks = new ConcurrentHashMap<>();
 
+    /**
+     * 【会话级 · 2026-09-19 任务 #36】本会话 LIGHT 步**已完成**的柱（**与 I2 无关**）。
+     * <p>
+     * 语义 = 原版 {@code ChunkStatus.LIGHT}「本会话已完成」这个**事实**，不是「权威」这个
+     * **判断**（{@link #isColumnLightAuthoritative}）。原版推送触发点是
+     * {@code ChunkMap.prepareTickingChunk} 的 {@code getChunkRangeFuture(holder, 1, FULL)}
+     * ——该柱及 3×3 全部到 {@code FULL}（range=1）才发，**发包处不看光**；而状态链
+     * {@code LIGHT → SPAWN → FULL} 蕴含「本会话 LIGHT 已完成」。
+     * <p>
+     * 为什么不能复用 {@code isLightCorrect} / {@code promotedClean}：两者都是**权威**语义，
+     * 严格强于「LIGHT 已跑完」——前者被 I2 扣留，后者要求 3×3 真齐全。飞行中的前沿柱
+     * （向外邻柱在窗外）结构性地永远拿不到它们 → 被推送门永久挡下 → 永久洞
+     * （handoff §「飞行场景的两个空洞」①）。
+     * <p>
+     * 写入点 = {@link #completeLight}（LIGHT future 完成、唯一完成收口），保证早于同一柱的
+     * {@code pushReady}。清除点 = 卸载（{@code cancelChunkWork}）/ 断连
+     * （{@code onDisconnect}）——与 {@link #lightInitPassed} 同生命周期。
+     */
+    private static final java.util.Set<Long> lightRan = ConcurrentHashMap.newKeySet();
+
+    /**
+     * 【S2c 迟到重触发】登记「降级放行」的柱（{@link LightNeighborhoodGate#wasPromotedClean}
+     * 为假 → 其 {@code lightChunk} 跑的时候 3×3 还没齐）→ 邻柱补齐后重新过门算光并重交付。
+     * <p>
+     * 为什么必须重算：降级放行时缺邻被引擎当 {@code Blocks.BEDROCK} 挡天光 → 该柱偏暗；
+     * 而光一旦被标 {@code isLightCorrect} 就会**永久复用**（"R2 仍有黑柱"的候选机制）。
+     * S2b 已把 {@code isLightCorrect} 对非权威柱扣下，本集合负责**把它补回来**——
+     * 否则那些柱每会话都重算（只有惩罚没有修复）。
+     * <p>
+     * 触发点 = {@link #finishLight}（任一柱 LIGHT 完成时复查其 3×3 覆盖的登记项）。
+     * 重算条件 = {@link LightNeighborhoodGate#isNeighborhoodLightReady}（此时再过门必是干净放行）。
+     * <p>
+     * <b>交付不受本集合门控</b>（刻意）：降级柱照常 {@code pushReady}——不交付会在客户端留一个
+     * 空洞（虚空），比一个偏暗的柱更显眼，原版还会把它当未加载区。所以是「先交付 + 后覆盖」。
+     */
+    private static final ConcurrentHashMap<Long, PendingAuth> pendingAuthoritative =
+            new ConcurrentHashMap<>();
+
     // ===== 影子算光「重复计算」量化探针 =====
     /**
      * 纯只读计数（不改变任何行为），随 {@code roundN.json} 的顶层 {@code lightProbe} 块输出，
@@ -177,6 +215,9 @@ public final class ShadowLightCompute {
     private static final AtomicLong probeGatePumpCalls = new AtomicLong();
     private static final AtomicLong probeGateTryPromoteCalls = new AtomicLong();
     private static final AtomicLong probeGatePromoted = new AtomicLong();
+    /** S2c：降级放行柱的**首次**登记次数 / 邻域补齐后真正重算重交付的次数。 */
+    private static final AtomicLong probePendingAuthRegistered = new AtomicLong();
+    private static final AtomicLong probePendingAuthRelight = new AtomicLong();
 
     /** 轮次边界清零（{@code ScenarioEngine.resetNetworkStatsForRound2}）。 */
     public static void resetLightProbeCounters() {
@@ -191,6 +232,8 @@ public final class ShadowLightCompute {
         probeGatePumpCalls.set(0);
         probeGateTryPromoteCalls.set(0);
         probeGatePromoted.set(0);
+        probePendingAuthRegistered.set(0);
+        probePendingAuthRelight.set(0);
     }
 
     /** 追加顶层 {@code "lightProbe": {...},} 块（冒烟 JSON 顶层键只增不改名）。 */
@@ -210,7 +253,9 @@ public final class ShadowLightCompute {
         probeField(sb, "reusableProbeCalls", probeReusableProbeCalls.get());
         probeField(sb, "gatePumpCalls", probeGatePumpCalls.get());
         probeField(sb, "gateTryPromoteCalls", probeGateTryPromoteCalls.get());
-        probeLastField(sb, "gatePromoted", probeGatePromoted.get());
+        probeField(sb, "gatePromoted", probeGatePromoted.get());
+        probeField(sb, "pendingAuthRegistered", probePendingAuthRegistered.get());
+        probeLastField(sb, "pendingAuthRelight", probePendingAuthRelight.get());
         sb.append("  },\n");
     }
 
@@ -652,6 +697,62 @@ public final class ShadowLightCompute {
     }
 
     /**
+     * <b>I2 判据</b>：该柱的光是否**权威**（3×3 真齐全时算出来的）。
+     * <p>
+     * = 该柱自身**完整**齐套放行（{@link LightNeighborhoodGate#wasPromotedClean}）。
+     * <p>
+     * <b>为什么不需要另查 8 邻</b>：{@code promotedClean} 在 promote 那一刻已断言
+     * 「8 邻**全部**过了 INITIALIZE_LIGHT」——窗内无缺邻 <b>且</b> 无窗外邻柱
+     * （{@code notInjected==0 && injectedNotInit==0 && outsideWindow==0}）。
+     * 这正是原版 {@code ChunkStatus.LIGHT range=1 + hasLoadDependencies} 的依赖语义，
+     * 也是 {@code ThreadedLevelLightEngine.lightChunk}「入口清假、引擎跑完才置真」的落盘形式
+     * （缺邻时任务不会完成 → 落盘 {@code isLightOn=false} → 读档重算 LIGHT）。
+     * <p>
+     * <b>2026-09-19（S5）</b>：{@code outsideWindow} 也算缺邻。窗外邻柱虽不是我们的拉取责任，
+     * 但引擎照样把它当基岩挡光 → 该柱的光在那个方向就是错的，**不得**标「光照完成」。
+     * 直接后果：光环柱（计算域最外圈，外侧邻柱必然缺席）永不落盘，下次进服重算；
+     * 权威柱（3×3 必在计算域内，见 {@code ChunkShapeCompat.containsDilated}）正常落盘。
+     * <p>
+     * <b>为什么不另查 8 邻 {@code wasPromoted}</b>（2026-09-19 修正）：REUSE 柱（读盘复用光）
+     * 按设计不进齐套门（{@code startLightBarrier} 按 metric 跳过），永远不会 {@code wasPromoted}，
+     * 于是 R2 里任何挨着缓存柱的柱都被判非权威。已删除该循环。
+     * <p>
+     * <b>三处统一判据</b>：标 {@code isLightCorrect} 落盘（{@code ShadowSeedServer.syncLightCorrect}
+     * 唯一收口）/ 复用（{@link #isLightReusable} 经 {@code isLightCorrect} 传递）/
+     * S2c 重算登记（{@link #pendingAuthoritative}）。
+     * 降级放行的柱，`lightChunk` 时缺邻被引擎当 {@code Blocks.BEDROCK} 挡天光 → 光可能偏暗；
+     * 一旦被标 {@code isLightCorrect} 就会**永久复用**（"R2 仍有黑柱"的候选机制，见 handoff §0.2）。
+     * <p>
+     * <b>刻意不连坐</b>：邻柱自身是否 clean 不参与判定——否则一个降级邻柱会污染 9 柱、成片不交付。
+     * 代价：邻柱若自身偏暗，本柱从该方向进光也偏低（**檐下水平进光**正是这种场景），记为已知残差。
+     * <p>
+     * <b>刻意不门控交付</b>：见 {@link #pendingAuthoritative}。
+     */
+    public static boolean isColumnLightAuthoritative(String dimension, ChunkPos pos) {
+        if (dimension == null || pos == null) {
+            return false;
+        }
+        return LightNeighborhoodGate.wasPromotedClean(DimensionKey.key(dimension, pos.x, pos.z));
+    }
+
+    /**
+     * 【#36】该柱**本会话是否跑完过 LIGHT 步**（与 I2 无关；见 {@link #lightRan}）。
+     * <p>
+     * 这是推送门的判据（{@code ShadowTrackingSession.isPushableToClient}）：前沿柱的
+     * LIGHT 也跑完了 → 照推（与 vanilla {@code ChunkStatus.FULL} 蕴含 LIGHT 完成一致），
+     * 不再出现「永远拿不到 promotedClean → 永久洞」。偏暗由 S2c/后续重交付覆盖。
+     * <p>
+     * 注意：它是**事实**判据，**不是**落盘判据——落盘（{@code isLightCorrect}）仍走
+     * {@link #isColumnLightAuthoritative}（I2/S5），两者刻意不同口径。
+     */
+    public static boolean lightRanThisSession(String dimension, ChunkPos pos) {
+        if (dimension == null || pos == null) {
+            return false;
+        }
+        return lightRan.contains(DimensionKey.key(dimension, pos.x, pos.z));
+    }
+
+    /**
      * 整柱 REUSE/桥交付弱门：只看 {@code isLightCorrect()}。
      * {@code lightCompletedAfterLightTask} 集合已于 ④ 删除（只写不读）。
      */
@@ -819,6 +920,9 @@ public final class ShadowLightCompute {
             notePublishBlocked(renderOnly, "seedGenAwaitingCompare", pos);
             return false;
         }
+        // 【S6 推送门】不在此处判：本函数在**柱还没解析出来**（注入表未命中 → 读盘）时就会返回，
+        // 在这里判只会把「状态未知」误判成「光照未完成」，把整条 OVD 读盘路径掐掉（实测 R2 被挡
+        // 105 柱 = 整圈光环）。真正的门在拿得到柱的 `pushReady`。
         // 在途网络全量只拦「无本地柱」的缓存 publish：已有 injected 非占位时本地基线即 §3.2
         // 可交付数据（UNCHANGED/缓存回放），不因 bootGrid 空基线 pull 在途而误挡（phaseA
         // redeliver-publish-failed 实证）。OVD renderOnly 永不 pull，同样放行。
@@ -882,15 +986,57 @@ public final class ShadowLightCompute {
     private static final java.util.Set<Long> DISK_PUBLISH_INFLIGHT =
             java.util.concurrent.ConcurrentHashMap.newKeySet();
 
+    /**
+     * 【#2】本会话「**已确认盘上没有**」的柱（= 上一次读盘返回 null）。
+     * <p>
+     * 语义（用户口径）：「只有**新进圈**的柱需要读一次，不用每次空槽位都去读一次」。
+     * 命中本集合时 {@link #scheduleAsyncDiskPublish} 直接返回 {@code true}（= 已处理），
+     * **不再调度读盘**，也不走「调度失败→同步读盘」兜底。
+     * <p>
+     * 清除点 = {@link #pruneDiskReadEmpty()}：该柱**离开等待窗**（计算域 ∪ OVD 带）即摘除，
+     * 于是「脱离圈后再进圈」会重新获得一次读盘机会。断连清空。
+     * <p>
+     * 为什么必须有：空槽位若每次调用都重读，就是「读→null→再读」的稳态自旋
+     * （实测 17:56:38 悬崖后 58 个虚拟线程恒定卡在读盘链、11 分钟无任何完成日志）。
+     */
+    private static final java.util.Set<Long> DISK_READ_EMPTY =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+
     /** 断连清理：丢弃在途异步读盘标记，避免下一会话同柱被误判为已在途。 */
     public static void clearDiskPublishInFlight() {
         DISK_PUBLISH_INFLIGHT.clear();
+    }
+
+    /** 断连清理：丢弃「已确认盘上没有」标记（新会话可重新读一次）。 */
+    public static void clearDiskReadEmpty() {
+        DISK_READ_EMPTY.clear();
+    }
+
+    /**
+     * 【#2】摘除已离开等待窗的「盘上没有」标记 —— 让「出圈再进圈」重新获得一次读盘机会。
+     * <p>
+     * 由 {@link #drainReady} 每帧在集合非空时调用；集合只含**读盘落空**的柱，规模有界。
+     * 窗未知时 {@code isInNeighborhoodWindow} 保守返回 true → 不摘除（安全侧：宁可不重读）。
+     */
+    public static void pruneDiskReadEmpty() {
+        if (DISK_READ_EMPTY.isEmpty()) {
+            return;
+        }
+        ShadowTrackingSession session = ShadowTrackingSession.getInstance();
+        if (session == null) {
+            return; // 会话未就绪：不摘（安全侧：宁可不重读）
+        }
+        DISK_READ_EMPTY.removeIf(key -> !session.isInNeighborhoodWindow(
+                DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key)));
     }
 
     private static boolean scheduleAsyncDiskPublish(ShadowSeedServer server, String dimension,
                                                     ChunkPos pos, boolean localGeneration,
                                                     boolean renderOnly) {
         long key = DimensionKey.key(dimension, pos.x, pos.z);
+        if (DISK_READ_EMPTY.contains(key)) {
+            return true; // 【#2】本圈已读过且盘上没有：不再反复读同一空槽位
+        }
         if (!DISK_PUBLISH_INFLIGHT.add(key)) {
             return true; // 已在途：调用方按「会交付」处理，等回调
         }
@@ -914,10 +1060,26 @@ public final class ShadowLightCompute {
                 if (clientDimensionMismatch(dimension)) {
                     return;
                 }
+                // 【读到后复检（2026-09-19 用户口径）】读盘期间该柱可能已被别的路径注入——
+                // 此时影子端内存里的那份才是最新，而盘上读回的是**尚未 flush 的脏槽旧副本**；
+                // 注入会把它覆盖回去（内存里更新的柱被旧数据打回）。故一律丢弃本次盘上结果：
+                // 不 inject、不记 DISK_READ_EMPTY（盘上其实有，只是不需要）、不算 miss。
+                // 读前短路（ShadowStorageManager.readChunk 的 injected 判据）挡的是同一风险的
+                // 另一侧窗口；两处都在才真正关掉 TOCTOU。
+                if (server.injectedChunk(dimension, pos.x, pos.z) != null) {
+                    DebugLogger.info(DebugLogger.LogType.LIGHT,
+                            "[SHADOW_LIGHT] disk read discarded, column already in shadow memory "
+                                    + "({}, {}) dim={}", pos.x, pos.z, dimension);
+                    return;
+                }
                 if (loaded == null) {
+                    // 【#2】记下「本圈盘上没有」：后续对同一柱不再反复调度读盘（出圈才摘除）。
+                    DISK_READ_EMPTY.add(key);
                     onDiskPublishMiss(dimension, pos, localGeneration, renderOnly);
                     return;
                 }
+                // 读到了：撤掉「空」标记（该柱已注入，后续内存命中；将来被回收+再进圈可重读）。
+                DISK_READ_EMPTY.remove(key);
                 server.injectLoadedChunk(dimension, pos, loaded);
                 accountLightFromChunk(dimension, pos, loaded);
                 net.minecraft.server.level.ServerLevel level = server.level(dimension);
@@ -1409,6 +1571,14 @@ public final class ShadowLightCompute {
         }
         // 【钉死】有引擎光且可复用 → REUSE；否则必须齐套门（禁止去门直算，见 MEMORY Rules）。
         if (isVanillaAlignedClientPackReady(resolved, pos, chunk)) {
+            // 本分支**不跑** initializeLightImmediately，故必须自行补标 lightInitPassed：
+            // 该集合会在卸载（cancelChunkWork）时被摘，而重注入若走本快路径就永远不会补回来
+            // → 本柱对**所有邻柱**恒为「已注入但未过 INITIALIZE_LIGHT」('I') → 邻柱齐套门
+            // 只能等软超时降级放行。实测（2026-09-19 20:29 run）：129 柱 waited≥5s、最长 25.2s，
+            // 探针柱 (-41,-22) 卡 26.7s 的 'I' 邻柱 (-40,-21) 正是「73903 INIT done → 73903 被
+            // unload 摘标 → 74034 重注入走 lit=true 快路径未补标」。同形于下方 reuseBarrier
+            // 分支的既有修法。语义：isLightCorrect() ⟹ 引擎层是齐的 ⟹ 邻柱可写入，标记属实。
+            lightInitPassed.add(key);
             generated.put(key, new GenEntry(chunk, level, isLightReusable(server, pos, chunk), false, resolvedOrigin));
             pump();
             return;
@@ -1434,6 +1604,10 @@ public final class ShadowLightCompute {
         String dim = DimensionKey.dimensionOf(key);
         ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
         if (lightReuse && chunk.isLightCorrect()) {
+            // 同 enqueueInjectedForLight 的对齐快路径：本分支不跑 initializeLightImmediately，
+            // 必须自行补标 lightInitPassed，否则该柱对邻柱恒为 'I'（卸载摘标 + 重注入走快路径
+            // 不补标 → 邻柱齐套门白等超时）。见上方该分支的实测说明。
+            lightInitPassed.add(key);
             generated.put(key, new GenEntry(chunk, level, true, renderOnly, origin));
             pump();
             return;
@@ -1565,7 +1739,7 @@ public final class ShadowLightCompute {
             // B6：与 deliverLocal / pushReady 同一口径
             if (!ShadowTrackingSession.isDeliverableToClient(pos.x, pos.z)) {
                 DebugLogger.info(DebugLogger.LogType.LIGHT,
-                        "[SHADOW_LIGHT] native light skip beyond view+margin ({}, {})",
+                        "[SHADOW_LIGHT] native light skip outside authority window ({}, {})",
                         pos.x, pos.z);
                 return;
             }
@@ -2038,8 +2212,24 @@ public final class ShadowLightCompute {
         if (t.metric != LightMetric.REUSE_CACHE
                 && t.chunk != null
                 && !LightNeighborhoodGate.wasPromoted(t.key)) {
+            // 【顺序钉死】initializeLightImmediately 必须在 isAwaiting 短路**之前**：
+            // 它是幂等的「确保 phase-1 INITIALIZE 跑过」副作用源，并负责 lightInitPassed 标记。
+            // 卸载（cancelChunkWork）会同时摘掉 lightInitialized + lightInitPassed，此后重投
+            // 必须靠这里重跑 INITIALIZE 来重标；若被短路挡在前面，该柱就对**所有邻柱**恒为
+            // 「已注入但未过 INITIALIZE」('I') → 邻柱齐套门白等软超时降级放行。
+            // 实测回归（2026-09-19 20:29 run）：(-40,-21) 于 73903 INIT done 后立刻被 unload
+            // 摘标，73904 起其邻柱 (-41,-22) 一路读到 'I'，卡门 26.7s。
             if (t.level != null) {
                 initializeLightImmediately(server, t.key, t.chunk, t.level);
+            }
+            // 【不得重复入队】enqueue 是 REPLACE 语义：会换掉 AwaitingEntry 对象，而
+            // pumpGateReady 里 tryPromote 的放行是**条件移除** `awaiting.remove(key, entry)`
+            // ——条目被换过即移除失败、本次 promote 静默丢弃。实测（2026-09-19 飞行）单柱
+            // 30s 内被重入 149 次（稳定 5 次/s），该柱因此在等待期间永远 promote 不出去，
+            // 只能等 NEIGHBORHOOD_HARD_TIMEOUT_MS，前沿柱首投延迟 +16~20s。
+            // 等待中的条目由 pumpGateReady 每帧扫描（无独立事件源的设计），无需重新入队。
+            if (LightNeighborhoodGate.isAwaiting(t.key)) {
+                return;
             }
             LightNeighborhoodGate.enqueue(t.key, DimensionKey.dimensionOf(t.key),
                     new net.minecraft.world.level.ChunkPos(
@@ -2091,6 +2281,16 @@ public final class ShadowLightCompute {
                             lightChunkHasExistingLight(t.metric == LightMetric.REUSE_CACHE));
             io.github.limuqy.mc.hassium.compat.ShadowServerCompat
                     .initializeNativeLight(level, inf.nativeChunk)
+                    .thenRun(() -> {
+                        // 本分支**确实**跑了 INITIALIZE（initializeNativeLight），故**无条件**标记：
+                        // 不标记，邻柱的齐套判定就会把本柱当成「已注入但未过 INITIALIZE_LIGHT」，
+                        // 白等软超时后降级放行（降级 → 非权威 → 光被扣下不落盘）。
+                        // 【2026-09-19 修正】原实现只在 metric==REUSE_CACHE 时标记，靠
+                        // startLightBarrier 门控分支的 initializeLightImmediately 为 RECOMPUTE
+                        // 柱代标；但卸载会摘掉该标记，而代标路径可能被短路 → RECOMPUTE 柱恒为 'I'。
+                        // 标记点就该在**真正跑完 INITIALIZE 的地方**，不依赖调用方是否代标。
+                        lightInitPassed.add(t.key);
+                    })
                     .thenCompose(ignored -> io.github.limuqy.mc.hassium.compat.ShadowServerCompat
                             .completeNativeLight(level, inf.nativeChunk))
                     .whenComplete((ignored, throwable) -> {
@@ -2111,6 +2311,9 @@ public final class ShadowLightCompute {
         if (!inflightLight.remove(inf.key, inf)) {
             return false;
         }
+        // 【#36】本会话 LIGHT 步已完成（与 I2 无关）：推送门用它，不再依赖 isLightCorrect。
+        // 降级放行的柱同样在此置位——它们的光确实算过（只是缺邻，可能偏暗），必须照推。
+        lightRan.add(inf.key);
         HassiumTaskExecutor executor = HassiumTaskExecutor.getClient();
         if (executor == null || !executor.isRunning() || !isEnabled()) {
             return true;
@@ -2182,8 +2385,206 @@ public final class ShadowLightCompute {
         if (server != null && task.chunk != null) {
             server.persistAfterClientLightPush(task.chunk, converged);
         }
+        // 【S2c 迟到重触发】本柱降级放行 → 登记，等邻域补齐后重算重交付；
+        // 干净放行 → 撤销登记（可能是重算后的第二轮）。再复查 3×3 覆盖到的登记项：
+        // 本柱（刚过 INITIALIZE 或刚算完光）可能正是邻柱等的最后一块拼图。
+        if (server != null) {
+            boolean repaired = false;
+            if (task.metric != LightMetric.REUSE_CACHE) {
+                // REUSE 柱不进齐套门 → wasPromotedClean 恒假，但它的光是读盘复用来的、
+                // 本来就权威（chunk.isLightCorrect() 为真）。不能拿 I2 判它，更不能登记重算。
+                if (isColumnLightAuthoritative(dimension, pos)) {
+                    // 【事件源】曾登记为降级、现在干净了 = 「降级被修复」（见 recheckAuthoritativeNeighbors）。
+                    repaired = pendingAuthoritative.remove(task.key) != null;
+                } else {
+                    registerPendingAuthoritative(dimension, pos, task.renderOnly, task.traceOrigin);
+                }
+            }
+            recheckPendingAuthoritative(server, dimension, pos);
+            if (repaired) {
+                recheckAuthoritativeNeighbors(server, dimension, pos);
+            }
+        }
         if (inflightLight.size() < PIPELINE_LOW_WATER && hasStartablePendingWork() && isEnabled()) {
             pump();
+        }
+    }
+
+    /** 【S2c】登记降级放行的柱（首次登记打点；REPLACE 覆盖，保持后到者上下文）。 */
+    private static void registerPendingAuthoritative(String dimension, ChunkPos pos,
+                                                     boolean renderOnly, TraceOrigin traceOrigin) {
+        if (dimension == null || pos == null) {
+            return;
+        }
+        PendingAuth entry = new PendingAuth(dimension, new ChunkPos(pos.x, pos.z),
+                renderOnly, traceOrigin,
+                LightNeighborhoodGate.inWindowReadyNeighborCount(dimension, pos));
+        if (pendingAuthoritative.put(DimensionKey.key(dimension, pos.x, pos.z), entry) == null) {
+            probePendingAuthRegistered.incrementAndGet();
+            DebugLogger.info(DebugLogger.LogType.LIGHT,
+                    "[SHADOW_LIGHT] pending authoritative ({}, {}) dim={} pending={}",
+                    pos.x, pos.z, dimension, pendingAuthoritative.size());
+        }
+    }
+
+    /**
+     * 【S2c】复查 {@code center} 的 3×3 覆盖到的登记项：邻域已可传播的柱 → 重新过齐套门
+     * （{@link LightNeighborhoodGate#rearm} + {@code enqueue} + {@code tryPromote}）→ 干净放行
+     * → LIGHT → {@link #finishLight} 再走一遍（此时 I2 为真 → 落盘 + 重交付）。
+     * <p>
+     * 只复查 3×3：一个登记项只可能因**自己 8 邻之一**的状态变化而变成可传播，而状态变化只发生在
+     * 该邻柱的 INITIALIZE / LIGHT 完成时——那些时刻的 {@link #finishLight} 都会复查到自己头上。
+     * <p>
+     * 就地 promote（不靠 {@code pump} + {@code pumpGateReady}）：邻域已就绪，{@code tryPromote}
+     * 必立即放行；若交给消费循环，本柱既不在 pending/generated/delta 任一队列、而
+     * {@code hasStartablePendingWork()} 又不看齐套队列 → 可能等不到下一次 pump（活性缺口）。
+     */
+    private static void recheckPendingAuthoritative(ShadowSeedServer server,
+                                                    String dimension, ChunkPos center) {
+        if (server == null || dimension == null || center == null || pendingAuthoritative.isEmpty()) {
+            return;
+        }
+        List<LightTask> tasks = null;
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                long key = DimensionKey.key(dimension, center.x + dx, center.z + dz);
+                PendingAuth pending = pendingAuthoritative.get(key);
+                if (pending == null) {
+                    continue;
+                }
+                net.minecraft.world.level.chunk.LevelChunk chunk = server.injectedChunk(
+                        pending.dimension(), pending.pos().x, pending.pos().z);
+                if (chunk == null) {
+                    // 已卸载 / 尚未注入：条目作废。重新加载会走完整投递 + 算光路径。
+                    pendingAuthoritative.remove(key, pending);
+                    continue;
+                }
+                if (!LightNeighborhoodGate.isNeighborhoodLightReady(pending.dimension(), pending.pos())) {
+                    continue; // 还缺邻（窗内）：现在重算必然再降级一轮，等下一次复查
+                }
+                // 【进展门（2026-09-19 任务 #37）】邻域**自登记以来**没有新进展就不重算。
+                // isNeighborhoodLightReady 是**单调**判据（窗内邻柱 init 过就永真），而本柱若
+                // 仍带窗外缺邻，重算后 promotedClean 依旧为假 → finishLight 会再次登记 → 无门
+                // 即「finishLight → recheck → re-light → finishLight」自激（互触同样成立）。
+                // 计数单调不减，故每柱最多因 8 个邻柱各自「新过 INITIALIZE」而重算，有界。
+                if (LightNeighborhoodGate.inWindowReadyNeighborCount(
+                        pending.dimension(), pending.pos()) <= pending.readyNeighbors()) {
+                    continue;
+                }
+                if (!pendingAuthoritative.remove(key, pending)) {
+                    continue;
+                }
+                net.minecraft.server.level.ServerLevel level = server.level(pending.dimension());
+                if (level == null) {
+                    continue;
+                }
+                // rearm 后重入齐套门：promoted 已清，tryPromote 会用当前（已齐套）邻域重算
+                // promotedClean → I2 转真；屏障内 LIGHT 重跑，finishLight 落盘 + 重交付。
+                LightNeighborhoodGate.rearm(key);
+                LightNeighborhoodGate.enqueue(key, pending.dimension(), pending.pos(),
+                        new GateContext(null, chunk, level, LightMetric.RECOMPUTE,
+                                pending.renderOnly(), pending.traceOrigin()));
+                Object context = LightNeighborhoodGate.tryPromote(server, key);
+                if (!(context instanceof GateContext gateCtx)) {
+                    // 并发 REPLACE / cancel：本轮放弃，重新登记等下次复查
+                    registerPendingAuthoritative(pending.dimension(), pending.pos(),
+                            pending.renderOnly(), pending.traceOrigin());
+                    continue;
+                }
+                if (tasks == null) {
+                    tasks = new ArrayList<>(4);
+                }
+                tasks.add(gateCtx.toLightTask(key));
+                probePendingAuthRelight.incrementAndGet();
+                DebugLogger.info(DebugLogger.LogType.LIGHT,
+                        "[SHADOW_LIGHT] re-light after neighborhood ready ({}, {}) dim={}",
+                        pending.pos().x, pending.pos().z, pending.dimension());
+            }
+        }
+        if (tasks != null) {
+            submitLightBatch(server, tasks);
+        }
+    }
+
+    /**
+     * 【降级修复 → 单跳通知权威邻居重投】（2026-09-19 用户拍板：epoch 判据、不加开关、
+     * 不级联、3×3 不齐即弃）。
+     * <p>
+     * <b>为什么需要</b>：一柱能成为权威柱（{@code promotedClean}）只要求 promote 时邻柱
+     * **过了 INITIALIZE**，**不要求邻柱自身 clean**。于是权威柱 A 可能是在邻柱 N 还是
+     * 「降级低光」时算出来的；N 后来被 S2c 重算成干净光后，**A 不会被重算**
+     * （A 不在 {@link #pendingAuthoritative}）→ A 从 N 那侧进来的光仍偏低
+     * （檐下水平进光正是这种场景，handoff §0.2b 未决项）。
+     * <p>
+     * <b>触发面刻意收窄</b>（用户口径）：
+     * <ul>
+     *   <li>事件源 = **降级被修复**（{@link #finishLight} 里 {@code pendingAuthoritative.remove}
+     *       命中且本柱变 clean），**不是**「任何柱完成 LIGHT」；</li>
+     *   <li>**单跳、不级联**：只通知本柱 8 邻；被通知者重投完成后**天然不构成新事件**
+     *       （权威柱不在 {@link #pendingAuthoritative} 里）→ 零额外标记即无传播；</li>
+     *   <li>**不齐即弃**：邻居 3×3 不真齐就跳过——不登记、不等待，由「另外的缺位触发」
+     *       （那个缺柱自己将来变 clean 时的事件）再通知它一次。</li>
+     * </ul>
+     * <b>有界性</b>：时序判据 {@code cleanAt(邻居) < 事件序号} 单调 → 每个"曾降级的邻柱"
+     * 对同一 A 最多触发一次 ⟹ A 被重投 ≤ 8 次（实际按降级率远小于此）。
+     */
+    private static void recheckAuthoritativeNeighbors(ShadowSeedServer server,
+                                                      String dimension, ChunkPos center) {
+        Long eventEpoch = LightNeighborhoodGate.cleanEpochOf(
+                DimensionKey.key(dimension, center.x, center.z));
+        if (eventEpoch == null) {
+            return; // 事件源自身没有 clean 序号（异常）：不触发
+        }
+        List<LightTask> tasks = null;
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                if (dx == 0 && dz == 0) {
+                    continue;
+                }
+                int nx = center.x + dx;
+                int nz = center.z + dz;
+                long nKey = DimensionKey.key(dimension, nx, nz);
+                ChunkPos nPos = new ChunkPos(nx, nz);
+                if (!isColumnLightAuthoritative(dimension, nPos)) {
+                    continue; // 只对**已权威**的邻居（非权威走既有 S2c 路径）
+                }
+                Long at = LightNeighborhoodGate.cleanEpochOf(nKey);
+                if (at == null || at >= eventEpoch) {
+                    continue; // 它在本事件之后才 clean（或刚被 rearm）：已用最终光，不必重投
+                }
+                if (!LightNeighborhoodGate.isNeighborhoodFullyReady(dimension, nPos)) {
+                    continue; // 不齐即弃：不登记、不等待（由另外的缺位触发）
+                }
+                net.minecraft.world.level.chunk.LevelChunk chunk =
+                        server.injectedChunk(dimension, nx, nz);
+                if (chunk == null) {
+                    continue;
+                }
+                net.minecraft.server.level.ServerLevel level = server.level(dimension);
+                if (level == null) {
+                    continue;
+                }
+                LightNeighborhoodGate.rearm(nKey);
+                LightNeighborhoodGate.enqueue(nKey, dimension, nPos,
+                        new GateContext(null, chunk, level, LightMetric.RECOMPUTE,
+                                false, TraceOrigin.SHADOW_MEMORY_CACHE));
+                Object context = LightNeighborhoodGate.tryPromote(server, nKey);
+                if (!(context instanceof GateContext gateCtx)) {
+                    // 并发（另一线程换过条目 / cancel）：放弃本次，等下次事件
+                    LightNeighborhoodGate.cancel(nKey);
+                    continue;
+                }
+                if (tasks == null) {
+                    tasks = new ArrayList<>(4);
+                }
+                tasks.add(gateCtx.toLightTask(nKey));
+                DebugLogger.info(DebugLogger.LogType.LIGHT,
+                        "[SHADOW_LIGHT] re-light authoritative neighbor after repair ({}, {}) dim={}",
+                        nx, nz, dimension);
+            }
+        }
+        if (tasks != null) {
+            submitLightBatch(server, tasks);
         }
     }
 
@@ -2196,7 +2597,9 @@ public final class ShadowLightCompute {
         shadowApplyEpochs.remove(key);
         lightInitialized.remove(key);
         lightInitPassed.remove(key);
+        lightRan.remove(key);
         nativeLightChunks.remove(key);
+        pendingAuthoritative.remove(key);
         LightNeighborhoodGate.cancel(key);
         DebugLogger.info(DebugLogger.LogType.LIGHT,
                 "[SHADOW_LIGHT] Cancelled work before unload ({}, {})",
@@ -2245,6 +2648,20 @@ public final class ShadowLightCompute {
             DebugLogger.info(DebugLogger.LogType.LIGHT,
                     "[SHADOW_LIGHT] skip beyond view+margin ({}, {}) dim={}",
                     pos.x, pos.z, DimensionKey.dimensionOf(key));
+            return;
+        }
+        // 【S6 推送门（原版口径；2026-09-19 任务 #36 换判据）】交付窗内 且
+        // 「本会话 LIGHT 步已完成」= isLightCorrect ∪ lightRanThisSession。
+        // 此处**柱在手**，直接传它的 isLightCorrect()（侧查注入表会在柱已摘表/未入表时假阴性）。
+        // 只挂在本方法：B 族 `offerBuiltChunkPacket`（官方包直通）拿不到影子柱，且既有决策是
+        // 「不因光未对齐丢弃官方整柱包，欠光首包由后续整柱重交付补」，不在那里加门。
+        if (!io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession
+                .isPushableToClient(DimensionKey.dimensionOf(key), pos, chunk.isLightCorrect())) {
+            DebugLogger.info(DebugLogger.LogType.LIGHT,
+                    "[SHADOW_LIGHT] pushReady blocked lightIncomplete ({}, {}) dim={} {}",
+                    pos.x, pos.z, DimensionKey.dimensionOf(key),
+                    io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession
+                            .lightGateDetail(DimensionKey.dimensionOf(key), pos));
             return;
         }
         // S3：原版光——引擎产出即打包交付，无 park / NeighborhoodGate 门。
@@ -2297,7 +2714,11 @@ public final class ShadowLightCompute {
                     "[SHADOW_CHUNK] Build packet failed ({}, {})", pos.x, pos.z);
             return;
         }
-        if (io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
+        // OVD（renderOnly）不进 compare 闸 —— 与 `publishCachedChunk` 的既有决策同一口径
+        // （源码注释原话：「OVD renderOnly 不进本闸（无真服权威比对）」）。环带是本地源服务，
+        // AWAITING 残留不得挡回填。实测 R2：`disk-serve ... pub=true` 之后 Promote 又把该柱
+        // mark 成 AWAITING → 本闸把同一柱挡下（`clientHas` 恒 false、整圈光环不进客户端）。
+        if (!renderOnly && io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
                 .blockClientDelivery(DimensionKey.dimensionOf(key), pos.x, pos.z)) {
             DebugLogger.info(DebugLogger.LogType.LIGHT,
                     "[SHADOW_LIGHT] offerReady blocked seedGenAwaitingCompare ({}, {})",
@@ -2318,8 +2739,63 @@ public final class ShadowLightCompute {
                         : KeyedPriorityQueue.OfferPolicy.REPLACE);
     }
 
-    private static boolean hasClientChunk(Minecraft mc, int chunkX, int chunkZ) {
-        return mc != null && mc.level != null
+    /**
+     * 交付一个**已由影子 vanilla 管线构建好**的整柱包（B 族：官方包直通）。
+     * <p>
+     * <b>【2026-09-19 统一交付出口】</b>B 族原走
+     * {@code mc.execute -> listener.handleLevelChunkWithLight} **直落**：不经几何门、不受客户端
+     * apply 时间预算、不记 landed 指标、不参与 {@code ignoredApplyRetries} 重试上限。现改为与
+     * A 族（{@code publishCachedChunk} 路径）共用同一条
+     * {@code ready -> drainReady -> applyReadyChunk} 出口，从而白拿：
+     * <ul>
+     *   <li>B6 几何门（与 {@link #pushReady} 同一判据）</li>
+     *   <li>{@code applyReadyChunk} 的维度闸复检 / {@code setApplyInProgress} /
+     *       {@code ignoredApplyRetries} 重试上限 / {@code shadowApplyEpoch} 落地凭据 /
+     *       landed 记账 / post-apply 探针</li>
+     *   <li>{@code drainReady} 的客户端渲染线程 apply 时间预算（洪峰摊平）</li>
+     * </ul>
+     * <p>
+     * 记账口径：整柱包由影子内存中的柱构建 → {@link TraceOrigin#SHADOW_MEMORY_CACHE}，与 A 族
+     * {@code publishCachedChunk} 命中注入表时同口径。该指标本就<b>按交付次数计、允许重复</b>
+     * （见 {@code cacheFullHitAccountsPerDelivery} 回归契约），故不构成重复记账。
+     *
+     * @param dimension 产出该包的影子端维度 id（调用方须传实际来源维；null 视为未知 → 拒绝）
+     * @return true = 已入 ready 队列（异步落地）；false = 被门拦下或参数非法
+     */
+    public static boolean offerBuiltChunkPacket(String dimension,
+                                                ClientboundLevelChunkWithLightPacket packet) {
+        if (packet == null || dimension == null) {
+            return false;
+        }
+        int x = packet.getX();
+        int z = packet.getZ();
+        // B6 统一交付门：与 pushReady 同一判据（ServerVD + 余量 ∪ OVD）
+        if (!ShadowTrackingSession.isDeliverableToClient(x, z)) {
+            DebugLogger.info(DebugLogger.LogType.LIGHT,
+                    "[SHADOW_LIGHT] skip built packet beyond view+margin ({}, {}) dim={}",
+                    x, z, dimension);
+            return false;
+        }
+        if (io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
+                .blockClientDelivery(dimension, x, z)) {
+            DebugLogger.info(DebugLogger.LogType.LIGHT,
+                    "[SHADOW_LIGHT] built packet blocked seedGenAwaitingCompare ({}, {}) dim={}",
+                    x, z, dimension);
+            return false;
+        }
+        long key = DimensionKey.key(dimension, x, z);
+        io.github.limuqy.mc.hassium.utils.ChunkFlowTiming.recordReady(key);
+        SmokeChunkTrace.recordShadowReady(dimension, new ChunkPos(x, z));
+        ready.offer(new ReadyItem(packet, false, TraceOrigin.SHADOW_MEMORY_CACHE),
+                new KeyedPriorityQueue.Key(ChunkPos.asLong(x, z),
+                        io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.OP_CHUNK_APPLY,
+                        dimension),
+                client().chunkApplyPriority(x, z, fifoApplyPriority()),
+                KeyedPriorityQueue.OfferPolicy.REPLACE);
+        return true;
+    }
+
+    private static boolean hasClientChunk(Minecraft mc, int chunkX, int chunkZ) {        return mc != null && mc.level != null
                 && ((io.github.limuqy.mc.hassium.mixin.client.ClientLevelAccessor) mc.level)
                         .hassium$getChunkSource().hasChunk(chunkX, chunkZ);
     }
@@ -2344,6 +2820,7 @@ public final class ShadowLightCompute {
      */
     public static void drainReady(long deadlineNs) {
         io.github.limuqy.mc.hassium.utils.ChunkFlowTiming.noteFrame(); // T0b 诊断：每帧 apply 计数
+        pruneDiskReadEmpty(); // 【#2】出圈的「盘上没有」标记摘除（集合非空才做事）
         client().updateFocusFromClient();
         // 黑块判定复检（1 帧后 post-apply 真值）：光包探针即时读数是光队列 flush 前的旧值
         //（handleLightUpdatePacket 只入队），判定状态只由复检写入（handoff §7.1 假阳性）。
@@ -2573,6 +3050,8 @@ public final class ShadowLightCompute {
         ready.clear();
         lightInitialized.clear();
         lightInitPassed.clear();
+        lightRan.clear();
+        pendingAuthoritative.clear();
         LightNeighborhoodGate.clear();
         nativeLightChunks.clear();
         requestedMisses.clear();
@@ -2645,6 +3124,7 @@ public final class ShadowLightCompute {
                 + " gen=" + generated.size()
                 + " delta=" + pendingDeltas.size()
                 + " inflightLight=" + inflightLight.size()
+                + " pendingAuth=" + pendingAuthoritative.size()
                 + " consume=" + consumeRunning.get();
     }
 
@@ -2777,6 +3257,18 @@ public final class ShadowLightCompute {
 
 
     private record PendingEntry(ClientboundLevelChunkWithLightPacket packet, TraceOrigin traceOrigin) {}
+
+    /**
+     * 【S2c】降级放行的柱：重算时重建 LightTask 所需的上下文（chunk 每次现查，不缓存实例）。
+     * <p>
+     * {@code readyNeighbors} = **登记时刻**「窗内且已过 INITIALIZE_LIGHT」的邻柱数
+     * （{@link LightNeighborhoodGate#inWindowReadyNeighborCount}）。重算**进展门**：
+     * 只有该计数比登记时增加才重算——否则重算必然得到同一结果（见
+     * {@link LightNeighborhoodGate#isNeighborhoodLightReady} 的 churn 说明）。
+     */
+    private record PendingAuth(String dimension, ChunkPos pos,
+                               boolean renderOnly, TraceOrigin traceOrigin,
+                               int readyNeighbors) {}
 
     /** lightReuse=true：存档/引擎光可复用（lightChunk 第二参 true）；false：LIGHT 续算播种+传播。 */
     private record GenEntry(net.minecraft.world.level.chunk.LevelChunk chunk,

@@ -922,6 +922,11 @@ $resultObj = @{
     # 透传给 analyzer：>0 即「移动会话」，其 trace 驻留口径不适用（走开会合法卸载），
     # analyzer 据此把 TRACE_EXPECTED_NOT_PRESENT / TRACE_READY_NOT_APPLIED 降为诊断（F14）。
     MoveSeconds = $MoveSeconds
+    # 透传给 analyzer：交付域 = 权威形状(serverVD)。S3b 起计算域 = 权威形状 + 光照光环，
+    # 光环柱**只算不交付**（收到/注入但不 ready）——analyzer 需要 VD 才能判定「缺口全在权威形状外
+    # ⇒ 是光环而非丢柱」。此前交付域 = 计算域，该假设不存在，故当时无需透传。
+    Vd1 = $Vd1
+    Vd2 = $Vd2
     HasPass = $hasPass
     HasFail = $hasFail
     GatewayRound1 = $gatewayRound1

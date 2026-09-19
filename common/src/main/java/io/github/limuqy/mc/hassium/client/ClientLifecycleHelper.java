@@ -325,6 +325,7 @@ public final class ClientLifecycleHelper {
         io.github.limuqy.mc.hassium.protocol.handshake.ClientLoginNegotiation.clear();
         io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.resetRequestDedupForReconnect();
         io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.clearDiskPublishInFlight();
+        io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.clearDiskReadEmpty();
         io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate.clearAll();
         io.github.limuqy.mc.hassium.protocol.PullResponseDecodeQueue.discard();
 

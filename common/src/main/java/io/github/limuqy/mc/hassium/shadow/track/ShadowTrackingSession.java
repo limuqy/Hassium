@@ -59,16 +59,36 @@ public final class ShadowTrackingSession {
     /** 一次泵最多发出的 pull 请求柱数（防首帧风暴；剩余下轮续发）。 */
     private static final int MAX_REQUESTS_PER_PUMP = 128;
     /**
-     * 交付门余量：距 tracking 中心超过 {@code serverVD + 此值} 才不投递（B6）。
-     */
-    private static final int DELIVER_VIEW_MARGIN_CHUNKS = 4;
-    /**
      * A1-② 进服/移动时权威窗 acquire 驱动间隔（非 WINDOW_PUMP：只负责「无 material 则 pull」，
      * 不做 epoch 补扫、不交付）。真服 pull_mode 下无原版 trackChunk，必须有此驱动。
      */
     private static final long AUTHORITY_ACQUIRE_INTERVAL_MS = 200L;
     /** 每拍最多向 Provider 提交 acquire 的格数（在途上限另见 Provider）。 */
-    private static final int AUTHORITY_ACQUIRE_BUDGET = 64;
+    /**
+     * 权威 acquire 每轮预算 = 客户端「缓存读取生产」配额 × 每轮客户端 tick 数。
+     * <p>
+     * <b>2026-09-19（用户拍板）</b>：取消原固定值 {@code AUTHORITY_ACQUIRE_BUDGET = 64}
+     * （原话「可以顺便取消 AUTHORITY_ACQUIRE_BUDGET，改为 maxChunksPerFrame × 5(或4)」）。
+     * 理由：固定 64/轮与客户端实际消费能力脱钩——客户端读/注入慢时 acquire 白抢（抢来也进不了
+     * 客户端），快时又喂不上。现与 {@code chunk.maxChunksPerFrame}（每帧缓存读取生产配额，
+     * 见 {@code ClientMainThreadBudget}）绑定：驱动间隔 {@code AUTHORITY_ACQUIRE_INTERVAL_MS}
+     * = 200ms ≈ 4~5 个客户端 tick，故乘 {@link #ACQUIRE_BUDGET_TICKS_PER_ROUND}。
+     * <p>
+     * 调参只需改 {@link #ACQUIRE_BUDGET_TICKS_PER_ROUND}（用户拍板取 4）。
+     */
+    private static final int ACQUIRE_BUDGET_TICKS_PER_ROUND = 4;
+
+    /** 每轮 acquire 预算（配置不可用时退回旧值 64）。 */
+    private static int authorityAcquireBudget() {
+        int perFrame;
+        try {
+            perFrame = HassiumConfigService.getInstance().getMaxChunksPerFrame();
+        } catch (Throwable t) {
+            return 64;
+        }
+        return Math.max(1, perFrame) * ACQUIRE_BUDGET_TICKS_PER_ROUND;
+    }
+
     private long lastAuthorityAcquireMs;
 
     /** 客户端 tick 发布的待同步状态（volatile 整体换引用，无锁）。 */
@@ -217,12 +237,19 @@ public final class ShadowTrackingSession {
     }
 
     /**
-     * 权威 pull 门（R4）：**优先用真实客户端玩家区块**（真服 tracking 的中心），
-     * 会话未就绪（VD 未知 / 无中心）时禁止 pull。与 {@link #inVanillaVisibleShape}
-     * 的交付门语义分离：后者 center 未知时放行；这里保守，且不得用滞后的虚拟玩家中心
-     * （R2 join 期 VP 可能仍在 (0,0)，会把玩家脚下窗内柱误判窗外）。
+     * **计算/拉取域**（R4 的 pull 门 + Provider 窗外丢弃 + 齐套门等待窗 + 注入表保留域）：
+     * 权威形状（{@code serverVD}）的**切比雪夫膨胀**，膨胀半径 = {@link #lightHaloRadius()}。
+     * <p>
+     * <b>为什么是膨胀而不是 {@code contains(serverVD + R)}</b>（2026-09-19 S3 修正）：
+     * 光环的**唯一职责**是让权威柱的 3×3 全部在场（原版 {@code ChunkStatus.LIGHT} range=1 的
+     * 依赖语义）。用「形状环」近似会在形状切角处漏掉邻柱——实测 VD=10/16/20 分别有
+     * **8/16/20 个权威柱**的 3×3 戳出域外；用膨胀形式则为 **0**。两者最大切比雪夫半径相同
+     * （{@code VD+R+1}），故都贴满服务端签发上限，不增加拒绝面。
+     * <p>
+     * 会话未就绪（VD 未知 / 无中心）时返回 {@code false}——保守：此时拉不到，也不该判 clean。
+     * 「未知时放行（等）」的语义在 {@link #isInNeighborhoodWindow} 里单独处理。
      */
-    public boolean isAuthorityPullEligible(int x, int z) {
+    public boolean isInComputeDomain(int x, int z) {
         if (serverViewDistance <= 0) {
             return false;
         }
@@ -230,7 +257,108 @@ public final class ShadowTrackingSession {
         if (center == null) {
             return false;
         }
-        return ChunkShapeCompat.contains(center.x, center.z, serverViewDistance, x, z);
+        return ChunkShapeCompat.containsDilated(center.x, center.z, serverViewDistance,
+                lightHaloRadius(), x, z);
+    }
+
+    /** 计算/拉取域枚举用的切比雪夫外接盒半径（方形循环半径）。 */
+    public int computeDomainBoxRadius() {
+        return ChunkShapeCompat.dilatedBoundingRadius(serverViewDistance, lightHaloRadius());
+    }
+
+    /**
+     * 光照光环半径（环）：配置 {@code chunk.lightHaloRadius}，钳到
+     * {@code [0, ShadowPullRadii.MAX_LIGHT_HALO_RADIUS]}（上限 = 服务端签发余量
+     * {@code AUTHORITY_MARGIN − 1}；膨胀形状的最大切比雪夫半径 = {@code serverVD + R + 1}，
+     * 超了外环会被服务端 RANGE 拒）。
+     */
+    public static int lightHaloRadius() {
+        int r;
+        try {
+            r = HassiumConfigService.getInstance().getConfig().chunk().lightHaloRadius();
+        } catch (Throwable t) {
+            return io.github.limuqy.mc.hassium.protocol.ShadowPullRadii.LIGHT_HALO_RADIUS;
+        }
+        return Math.max(0, Math.min(r, io.github.limuqy.mc.hassium.protocol.ShadowPullRadii.MAX_LIGHT_HALO_RADIUS));
+    }
+
+    /**
+     * 计算/拉取域半径的**口径说明**（不再是一个「半径」，保留名字只为诊断/日志可读）：
+     * 返回 {@code serverVD + lightHaloRadius()}。
+     * <p>
+     * 注意它**不等于**任何几何谓词的半径——真正的谓词是
+     * {@link #isInComputeDomain}（形状的切比雪夫膨胀），枚举盒是
+     * {@link #computeDomainBoxRadius()}。这里只用于日志文案。
+     */
+    public int authorityRange() {
+        return serverViewDistance + lightHaloRadius();
+    }
+
+    /**
+     * 齐套门「该邻柱在等待窗内吗」判据：**计算/拉取域 ∪ OVD 环带**。
+     * <p>
+     * 窗内 = 我们真的会把它拉上来（或本地源能供）→ 值得等；窗外 = 永远不会到，
+     * 等待只会白等 2~4s 再降级放行（结果一样，但把该柱误判成「非权威」）。
+     * <p>
+     * <b>2026-09-19（S3）修正</b>：原判据用 `isDeliverableToClient`（当时 = serverVD + 4），
+     * 而 acquire 只填到 serverVD —— 「交付域」不是「拉取承诺」，用交付域当等待窗是 P3 的
+     * 本体。现统一为 {@link #isInComputeDomain}。
+     * <p>
+     * VD / 中心未知时**保守放行**（视为窗内 → 等）：此时既拉不到也不该把柱判成 clean。
+     */
+    public boolean isInNeighborhoodWindow(int x, int z) {
+        if (serverViewDistance <= 0) {
+            return true;
+        }
+        ChunkPos center = deliveryCenter();
+        if (center == null) {
+            return true;
+        }
+        return isInComputeDomain(x, z) || inOvdWindow(x, z);
+    }
+
+    /** 距离平方（排序键；坐标差用 long 防溢出）。 */
+    static long distanceSquared(int x, int z, int cx, int cz) {
+        long dx = (long) x - cx;
+        long dz = (long) z - cz;
+        return dx * dx + dz * dz;
+    }
+
+    /**
+     * 3×3 域 id：把平面按 {@code floorDiv(·, 3)} **平铺**成互不重叠的 3×3 域。
+     * <p>
+     * 选平铺（而非「以每个待办柱为中心的 3×3」）的两个理由：
+     * ① 平铺天然无重叠 → §1.5 的「跨域重叠去重」变成结构性成立，不需要去重集合；
+     * ② 锚点固定在世界原点，不随玩家移动漂移 → 域分组在移动中稳定，不会每走一格重排。
+     */
+    static long domainId(int x, int z) {
+        return ((long) Math.floorDiv(x, 3) << 32) ^ (Math.floorDiv(z, 3) & 0xFFFFFFFFL);
+    }
+
+    /**
+     * 【S4】3×3 域分组比较器：**相同域为一组**，组内按距离升序；**组间按各域最近柱距离**升序。
+     * <p>
+     * 目的（用户拍板）：「主要让服务端不会东投一柱，西投一柱」——同域柱连成一片投递。
+     * 输入 {@code all} 必须是**待办集合**（每轮按当前中心重扫得到），不是「扩散球」：
+     * 见 handoff §4 风险 a。组的「最近柱距离」取自 {@code all} 本身，故比较器只对该集合有效。
+     */
+    static java.util.Comparator<ChunkPos> domainComparator(java.util.Collection<ChunkPos> all,
+                                                          int cx, int cz) {
+        java.util.Map<Long, Long> domainNearest = new java.util.HashMap<>(all.size() * 2);
+        for (ChunkPos p : all) {
+            domainNearest.merge(domainId(p.x, p.z), distanceSquared(p.x, p.z, cx, cz), Math::min);
+        }
+        return java.util.Comparator
+                .comparingLong((ChunkPos p) -> domainNearest.getOrDefault(domainId(p.x, p.z), Long.MAX_VALUE))
+                .thenComparingLong(p -> distanceSquared(p.x, p.z, cx, cz));
+    }
+
+    /** 【S4】按 {@link #domainComparator} 就地排序待办柱列表。 */
+    static void sortByDomain(java.util.List<ChunkPos> positions, int cx, int cz) {
+        if (positions == null || positions.size() < 2) {
+            return;
+        }
+        positions.sort(domainComparator(positions, cx, cz));
     }
 
     /**
@@ -350,6 +478,15 @@ public final class ShadowTrackingSession {
     /**
      * A1-② 驱动：权威窗内「无 inject material」的柱向真服 acquire/pull（近→远）。
      * 有 material 的柱不在本方法交付（由 materialize/pull 响应/官方桥交付）。
+     * <p>
+     * <b>2026-09-19（S3/S4）</b>：
+     * <ul>
+     *   <li>半径 = {@link #authorityRange()}（权威域 + 光照光环）——光环柱一并拉上来算光，
+     *       让权威边界柱的 3×3 齐套（原实现只填到 serverVD）。</li>
+     *   <li>排序改为 {@link #sortByDomain}（3×3 域分组：同域连片投递，组间按最近柱距离）。</li>
+     *   <li><b>每轮按当前中心重扫整个窗口</b>——这是「待办集合」而非「扩散球」，
+     *       玩家连续移动/TP/切维度都天然免疫（handoff §4 风险 a）。不得改成固定种子扩散。</li>
+     * </ul>
      */
     private void drainAuthorityAcquires(ShadowSeedServer shadow, long nowMs) {
         if (shadow == null || virtualPlayer == null || currentDimension == null
@@ -367,15 +504,14 @@ public final class ShadowTrackingSession {
         if (center == null) {
             return;
         }
-        int range = serverViewDistance;
-        // 形状外接盒 = range+1（原版 updatePlayerStatus 同款）：轴向 |d|=range+1 的柱属于权威形状，
-        // 但 inOvdBand 把它们排除在环带之外 → 必须在本驱动枚举，否则两侧都不交付。
-        // 实测 serverVD=10/clientVD=16：漏掉 44 柱 → 客户端在权威窗外一圈出现封闭虚空。
-        int box = ChunkShapeCompat.boundingRadius(range);
+        // 枚举盒 = 膨胀形状的切比雪夫外接盒（原版 updatePlayerStatus 同款「方形循环 + 形状过滤」）：
+        // 轴向 |d|=VD+1 的柱属于权威形状，但 inOvdBand 把它们排除在环带之外 → 必须在本驱动枚举，
+        // 否则两侧都不交付。实测 serverVD=10/clientVD=16：漏掉 44 柱 → 客户端在权威窗外一圈出现封闭虚空。
+        int box = computeDomainBoxRadius();
         java.util.List<ChunkPos> enter = new java.util.ArrayList<>();
         for (int x = center.x - box; x <= center.x + box; x++) {
             for (int z = center.z - box; z <= center.z + box; z++) {
-                if (!ChunkShapeCompat.contains(center.x, center.z, range, x, z)) {
+                if (!isInComputeDomain(x, z)) {
                     continue;
                 }
                 enter.add(new ChunkPos(x, z));
@@ -383,18 +519,21 @@ public final class ShadowTrackingSession {
         }
         final int cx = center.x;
         final int cz = center.z;
-        enter.sort(java.util.Comparator.comparingLong(p -> {
-            long dx = (long) p.x - cx;
-            long dz = (long) p.z - cz;
-            return dx * dx + dz * dz;
-        }));
+        sortByDomain(enter, cx, cz);
+        final int budget = authorityAcquireBudget();
         int submitted = 0;
         int skippedMaterial = 0;
         int published = 0;
+        // 【预算语义（2026-09-19 用户口径：「不要按完成轮次来算预算，每轮都从0开始」）】
+        // 预算**只约束本轮「新 acquire」**，每轮从 0 计。两条与旧实现的关键差异：
+        // ① 不再用 `submitted + published`：`published` 是**交付**计数，会让近处已 material 柱的
+        //    交付吃光预算，把远处非 material 柱的 acquire 饿死——实测 `submitted=0` 占 181/206 轮，
+        //    1341 个远处柱一轮都没被 acquire → 它们的邻柱永不到齐 → 齐套门降级（降级 promote 主因）。
+        // ② 不再 `break`：预算用尽后仍走完整个列表（material 分支的交付/compare 照常），
+        //    只对「新 acquire」封顶。同组（3×3 域）要发完：组内超预算也把本组 acquire 完，
+        //    避免半组分裂（半组会让该组各柱都缺几个邻柱 → 同样降级）。
+        long lastAcquireDomain = Long.MIN_VALUE;
         for (ChunkPos pos : enter) {
-            if (submitted + published >= AUTHORITY_ACQUIRE_BUDGET) {
-                break;
-            }
             net.minecraft.world.level.chunk.LevelChunk injected =
                     shadow.injectedChunk(currentDimension, pos.x, pos.z);
             boolean material = injected != null;
@@ -434,14 +573,20 @@ public final class ShadowTrackingSession {
                     && !ShadowLightCompute.hasLocalPullBaseline(currentDimension, pos)) {
                 continue;
             }
+            // 预算只约束「本轮新 acquire」；同组（3×3 域）发完才换组。
+            long domain = domainId(pos.x, pos.z);
+            if (submitted >= budget && domain != lastAcquireDomain) {
+                continue;
+            }
+            lastAcquireDomain = domain;
             VanillaAlignedChunkProvider.getInstance().acquire(
                     currentDimension, pos, ShadowChunkProvider.AcquireReason.TRACKING);
             submitted++;
         }
         if (submitted > 0 || published > 0) {
             DebugLogger.info(DebugLogger.LogType.NETWORK,
-                    "[SHADOW_TRACK] authority-acquire center=({},{}) vd={} submitted={} compareQueued={} material={} (dimension={})",
-                    center.x, center.z, serverViewDistance, submitted, published,
+                    "[SHADOW_TRACK] authority-acquire center=({},{}) vd={} halo={} submitted={} published={} material={} (dimension={})",
+                    center.x, center.z, serverViewDistance, lightHaloRadius(), submitted, published,
                     skippedMaterial, currentDimension);
         }
     }
@@ -623,6 +768,10 @@ public final class ShadowTrackingSession {
                         }
                     } else {
                         notInjected++;
+                        // OVD 盘读的**唯一判据 = 当前有没有块**（injected 非空即走上面的 publish，
+                        // 不盘读）——不需要任何「光环」标记（2026-09-19 用户口径：
+                        // 「OVD 读取跳过光环块其实只需要判断当前是否有块就行了，光环块是个概念，
+                        // 不需要专门标记」）。所以本分支只在「无块」时读盘。
                         if (watch) {
                             DebugLogger.info(DebugLogger.LogType.NETWORK,
                                     "[OVD_PATH] sweep no-inject ({}, {}) epoch={} clientHas={} — try local disk",
@@ -901,7 +1050,10 @@ public final class ShadowTrackingSession {
         return Math.min(base, MAX_VIEW_DISTANCE);
     }
 
-    /** 权威窗：原版可见形状（pull / bootGrid / sweep 唯一几何）。中心与真服 tracking 同轴。 */
+    /**
+     * 权威窗 = **交付窗**（原版可见形状，{@code serverVD}；pull / bootGrid / sweep / 交付唯一几何）。
+     * 中心与真服 tracking 同轴。会话未就绪时放行（保守：不因未知而漏投）。
+     */
     private boolean inVanillaVisibleShape(int x, int z) {
         if (serverViewDistance <= 0) {
             return true;
@@ -913,26 +1065,81 @@ public final class ShadowTrackingSession {
         return ChunkShapeCompat.contains(center.x, center.z, serverViewDistance, x, z);
     }
 
-    /** 交付/trace 候选：权威形状 + 视距余量 ∪ OVD（B6）。 */
+    /**
+     * 交付/trace 候选：**权威窗 ∪ OVD 环带**（B6）。
+     * <p>
+     * <b>2026-09-19（S3b，用户拍板）</b>：权威侧 = 原版可见形状 {@code serverVD}，
+     * **不再有 {@code +DELIVER_VIEW_MARGIN_CHUNKS} 余量**。理由：余量让「计算域比交付域窄」
+     * 时多出来的环（光环）也能进客户端视野——实测 R1 交付恰好 = {@code |shape(serverVD+光环)|}，
+     * 即光环被交付了；而光环柱的 3×3 天生不完整（它的外侧邻柱在计算域外）→ 那正是
+     * 「外圈不完整光块进视野」。收到 {@code serverVD} 后：**交付集 = 权威集**，
+     * 光环柱只算不交付；OVD 环带仍按 {@link #inOvdWindow} 独立放行（与二期 OVD 兼容）。
+     */
     public static boolean isDeliverableToClient(int x, int z) {
         ShadowTrackingSession s = INSTANCE;
         if (s == null) {
             return true;
         }
-        return s.inDeliverableShape(x, z) || s.inOvdWindow(x, z);
+        return s.inVanillaVisibleShape(x, z) || s.inOvdWindow(x, z);
     }
 
-    /** 权威投递形状：serverVD + {@link #DELIVER_VIEW_MARGIN_CHUNKS}。 */
-    private boolean inDeliverableShape(int x, int z) {
-        if (serverViewDistance <= 0) {
-            return true;
+    /**
+     * 【S6 推送门（**原版口径**，2026-09-19）】交付窗内 **且「本会话 LIGHT 步已完成」**。
+     * <p>
+     * <b>原版判据（1.20.1 mojmap，已核源码）</b>：推送触发点是
+     * {@code ChunkMap.prepareTickingChunk}（`ChunkMap.java:726`）
+     * {@code getChunkRangeFuture(holder, 1, s -> ChunkStatus.FULL)} ——
+     * **该柱及其 range=1 邻域（3×3）全部达到 {@code ChunkStatus.FULL}** 才发给玩家；
+     * 发包处（`ChunkMap.playerLoadedChunk:1256-1258`）**不看光**。
+     * 而状态链 `LIGHT`（`ChunkStatus.java:141`，range=1）→ `SPAWN`(:149) → `FULL`(:156)，
+     * 故「到 FULL」**蕴含本会话 LIGHT 步已完成**。光只在「复用还是重算」处出现：
+     * {@code isLighted(c) = status>=LIGHT && c.isLightCorrect()}（`ChunkStatus.java:251`）被
+     * `initializeLight`/`lightChunk`(:200-211) 用来决定跳过还是重跑——**盘上 {@code isLightOn=false}
+     * 的柱，原版会在本会话重跑 LIGHT、跑完置真，然后才可能到 FULL**。
+     * ⟹ {@code isLightCorrect} 只是伴生结果，不是判据；两者在 vanilla 等价，是因为 vanilla
+     * 不允许 flag=false 的柱以 FULL 状态存在。
+     * <p>
+     * <b>Hassium 对应物 = 两个谓词的并集</b>：
+     * <ul>
+     *   <li>{@code lightCorrect} —— REUSE / 盘上已完整的柱（**不进齐套门**，`promotedClean` 恒假）；</li>
+     *   <li>{@link ShadowLightCompute#lightRanThisSession}（= 本会话 LIGHT 步跑完过）——
+     *       **2026-09-19 任务 #36 起取代 `isColumnLightAuthoritative`**。</li>
+     * </ul>
+     * <b>为什么从 `isColumnLightAuthoritative` 换掉（handoff §「飞行场景的两个空洞」①）</b>：
+     * `promotedClean` 要求 `outsideWindow==0`，而飞行中邻域窗随玩家移动 → **前沿柱
+     * promote 时向外邻柱在窗外 → 永远不 clean → 永久洞**（实测飞行日志：`Promote ... 
+     * outsideWindow=3 timedOut=false` 后 `pushReady blocked lightIncomplete`）。
+     * vanilla 不这样：它的门 `getChunkRangeFuture(holder,1,FULL)` 是**可满足**的，所以最终照推。
+     * `lightRan` 是「LIGHT 跑完」这个**事实**，降级放行的柱同样为真 → 前沿柱照推。
+     * 代价（用户已接受）：前沿柱会带「向外一侧缺邻」的光进客户端，靠 S2c 重算重交付覆盖。
+     * <p>
+     * 本重载要求调用方**拿得到柱**；拿不到柱时不要调用（状态未知 ≠ 未完成，侧查注入表会假阴性）。
+     */
+    public static boolean isPushableToClient(String dimension, ChunkPos pos, boolean lightCorrect) {
+        if (pos == null || !isDeliverableToClient(pos.x, pos.z)) {
+            return false;
         }
-        ChunkPos center = deliveryCenter();
-        if (center == null) {
-            return true;
+        return lightCorrect
+                || io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute
+                        .lightRanThisSession(dimension, pos);
+    }
+
+    /** 诊断用：光照门两个判据的取值（`lc=` / `ran=`）。 */
+    public static String lightGateDetail(String dimension, ChunkPos pos) {
+        net.minecraft.world.level.chunk.LevelChunk chunk = injectedChunkOrNull(dimension, pos);
+        return (chunk == null ? "noInject" : "lc=" + chunk.isLightCorrect())
+                + " ran=" + io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute
+                        .lightRanThisSession(dimension, pos);
+    }
+
+    /** 影子端注入柱（无则 null）；查表失败一律返回 null，不抛。 */
+    private static net.minecraft.world.level.chunk.LevelChunk injectedChunkOrNull(
+            String dimension, ChunkPos pos) {
+        if (dimension == null || pos == null) {
+            return null;
         }
-        int range = serverViewDistance + DELIVER_VIEW_MARGIN_CHUNKS;
-        return ChunkShapeCompat.contains(center.x, center.z, range, x, z);
+        ShadowSeedServer server = ShadowServerRegistry.getInstance().get();
+        return server == null ? null : server.injectedChunk(dimension, pos.x, pos.z);
     }
 
     /** OVD 窗：client chebyshev 窗内且权威窗外；本地源服务，禁止 pull。 */
@@ -997,8 +1204,8 @@ public final class ShadowTrackingSession {
             }
             int x = DimensionKey.chunkXOf(key);
             int z = DimensionKey.chunkZOf(key);
-            if (ChunkShapeCompat.contains(center.x, center.z, serverViewDistance, x, z)
-                    || inOvdWindow(x, z)) {
+            // 保留域含光照光环：光环柱是权威边界柱 3×3 的一部分，过早回收会让边界柱重新降级。
+            if (isInComputeDomain(x, z) || inOvdWindow(x, z)) {
                 continue;
             }
             if (outsideSinceMs.putIfAbsent(key, now) == null) {
@@ -1008,8 +1215,8 @@ public final class ShadowTrackingSession {
         if (enrolled > 0) {
             ensureReclaimTimer();
             DebugLogger.info(DebugLogger.LogType.NETWORK,
-                    "[SHADOW_TRACK] enqueue out-of-window reclaim count={} center=({},{}) vd={} (dimension={})",
-                    enrolled, center.x, center.z, serverViewDistance, currentDimension);
+                    "[SHADOW_TRACK] enqueue out-of-window reclaim count={} center=({},{}) vd={} halo={} (dimension={})",
+                    enrolled, center.x, center.z, serverViewDistance, lightHaloRadius(), currentDimension);
         }
     }
 
@@ -1217,7 +1424,7 @@ public final class ShadowTrackingSession {
         if (pos == null || dimension == null) {
             return false;
         }
-        if (!isAuthorityPullEligible(pos.x, pos.z)) {
+        if (!isInComputeDomain(pos.x, pos.z)) {
             DebugLogger.info(DebugLogger.LogType.NETWORK,
                     "[SHADOW_TRACK] skip pull outside authority window ({}, {}) dim={} auth={}",
                     pos.x, pos.z, dimension, authoritative);

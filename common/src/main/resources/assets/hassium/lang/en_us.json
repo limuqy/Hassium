@@ -25,6 +25,8 @@
     "hassium.configuration.chunk.viewDistanceExtensionEnabled.tooltip":  "When the client render distance exceeds the server view distance, fill the ring from the shadow-end local cache (local data only; never request out-of-range chunks from the server). Mutually exclusive with Bobby-style mods. Default: on.",
     "hassium.configuration.chunk.maxRenderDistance":  "OVD max render distance",
     "hassium.configuration.chunk.maxRenderDistance.tooltip":  "Effective client render-distance cap for beyond-view render (2–64). Default: 16.",
+    "hassium.configuration.chunk.lightHaloRadius":  "Light halo radius (rings)",
+    "hassium.configuration.chunk.lightHaloRadius.tooltip":  "Extra rings the shadow pulls/computes beyond the server view distance, purely so that boundary columns get a complete 3x3 neighborhood (mirrors vanilla ChunkStatus.LIGHT range=1) and are not lit as if the missing neighbor were bedrock. Halo columns are computed and cached only; the delivery range is unchanged. 0 = off (legacy semantics). Default: 1; max 1 (= the server-issued slack; larger would be rejected by the server).",
     "hassium.configuration.chunk.maxChunksPerFrame":  "Max cache reads per tick",
     "hassium.configuration.chunk.maxChunksPerFrame.tooltip":  "Per-tick cap on shadow cache-read production (shadow enqueue and disk loads). Main-thread apply is time-budget only; server push has its own throttle. Default: 6.",
     "hassium.configuration.chunk.mainThreadChunkBudgetMs":  "Per-frame load budget",

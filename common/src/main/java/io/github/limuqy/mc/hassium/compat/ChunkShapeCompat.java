@@ -45,6 +45,39 @@ public final class ChunkShapeCompat {
     }
 
     /**
+     * 原版视距形状的**切比雪夫膨胀**判定：(x,z) 是否落在「{@code range} 形状外扩
+     * {@code dilate} 环」内。
+     * <p>
+     * 实现 = {@link #contains} 的同一原版公式，把 {@code |d|-1} 折成 {@code |d|-1-dilate}
+     * （形状对 |dx|/|dz| 单调 ⇒ 切比雪夫膨胀 = 先缩坐标再用原公式）。
+     * 跨版本一致：1.20.1 {@code ChunkMap.isChunkInRange} 与 1.21.1
+     * {@code ChunkTrackingView.isWithinDistance(..., includeBorder=true)} 是**逐字相同**的公式。
+     * <p>
+     * <b>用途（S3 光照光环）</b>：权威柱的 3×3 必须全部落在计算域内，否则边界柱算光时缺邻被
+     * 当基岩挡光。**不得用 {@code contains(range + R)} 近似**——那是「形状环」，在形状切角处
+     * 每窗漏掉 8~20 个权威柱的邻柱（实测 VD=10/16/20 → 8/16/20 个；膨胀形式为 0 个）。
+     * 膨胀形式的最大切比雪夫半径 = {@code range + dilate + 1}，{@code dilate=1} 时恰好
+     * 贴满服务端签发上限 {@code range + ShadowPullRadii.AUTHORITY_MARGIN}。
+     */
+    public static boolean containsDilated(int cx, int cz, int range, int dilate, int x, int z) {
+        int d = Math.max(0, dilate);
+        int i = Math.max(0, Math.abs(x - cx) - 1 - d);
+        int j = Math.max(0, Math.abs(z - cz) - 1 - d);
+        long k = Math.max(0, Math.max(i, j) - 1);
+        long l = Math.min(i, j);
+        return l * l + k * k < (long) range * range;
+    }
+
+    /**
+     * 膨胀形状的切比雪夫外接半径 = {@code boundingRadius(range) + dilate}。
+     * <p>
+     * 「按方形循环 + {@link #containsDilated} 过滤」的枚举必须用本值当循环半径。
+     */
+    public static int dilatedBoundingRadius(int range, int dilate) {
+        return boundingRadius(range) + Math.max(0, dilate);
+    }
+
+    /**
      * OVD 环带判定：(x,z) 落在 client 半径的切比雪夫窗内、且**不在** authority 半径的原版形状内。
      * <p>
      * 收口理由：该判据原先在 {@code ShadowTrackingSession#inOvdWindow} 手搓（切比雪夫 + {@link #contains}），

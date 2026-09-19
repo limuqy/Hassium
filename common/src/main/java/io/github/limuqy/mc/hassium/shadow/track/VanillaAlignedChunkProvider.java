@@ -114,7 +114,7 @@ public final class VanillaAlignedChunkProvider implements ShadowChunkProvider {
                     new IllegalStateException("seedgen-local: skip network pull " + pos));
         }
         ShadowTrackingSession session = ShadowTrackingSession.getInstance();
-        if (session != null && !session.isAuthorityPullEligible(pos.x, pos.z)) {
+        if (session != null && !session.isInComputeDomain(pos.x, pos.z)) {
             io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat
                     .failSuspendedLoad(dimension, pos);
             pendingPulls.remove(key);
@@ -161,11 +161,14 @@ public final class VanillaAlignedChunkProvider implements ShadowChunkProvider {
         List<PendingPull> batch = new ArrayList<>(pendingPulls.values());
         final ChunkPos c = center;
         if (c != null) {
-            batch.sort(Comparator.comparingLong(p -> {
-                long dx = (long) p.pos.x - c.x;
-                long dz = (long) p.pos.z - c.z;
-                return dx * dx + dz * dz;
-            }));
+            // S4：3×3 域分组排序（同域连片投递，组间按最近柱距离）——「服务端不会东投一柱，西投一柱」。
+            // 这里才是真正的 C2S 出口，故分组必须落在本处（只在 acquire 侧排序会被本方法重排覆盖）。
+            List<ChunkPos> positions = new ArrayList<>(batch.size());
+            for (PendingPull pending : batch) {
+                positions.add(pending.pos);
+            }
+            batch.sort(Comparator.comparing(p -> p.pos,
+                    ShadowTrackingSession.domainComparator(positions, c.x, c.z)));
         }
         int sent = 0;
         int dropped = 0;
@@ -176,7 +179,7 @@ public final class VanillaAlignedChunkProvider implements ShadowChunkProvider {
             }
             long key = DimensionKey.key(pending.dimension, pending.pos.x, pending.pos.z);
             // 远距离：已出权威窗 → 丢弃，不再 C2S
-            if (session != null && !session.isAuthorityPullEligible(pending.pos.x, pending.pos.z)) {
+            if (session != null && !session.isInComputeDomain(pending.pos.x, pending.pos.z)) {
                 if (pendingPulls.remove(key, pending)) {
                     dropped++;
                     failSuspendedOnly(pending.dimension, pending.pos);

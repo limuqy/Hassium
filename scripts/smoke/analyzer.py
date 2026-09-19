@@ -64,6 +64,56 @@ def _all_outside_final_vd_window(probe: dict[str, Any], gap: dict[str, Any], ser
     return True
 
 
+def _in_authority_shape(cx: int, cz: int, vd: int, x: int, z: int) -> bool:
+    """原版视距形状（= 权威/交付域）判定。
+
+    公式与 Java 侧 `compat/ChunkShapeCompat.contains` 逐字相同（1.20.1 `ChunkMap.isChunkInRange`
+    == 1.21.1 `ChunkTrackingView.isWithinDistance(..., includeBorder=true)`）。Java 单一真相源是
+    `ChunkShapeCompat`，不变量由 `ChunkShapeDilationTest` 钉死；此处是**测试门禁**需要的第二份实现
+    （analyzer 是 Python，无法调用 Java）。改动形状公式时两处必须同步。
+    """
+    i = max(0, abs(x - cx) - 1)
+    j = max(0, abs(z - cz) - 1)
+    k = max(0, max(i, j) - 1)
+    l = min(i, j)
+    return l * l + k * k < vd * vd
+
+
+def _all_outside_authority_shape(probe: dict[str, Any], gap: dict[str, Any], server_vd: int) -> bool:
+    """缺口坐标是否**全部**落在权威形状（交付域）之外 ⇒ 只可能是光照光环柱。
+
+    S3b（2026-09-19）起：计算域 = 权威形状 + 光环（`ChunkShapeCompat.containsDilated`），
+    光环柱被拉取/注入/算光但**不交付**。故 `networkReceived`/`shadowInjected` 会比
+    `shadowReady`/`clientApplied` 多出恰好一环——这是设计，不是丢柱。
+    """
+    positions = gap.get("positions") or []
+    if not positions or server_vd <= 0:
+        return False
+    chunk = _player_chunk(probe)
+    if chunk is None:
+        return False
+    px, pz = chunk
+    for item in positions:
+        if not isinstance(item, (list, tuple)) or len(item) < 2:
+            return False
+        if _in_authority_shape(px, pz, server_vd, int(item[0]), int(item[1])):
+            return False
+    return True
+
+
+def _halo_only_gap(probe: dict[str, Any], gaps: dict[str, Any], server_vd: int) -> bool:
+    """两个「收到/注入但未交付」缺口是否**都**（凡非空者）全在权威形状之外 ⇒ 判为光照光环。"""
+    checked = False
+    for key in ("injectedNotReady", "expectedNotPresent"):
+        gap = _obj(gaps.get(key))
+        if not gap.get("count"):
+            continue
+        if not _all_outside_authority_shape(probe, gap, server_vd):
+            return False
+        checked = True
+    return checked
+
+
 def _num(value: Any) -> int | float | None:
     return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
@@ -413,11 +463,24 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
                 and loaded_n is not None
                 and landed_n >= loaded_n
             )
+            # 光照光环（S3b，2026-09-19）：交付域 = 权威形状(serverVD)，计算域 = 权威形状 + 光环。
+            # 光环柱「收到/注入但不交付」是设计（`chunk.lightHaloRadius`）——凡缺口**全部**在权威
+            # 形状之外即判为光环；只要有一个在形状内，一律不放行（窗内缺口仍是 P0）。
+            server_vd = _num(result.get(f"Vd{number}")) or 0
+            halo_only = (not mobile_session and server_vd > 0
+                         and _halo_only_gap(probe, gaps, int(server_vd)))
             for key, code in (("expectedNotPresent", "TRACE_EXPECTED_NOT_PRESENT"),
                               ("readyNotApplied", "TRACE_READY_NOT_APPLIED")):
                 if not gaps[key]["count"]:
                     continue
-                if mobile_session and code in _MOBILE_TRACE_DIAGNOSTIC_CODES:
+                if halo_only and code == "TRACE_EXPECTED_NOT_PRESENT":
+                    skipped.append(_failure(
+                        code, "INFO", round=number, gap=gaps[key],
+                        detail=("light halo: compute domain = authority shape + halo "
+                                "(chunk.lightHaloRadius); halo columns are pulled/injected/lit but "
+                                "deliberately NOT delivered, so 'received' exceeds 'resident' by "
+                                "exactly that ring. Inside-authority gaps remain P0")))
+                elif mobile_session and code in _MOBILE_TRACE_DIAGNOSTIC_CODES:
                     skipped.append(_failure(code, "INFO", round=number, gap=gaps[key],
                                             detail="mobile session: received chunks legitimately "
                                                    "unload as the player flies away"))
@@ -438,6 +501,13 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
             for key, code in (("receivedNotInjected", "TRACE_RECEIVED_NOT_INJECTED"),
                               ("injectedNotReady", "TRACE_INJECTED_NOT_READY")):
                 if not gaps[key]["count"]:
+                    continue
+                if halo_only and code == "TRACE_INJECTED_NOT_READY":
+                    skipped.append(_failure(
+                        code, "INFO", round=number, gap=gaps[key],
+                        detail=("light halo: injected for the 3x3 neighborhood of boundary "
+                                "authority columns but deliberately NOT delivered; "
+                                "inside-authority gaps remain P0")))
                     continue
                 if (code == "TRACE_INJECTED_NOT_READY" and cache_only_reconnect
                         and _all_outside_final_vd_window(probe, gaps[key], 10)):

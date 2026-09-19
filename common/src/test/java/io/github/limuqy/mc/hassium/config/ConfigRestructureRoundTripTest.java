@@ -20,7 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * T4 config-restructure 一次性 round-trip 验证（.omp/workflows/config-restructure）。
  * <p>
  * 验证点（对照 work/key-mapping.md；网关拓扑退役波后更新）：
- * 1. defaults 生成 56 键，前缀分布 21/16/16/2/2
+ * 1. defaults 生成 54 键，前缀分布 17/17/16/2/2
  * 2. client/server toml 写读 round-trip（含全部新键组）
  * 3. 新键可加载抽查（chunk.seedGenEnabled 双端 / master.* 聚合键族）
  * 4. 删键（recoveryFreeze / controlStallMs / failoverExpiryMs / storage.mode / chunk.loadThreads /
@@ -49,13 +49,13 @@ class ConfigRestructureRoundTripTest {
         Map<String, ConfigEntry<?>> byPath = ConfigSchema.entries().stream()
                 .collect(Collectors.toMap(e -> e.scope() + "/" + e.path(), Function.identity()));
 
-        assertEquals(53, ConfigSchema.entries().size(), "schema 留存键数");
-        assertEquals(53, values.asMap().size(), "defaults 键数");
+        assertEquals(54, ConfigSchema.entries().size(), "schema 留存键数");
+        assertEquals(54, values.asMap().size(), "defaults 键数");
 
         Map<String, Long> prefixCounts = ConfigSchema.entries().stream()
                 .collect(Collectors.groupingBy(e -> e.path().substring(0, e.path().indexOf('.') + 1),
                         Collectors.counting()));
-        assertEquals(Map.of("chunk.", 16L, "master.", 17L, "debug.", 16L,
+        assertEquals(Map.of("chunk.", 17L, "master.", 17L, "debug.", 16L,
                 "storage.", 2L, "compat.", 2L), prefixCounts);
 
         // 双端同名键 chunk.seedGenEnabled 各一
@@ -79,7 +79,7 @@ class ConfigRestructureRoundTripTest {
     void clientTomlRoundTripsNewKeys(@TempDir Path root) throws IOException {
         HassiumConfig.ChunkCoreConfig chunk = new HassiumConfig.ChunkCoreConfig(
                 true, 8192, 0.5, 0.8, 0.2, 1200, 1024, 200,
-                true, true, 16, 12, 30, true, true);
+                true, true, 16, 2, 12, 30, true, true);
         HassiumConfig.DebugConfig debug = new HassiumConfig.DebugConfig(
                 true, false, true, false, true, false, true, true, true, true, false);
         // 网关拓扑退役：client.toml 不再承载任何 master.* 键（原迁移策略 6 键已删）
@@ -114,7 +114,7 @@ class ConfigRestructureRoundTripTest {
         // server toml 只写 chunk.lightStrip/chunk.seedGenEnabled 两键，其余键读回默认 → 仅改这两键
         HassiumConfig.ChunkCoreConfig chunk = new HassiumConfig.ChunkCoreConfig(
                 true, 4096, 0.3, 0.7, 0.3, 6000, 0, 100,
-                true, true, 16, 6, 15, false, false);
+                true, true, 16, 1, 6, 15, false, false);
         HassiumConfig.CompatConfig compat = new HassiumConfig.CompatConfig(true, false);
         HassiumConfig.DebugConfig debug = new HassiumConfig.DebugConfig(
                 false, true, false, true, false, true, false, false, false, false, true);
@@ -159,7 +159,7 @@ class ConfigRestructureRoundTripTest {
         // lightStrip 为 SERVER 键：client 写读不得落盘/读回（默认 true 保持）
         HassiumConfig.ChunkCoreConfig chunk = new HassiumConfig.ChunkCoreConfig(
                 true, 4096, 0.3, 0.7, 0.3, 6000, 0, 100,
-                true, true, 16, 6, 15, false, false);
+                true, true, 16, 1, 6, 15, false, false);
         HassiumConfig original = new HassiumConfig(
                 HassiumConfig.StorageConfig.DEFAULT, chunk,
                 HassiumConfig.MasterCoreConfig.DEFAULT, HassiumConfig.CompatConfig.DEFAULT,

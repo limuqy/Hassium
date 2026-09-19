@@ -212,7 +212,11 @@ LightDeltaS2CPacket         // 增量光变更掩码
 
 ```text
 ∀ OVD 柱：ShadowPull 发送数 = 0
-∀ pull 柱：isChunkInRange(serverVD) == true   // AUTHORITY_MARGIN 契约不变
+∀ pull 柱：落在**计算域**内 = `ChunkShapeCompat.containsDilated(serverVD, chunk.lightHaloRadius)`
+             // 2026-09-19 S3：计算域 = 权威形状 + 光照光环（切比雪夫膨胀）。
+             // 最大 cheb = serverVD + halo + 1 ≤ serverVD + AUTHORITY_MARGIN（贴满签发上限）
+∀ 交付柱：落在**权威形状** `contains(serverVD)` ∪ OVD 带内
+             // 2026-09-19 S3b：光环柱只算不交付（DELIVER_VIEW_MARGIN_CHUNKS 已删）
 bootGrid / sweepVisibleShape 半径仍是 serverVD，不被 clientVD 污染
 服务端 ShadowPullRequestValidator 仍是安全网（误发必 RANGE 拒绝）
 OVD 回传记 ovd 指标，不进缓存命中率分母

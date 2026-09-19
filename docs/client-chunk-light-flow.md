@@ -174,3 +174,34 @@ regression=15）。删除后若出现「客户端停在 standing 首包欠光（
 设计已拍板（三区状态机 / 参数化光环 / 200ms / 3×3 域分组排序 / 7 个交付入口收敛为 1），
 见 [`handoff/handoff-2026-09-19-light-halo-selfdriven-delivery.md`](handoff/handoff-2026-09-19-light-halo-selfdriven-delivery.md)。
 
+### 8.1 已落地（2026-09-19）
+
+| 步 | 内容 |
+|----|------|
+| S1 ✅ | 交付出口收敛：B 族官方包并入 `ready` 队列，唯一出口 `ready → drainReady → applyReadyChunk` |
+| S2 ✅ | **I2 判据**：`wasPromotedClean`（promote 时窗内 8 邻全过 INITIALIZE）→ `isColumnLightAuthoritative`；`ShadowSeedServer.syncLightCorrect` 为唯一收口，非权威柱**扣下 `isLightCorrect`**（不落盘 → 不复用） |
+| S2c ✅ | **迟到重触发**：非权威柱登记 `pendingAuthoritative`；任一柱 LIGHT 完成时复查其 3×3，邻域就绪（`isNeighborhoodLightReady`）→ `rearm` 重入齐套门 → 干净放行 → LIGHT → **重交付** |
+| S3 ✅ | **接上光环**：新键 `chunk.lightHaloRadius`（默认 1，钳 `[0,1]`），计算域 = 权威形状的**切比雪夫膨胀**（`containsDilated`），单点 `isInComputeDomain`：acquire 枚举 / pull 门 / 注入表保留域 / **齐套门等待窗** → 修 P1 + P3 |
+| S3b ✅ | **交付域收到 `serverVD`**（删 `DELIVER_VIEW_MARGIN_CHUNKS=4`）→ 交付集 = 权威集，**光环只算不交付**；OVD 带独立放行 → 修 P2 |
+| S4 ✅ | **域分组排序**：3×3 平铺域，同域连片、组间按最近柱距离；落在 acquire 侧 + `drainPendingPulls` 真 C2S 出口。200ms + 预算 + 「每轮重扫全窗」语义不变 |
+| S5 ✅ | **缺邻不落盘**：3×3 不齐（**含窗外邻柱**）不标 `isLightCorrect`；迟到重触发判据与落盘判据同口径。形式复用原版 `isLightOn`（`ThreadedLevelLightEngine.lightChunk` 入口清假、引擎跑完才置真） |
+
+**关键语义**：I2 **不门控交付**。降级柱照常下发（不交付会在客户端留空洞，比偏暗更显眼），
+登记后由 S2c 重算覆盖。I2 只决定「这份光能否被标为正确并永久复用」。
+**交付侧另行收窄到 `serverVD`**——所以「被交付的柱」与「光已完整的柱」两个集合现在重合：
+权威柱（3×3 必在计算域内）光完整、被交付；光环柱光不完整、不交付、不落盘。
+
+**两处实现期修正（改源头，不叠门）**：
+1. I2 不再要求「8 邻都 `wasPromoted`」——REUSE 柱不进齐套门、永不 `wasPromoted`，
+   该叠加会让 R2 里挨着缓存柱的柱全被判非权威（系统性误判）。
+2. REUSE 柱在屏障内**补标 `lightInitPassed`**——它确实跑了 INITIALIZE，不标记会让邻柱的
+   齐套判定把它当「已注入未过 INITIALIZE」，白等 2s/4s 后降级放行。
+3. 光环口径 = **形状的切比雪夫膨胀**，不是 `contains(serverVD + R)`（后者每窗漏 8~20 个
+   权威柱的邻柱）。「1 环就够」在膨胀口径下才成立。
+
+观测：`lightProbe.pendingAuthRegistered` / `pendingAuthRelight`（`roundN.json`）；
+`stallSnapshot()` 的 `pendingAuth=N`；`[SHADOW_TRACK] authority-acquire ... halo=` /
+`enqueue out-of-window reclaim ... halo=`；`[LIGHT_GATE] Promote ... outsideWindow=`。
+**运行时行为尚未验证**（S3b/S5 只做了编译 + L0 单测）。
+
+

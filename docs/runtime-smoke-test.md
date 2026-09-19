@@ -323,6 +323,8 @@ Starlight 与 ScalableLux **互斥**（后者 `provides: ["starlight"]`），且
 
 Python analyzer 以服务端日志中的 `[PENDING_CONFIRM] ... confirms timed out (...), direct-pushing stripped full ...` 为唯一的超时全量推送 P0 门禁，错误码为 `SERVER_FULL_PUSH_TIMEOUT`。客户端 trace 的 `LATE_NEAR_PLAYER_CHUNK` 仅为 P1 诊断：表示玩家区块半径 3 内的区块，相对本轮首个落地区块延迟至少 10 秒才应用；覆盖 full、cache、delta 三条应用路径。该诊断用于发现客户端队列阻塞或重复入队，不再反推服务端 confirm 超时。
 
+**光照光环豁免（S3b，2026-09-19）**：交付域 = 权威形状 `serverVD`（`DELIVER_VIEW_MARGIN_CHUNKS` 已删），而**计算域 = 权威形状 + 光环**（`chunk.lightHaloRadius`，默认 1 环）——光环柱被拉取/注入/算光但**刻意不交付**，用于给边界权威柱补齐 3×3 邻域。于是 `networkReceived`/`shadowInjected` 会比 `shadowReady`/`clientApplied` 多出**恰好一环**（VD20 时 176 柱）。trace 门禁原模型是 `expected = networkReceived`（「收到即常驻」），该假设被 S3b 推翻 → 现改为：`runtime-smoke-test.ps1` 透传 `Vd1`/`Vd2`，analyzer 用 `_in_authority_shape` 判定**缺口是否全部落在权威形状之外**；全部在外 ⇒ `TRACE_EXPECTED_NOT_PRESENT` / `TRACE_INJECTED_NOT_READY` 降 **INFO**（detail 写明光环），**只要有一个在形状内就仍是 P0**（窗内缺口不放行）。判据实现是 Python 侧第二份形状公式，与 Java `ChunkShapeCompat.contains` 逐字相同（1.20.1 `ChunkMap.isChunkInRange` == 1.21.1 `ChunkTrackingView.isWithinDistance(includeBorder=true)`），**改形状公式时两处必须同步**（Java 侧不变量由 `ChunkShapeDilationTest` 钉死）。
+
 ### 非 classic 场景会话判定
 
 ```

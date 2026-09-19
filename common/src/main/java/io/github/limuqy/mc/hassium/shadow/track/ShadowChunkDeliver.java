@@ -40,14 +40,9 @@ public final class ShadowChunkDeliver {
                     pos.x, pos.z, dimension);
             return false;
         }
-        // OVD renderOnly 不进 compare 闸（与 publishCachedChunk 对齐）
-        if (!renderOnly && io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
-                .isAwaiting(dimension, pos)) {
-            DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
-                    "[SHADOW_DELIVER] skip seedGenAwaitingCompare ({}, {}) dim={}",
-                    pos.x, pos.z, dimension);
-            return false;
-        }
+        // 【2026-09-19】原此处另有一道 `SeedGenCompareGate.isAwaiting` 检查，已删：
+        // `publishCachedChunk` 内的 `blockClientDelivery` 就是 `isAwaiting` 本身
+        // （见 SeedGenCompareGate.blockClientDelivery），同一判据查两遍。
         // 专用服语义：本地已有柱 = 服务端已 load → 直接投递客户端。
         return ShadowLightCompute.publishCachedChunk(dimension, pos, localGeneration, renderOnly);
     }

@@ -11,7 +11,7 @@ import java.util.function.Supplier;
 public final class ConfigSchema {
     private static final List<ConfigEntry<?>> ENTRIES = new ArrayList<>();
 
-    // === 区块核心（chunk.*；CLIENT 14 键）===
+    // === 区块核心（chunk.*；CLIENT 15 键）===
     public static final ConfigKey<Boolean> CHUNK_ENABLED = bool("chunk.enabled", ConfigScope.CLIENT, Domain.CHUNK_CORE, true,
             "是否启用区块核心缓存", "Whether to enable the chunk-core cache");
     public static final ConfigKey<Integer> CHUNK_MAX_SIZE_MB = integer("chunk.maxSizeMb", ConfigScope.CLIENT, Domain.CHUNK_CORE, 4096, 64, 1024 * 1024,
@@ -47,6 +47,15 @@ public final class ConfigSchema {
     public static final ConfigKey<Integer> CHUNK_MAX_RENDER_DISTANCE = integer("chunk.maxRenderDistance", ConfigScope.CLIENT, Domain.CHUNK_CORE, 16, 2, 64,
             "超视渲染 effective clientRD 上限",
             "Max effective client render distance for OVD");
+    public static final ConfigKey<Integer> CHUNK_LIGHT_HALO_RADIUS = integer("chunk.lightHaloRadius", ConfigScope.CLIENT, Domain.CHUNK_CORE,
+            io.github.limuqy.mc.hassium.protocol.ShadowPullRadii.LIGHT_HALO_RADIUS,
+            0, io.github.limuqy.mc.hassium.protocol.ShadowPullRadii.MAX_LIGHT_HALO_RADIUS,
+            "光照光环半径（环）：影子端在服务端视距之外再多拉/算 N 环，专供权威边界柱补齐 3×3 邻域（对齐原版 ChunkStatus.LIGHT range=1）。"
+                    + "光环柱只进影子端算光/缓存。0=关闭（回退到旧语义）。上限 1 = 服务端签发余量（切比雪夫外接盒比半径多 1），再大外环会被服务端拒",
+            "Light halo radius in rings: the shadow pulls/computes N extra rings beyond the server view distance so that boundary columns get a complete 3x3 "
+                    + "neighborhood (mirrors vanilla ChunkStatus.LIGHT range=1). Halo columns are computed only. 0 disables; max 1 = the server-issued slack "
+                    + "(the chebyshev bounding box is one ring wider than the radius)");
+
 
 
     // === 存储域（storage.*；SERVER 2 键）===

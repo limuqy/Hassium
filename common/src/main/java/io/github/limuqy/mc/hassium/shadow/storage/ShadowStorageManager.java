@@ -10,6 +10,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -74,6 +76,15 @@ public final class ShadowStorageManager implements AutoCloseable {
     private final InjectedPredicate injected;
     private final int zstdLevel;
     private final ConcurrentHashMap<Long, RegionCache.Image> images = new ConcurrentHashMap<>();
+
+    /**
+     * 在途读盘（**每槽单飞**）：槽键（{@link ChunkPos#asLong(int, int)}）→ 该槽正在进行的读取。
+     * <p>
+     * 同一槽位的并发读共享同一次解压结果，避免重复烧 CPU（见 {@link #readChunk}）。
+     * 生命周期极短：owner 完成即摘登记，**不是缓存**（不改变「每次都从盘读」的语义）。
+     */
+    private final ConcurrentHashMap<Long, CompletableFuture<byte[]>> inFlightReads =
+            new ConcurrentHashMap<>();
     private final ConcurrentHashMap<Long, RegionWorker> workers = new ConcurrentHashMap<>();
     private final AtomicInteger decompressCount = new AtomicInteger();
     private final AtomicInteger outstandingWrites = new AtomicInteger();
@@ -191,14 +202,61 @@ public final class ShadowStorageManager implements AutoCloseable {
 
     /** 指定维度读盘解压，语义同 {@link #readChunk(ChunkPos)}。 */
     public byte[] readChunk(String readDimension, ChunkPos pos) {
+        // 【同槽单飞】同一槽位并发读只解压一次，后到者共享在途结果（用户口径：每槽限制单线程）。
+        // 必要性：readChunk 有多个调用方（consumeLoop 磁盘优先 / processRemoteHashes 比对 /
+        // scheduleAsyncDiskPublish），而 DISK_PUBLISH_INFLIGHT 只挡了最后一条；Image 的方法虽
+        // synchronized（按 region 串行），但重复解压本身仍是白烧 CPU。
+        // <p>
+        // 【为什么**不**在这里做「影子端已加载就不读盘」】该判据在**每个生产调用点**已经做了
+        // （ShadowChunkMapCompat:184 / ShadowTrackingSession:843 / ShadowLightCompute:1659 /
+        // publishCachedChunk:953 都是 `injectedChunk != null` 就先返回），在这里再做一遍是重复；
+        // 且会改掉 readChunk 的契约——ShadowStorageManagerTest:566 明确断言「柱在 injected 集合里
+        // 时 readChunk 仍能读到」（flush 退化路径不得丢柱），导出路径 ShadowColumnStore.load 也没做
+        // 该检查。**真正的缺口是 TOCTOU**（检查通过后、读盘完成前该柱被注入），由
+        // ShadowLightCompute.scheduleAsyncDiskPublish 回调里的**读到后复检**关掉。
+        long slotKey = ChunkPos.asLong(pos.x, pos.z);
+        CompletableFuture<byte[]> mine = new CompletableFuture<>();
+        CompletableFuture<byte[]> running = inFlightReads.putIfAbsent(slotKey, mine);
+        if (running != null) {
+            return awaitInFlight(running);
+        }
+        try {
+            byte[] nbt = readChunkUnshared(readDimension, pos);
+            mine.complete(nbt);
+            return nbt;
+        } finally {
+            // 先 complete 再摘登记：后到者即使拿到的是即将被摘的 future，也能读到已就绪的值。
+            inFlightReads.remove(slotKey, mine);
+        }
+    }
+
+    /** 共享在途读取的结果；在途失败按「无副本」处理（与 readChunk 的失败语义一致）。 */
+    private static byte[] awaitInFlight(CompletableFuture<byte[]> running) {
+        try {
+            return running.join();
+        } catch (CompletionException | java.util.concurrent.CancellationException e) {
+            LOGGER.debug("Hassium: shared readChunk failed", e);
+            return null;
+        }
+    }
+
+    private byte[] readChunkUnshared(String readDimension, ChunkPos pos) {
         RegionCache.Image image = imageFor(pos, false);
         if (image == null) {
             return null;
         }
+        // 【#3 快速短路】空槽在读盘/解压**之前**就返回 null：与 probeHash 同一判据。
+        // 缺了这一步，空槽会一路走到 readDecompressed（挂载/解压链），在「同一空柱被反复
+        // 尝试读取」的场景下变成稳态自旋（实测：58 个虚拟线程恒定卡在
+        // loadFromDisk → ChunkSerializer.read → PoiManager.checkConsistencyWithBlocks）。
+        int index = RegionCache.localIndex(pos.x, pos.z);
+        if (image.isEmptySlot(index)) {
+            return null;
+        }
         try {
-            byte[] nbt = image.readDecompressed(RegionCache.localIndex(pos.x, pos.z), decompressCount);
+            byte[] nbt = image.readDecompressed(index, decompressCount);
             if (nbt != null) {
-                Long hash = image.probeHash(RegionCache.localIndex(pos.x, pos.z));
+                Long hash = image.probeHash(index);
                 if (hash != null) {
                     ShadowStorageHashes.put(readDimension, pos, hash);
                 }

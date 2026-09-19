@@ -235,6 +235,7 @@ public final class HassiumClothConfigScreen {
                             cacheCleanupIntervalTicks, cacheTargetCacheSizeMb, cacheMinCleanupBatchSize,
                             cacheSectionDeltaEnabled,
                             viewDistanceExtensionEnabled, maxRenderDistance,
+                            baseChunk.lightHaloRadius(),
                             maxChunksPerFrame, mainThreadChunkBudgetMs,
                             seedGenEnabled,
                             baseChunk.lightStrip()),
