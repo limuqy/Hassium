@@ -9,7 +9,10 @@ pluginManagement {
         maven { url "https://maven.architectury.dev/" }
         maven { url "https://maven.fabricmc.net/" }
         maven { url "https://maven.minecraftforge.net/" }
-        maven { url "https://maven.neoforged.net/releases" }
+        // 用 ForgeCDN 镜像替代 https://maven.neoforged.net/releases：两者仓库布局一致
+        // （/releases/<group path>），但 maven.neoforged.net 在部分网络下 TLS 不可达，
+        // 会让 :forge 配置期（log4j metadata 动态版本解析 / toolJar）直接 BUILD FAILED。
+        maven { url "https://neoforged.forgecdn.net/releases" }
         exclusiveContent {
             forRepository {
                 maven {

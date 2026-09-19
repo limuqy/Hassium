@@ -20,7 +20,8 @@ repositories {
     }
     maven { url 'https://maven.fabricmc.net/' }
     maven { url 'https://maven.minecraftforge.net/' }
-    maven { url 'https://maven.neoforged.net/releases' }
+    // ForgeCDN 镜像，替代 https://maven.neoforged.net/releases（布局一致，见 settings.gradle 注释）
+    maven { url 'https://neoforged.forgecdn.net/releases' }
     maven { url 'https://api.modrinth.com/maven' }
     maven { url 'https://maven.terraformersmc.com/' }
     maven { url 'https://maven.shedaniel.me/' }

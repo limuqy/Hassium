@@ -1134,7 +1134,7 @@ public class ShadowSeedServer extends MinecraftServer {
      * </ul>
      * 本表同时给出**卡住的柱坐标**——那才是能拿去复现 / 查盘上 NBT 的东西。
      */
-    private record DiskReadInFlight(long startMs, ChunkPos pos, String dimension) {
+    private record DiskReadInFlight(long startMs, ChunkPos pos, String dimension, Thread thread) {
     }
 
     private static final java.util.concurrent.ConcurrentHashMap<Long, DiskReadInFlight> DISK_READ_INFLIGHT =
@@ -1143,6 +1143,16 @@ public class ShadowSeedServer extends MinecraftServer {
             new java.util.concurrent.atomic.AtomicLong();
     private static final java.util.concurrent.atomic.AtomicLong DISK_READ_RETURNED =
             new java.util.concurrent.atomic.AtomicLong();
+
+    /**
+     * 卡死现场**只自动 dump 一次/每轮**（在途集合清空后重新武装）。
+     * <p>
+     * 为什么需要：光有柱坐标还定位不到代码——上一轮（2026-09-19 21:10）的栈是人工
+     * `Thread.dump_to_file` 两次相隔 9.5 分钟比对才拿到的。自动 dump 让**每一次复现自带栈**，
+     * 不必等人蹲守。
+     */
+    private static final java.util.concurrent.atomic.AtomicBoolean DISK_READ_STACK_DUMPED =
+            new java.util.concurrent.atomic.AtomicBoolean(false);
 
     /** 超过此耗时才认为「不正常」，打点才出声（正常读盘亚秒级）。 */
     private static final long DISK_READ_STUCK_WARN_MS = 3_000L;
@@ -1162,20 +1172,26 @@ public class ShadowSeedServer extends MinecraftServer {
      */
     private static void reportStuckDiskReads() {
         if (DISK_READ_INFLIGHT.isEmpty()) {
+            // 在途集合清空 = 上一轮卡死已结束（或被超时/断连收走）→ 重新武装栈 dump 开关
+            DISK_READ_STACK_DUMPED.set(false);
             return;
         }
         long now = System.currentTimeMillis();
         long oldestMs = 0L;
         java.util.List<String> stuck = new java.util.ArrayList<>(4);
+        java.util.List<DiskReadInFlight> stuckEntries = new java.util.ArrayList<>(4);
         for (java.util.Map.Entry<Long, DiskReadInFlight> e : DISK_READ_INFLIGHT.entrySet()) {
             DiskReadInFlight inf = e.getValue();
             long elapsed = now - inf.startMs();
             if (elapsed > oldestMs) {
                 oldestMs = elapsed;
             }
-            if (elapsed >= DISK_READ_STUCK_WARN_MS && stuck.size() < 8) {
-                stuck.add("(" + inf.pos().x + "," + inf.pos().z + ") " + elapsed + "ms "
-                        + inf.dimension());
+            if (elapsed >= DISK_READ_STUCK_WARN_MS) {
+                stuckEntries.add(inf);
+                if (stuck.size() < 8) {
+                    stuck.add("(" + inf.pos().x + "," + inf.pos().z + ") " + elapsed + "ms "
+                            + inf.dimension());
+                }
             }
         }
         if (oldestMs < DISK_READ_STUCK_WARN_MS) {
@@ -1185,6 +1201,45 @@ public class ShadowSeedServer extends MinecraftServer {
                         + "slotsFree={} | {}",
                 DISK_READ_INFLIGHT.size(), oldestMs, DISK_READ_ENTERED.get(), DISK_READ_RETURNED.get(),
                 DISK_READ_PERMITS.availablePermits(), stuck);
+        dumpStuckStacksOnce(stuckEntries);
+    }
+
+    /**
+     * 卡死现场栈（每轮只 dump 一次，最多 3 条线程 × 30 帧）。
+     * <p>
+     * 只有柱坐标定位不到代码——本方法把「哪一行在烧 CPU」直接落进日志，使**每次复现自带栈**，
+     * 不必再人工蹲两次 {@code Thread.dump_to_file} 比对线程身份。
+     */
+    private static void dumpStuckStacksOnce(java.util.List<DiskReadInFlight> stuckEntries) {
+        if (!DISK_READ_STACK_DUMPED.compareAndSet(false, true)) {
+            return;
+        }
+        int dumped = 0;
+        for (DiskReadInFlight inf : stuckEntries) {
+            if (dumped >= 3) {
+                break;
+            }
+            Thread t = inf.thread();
+            if (t == null) {
+                continue; // 尚未进入 loadFromDisk（仍在执行器队列里）→ 不算卡死
+            }
+            dumped++;
+            StringBuilder sb = new StringBuilder(1024);
+            sb.append("Hassium: [SHADOW_DISK] stuck-read stack #").append(dumped)
+                    .append(" thread=").append(t.getName())
+                    .append(" chunk=(").append(inf.pos().x).append(',').append(inf.pos().z).append(')')
+                    .append(" dim=").append(inf.dimension())
+                    .append(" elapsedMs=").append(System.currentTimeMillis() - inf.startMs());
+            StackTraceElement[] frames = t.getStackTrace();
+            int limit = Math.min(frames.length, 30);
+            for (int i = 0; i < limit; i++) {
+                sb.append("\n    at ").append(frames[i]);
+            }
+            if (frames.length > limit) {
+                sb.append("\n    ... ").append(frames.length - limit).append(" more");
+            }
+            LOGGER.warn(sb.toString());
+        }
     }
 
     private static void logDiskReadAnomaly(String kind, ChunkPos pos) {
@@ -1228,10 +1283,7 @@ public class ShadowSeedServer extends MinecraftServer {
         }
         java.util.concurrent.atomic.AtomicBoolean settled =
                 new java.util.concurrent.atomic.AtomicBoolean(false);
-        // 【定点打点】登记在途：看门狗据此报出「卡住的柱坐标 + 已卡多久」。
         long inflightKey = DimensionKey.key(dimension, pos.x, pos.z);
-        DISK_READ_INFLIGHT.put(inflightKey,
-                new DiskReadInFlight(System.currentTimeMillis(), pos, dimension));
         DISK_READ_ENTERED.incrementAndGet();
         // 护栏②：硬超时。到期即按无缓存回调；许可**不归还**（读盘线程仍在跑）。
         DISK_READ_TIMER.schedule(() -> {
@@ -1241,6 +1293,11 @@ public class ShadowSeedServer extends MinecraftServer {
             }
         }, DISK_READ_TIMEOUT_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
         executor.submit(() -> {
+            // 【定点打点】登记在途：看门狗据此报出「卡住的柱坐标 + 已卡多久 + **读盘线程栈**」。
+            // 登记必须发生在本 lambda 内——要的是**真正在读盘的线程**，不是提交方；
+            // 顺带消除「任务未及运行就被丢弃 → 在途登记永久残留」的幻影卡死。
+            DISK_READ_INFLIGHT.put(inflightKey, new DiskReadInFlight(
+                    System.currentTimeMillis(), pos, dimension, Thread.currentThread()));
             LevelChunk loaded = null;
             try {
                 loaded = loadFromDisk(dimension, pos);
@@ -1872,7 +1929,9 @@ public class ShadowSeedServer extends MinecraftServer {
             }
             loopCount++;
             if (loopCount == 200 || loopCount == 2000 || loopCount == 20000) {
-                io.github.limuqy.mc.hassium.Constants.LOG.info(
+                // 存活性探针（诊断）：只在前 2 万轮各打一条，用于区分「影子主循环静默停摆」
+                // 与「已正常推进」。归入 debug 开关，生产默认不出。
+                DebugLogger.info(DebugLogger.LogType.ASYNC,
                         "[SHADOW_LOOP] alive loops={} shadowPlayer={} trackingDim={}",
                         loopCount,
                         io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession
