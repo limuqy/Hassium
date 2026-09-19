@@ -42,9 +42,9 @@ flowchart TD
 | 解压 / 转 NBT | `HassiumTaskExecutor` 提交 | 后台虚拟线程 | `ExecutorFactory.create` |
 | 主线程调度 | `PriorityBlockingQueue`（按玩家距离） | — | `MainThreadDispatcher.execute` |
 | 区块 apply | `ClientMainThreadBudget`（JoinBoost 30ms 窗口 / normal `mainThreadChunkBudgetMs`）；无数量硬顶 | Render thread | `MixinClientTick` |
-| 光照投递 | `ShadowLightCompute` pending/generated/delta/inflight + 帧尾光桥 | 投递：Netty / 解压后台；消费：后台池 | `submit` + `ShadowLightCompute` |
+| 光照投递 | `ShadowLightCompute` pending/generated/delta/inflight | 投递：Netty / 解压后台；消费：后台池 | `submit` + `ShadowLightCompute` |
 | 影子端注入 + 收敛 | 注入表 + UNKNOWN FULL 票 → **齐套门 `LightNeighborhoodGate`（3×3 `INITIALIZE_LIGHT` 齐套）→** per-chunk `initializeLight` + `lightChunk`；**禁止去门直算**（2026-09-18 去门实验屋檐黑，已钉死） | 引擎 mailbox / 后台池 | `ShadowSeedServer.runMainLoop` + `ShadowLightCompute` + `LightNeighborhoodGate` |
-| 光照落地 | 帧尾 `drainReady`（渲染前，预算内；光桥只对影子区块包已落地且客户端未卸载的柱发送） | Render thread | `MixinClientTick.drainReady` |
+| 光照落地 | 帧尾 `drainReady`（渲染前，预算内）把 ready 整柱包倒进 `handleLevelChunkWithLight` | Render thread | `MixinClientTick.drainReady` |
 
 **线程纪律**：Netty 线程只做入队；`ClientMainThreadBudget` 是唯一主线程 apply 闸门（时间预算，无数量硬顶）；`maxChunksPerFrame` 只限缓存读取生产（影子入队 + 影子读盘），不限 apply。
 
@@ -75,8 +75,13 @@ ClientChunkCache.replaceWithPacketData → renderer
 1. **注入**：`ShadowSeedServer.injectChunk` 把权威/缓存/本地生成数据注入影子 `ServerLevel`
 2. **两阶段屏障 + 齐套门**：注入后 `initializeLight`；**非 REUSE 且未 promote 时必须经 `LightNeighborhoodGate`（3×3 邻柱均过 INITIALIZE）再 `lightChunk`**。齐套后屏障内**复用 phase-1 的 native chunk 只跑 LIGHT**（2026-09-19 起为生产语义，开关 `REUSE_PHASE1_INITIALIZE`）：phase-1 已对同一 ChunkPos 完成 INITIALIZE，引擎层存储按 SectionPos 索引，再跑一遍是重复劳动；无 phase-1 产物时回落到从零 `initializeLight+lightChunk`。**天光播种在 LIGHT 步**（`propagateLightSources` 读 `ChunkSkyLightSources`），INITIALIZE 不算任何亮度值——故屋檐黑不是 INITIALIZE 复用的问题。历史 2026-09-18 ⑤「复用 → 移动后屋檐柱全黑」判定已作废（归因混杂：当时树上正在去门回归、且尚无读盘柱光源表修复）。缺邻时引擎按 Bedrock 挡天光。**齐套门钉死**；验收须含**移动中**的屋檐/洞口，冒烟 PASS 不能代替目视。
    - **天光光源表不变量（2026-09-19 钉死）**：注入柱的 `ChunkSkyLightSources` 必须已填。网络路径由 `LevelChunk.replaceWithPacketData` 重填，**读盘路径 `ChunkSerializer.read` 不会**（`ShadowSeedServer.injectLoadedChunk` 已补 `initializeLightSources()`）。表全 0 时 `getHighestLowestSourceY()` 返回 `NEGATIVE_INFINITY`，`SkyLightEngine.setLightEnabled(pos, true)` 会把 `[minLightSection, maxLightSection)` 的整柱空层 `fill(15)`；而 `lightChunk(lit=true)` 跳过 `propagateLightSources`，坏光无人纠偏 → 落盘 `0xFF×2048` + R2 复用该缓存即整片异常亮。观测锚点：`debug.lightVerify` 的 `SKY-SOURCES highestLowestSourceY=`（`-2147483648` = 表未填）。
-3. **光出口桥**：`MixinServerChunkCache.collectLightUpdate` 捕获影子光更新 → `drainLightMasks` 攒批 → `ClientboundLightUpdatePacket`（掩码只含「线上确有该层光」的 section；空 section 不进包 → 客户端保留旧光）
-4. **帧尾落地**：`drainReady` 渲染前预算内把 ready 队列倒进 `handleLevelChunkWithLight`；光桥只对「影子区块包已落地且客户端未卸载」的柱发送
+3. **交付 = vanilla 整柱包**：屏障完成后 `SeedGenChunkCodec.buildPacket` 构造
+   `new ClientboundLevelChunkWithLightPacket(chunk, engine, null, null)`（blocks + sky + block 全柱枚举），
+   经 `MixinPlayerChunkSender` / `MixinChunkMap` / `MixinServerPlayer` 的官方通道直接转发真实客户端。
+   **光只随整柱包一次性下发**（对齐原版专用服语义：区块推一次，光就那一份快照；重新加载区块才更新）。
+   **不存在** section 级光回传（原 `MixinServerChunkCache.onLightUpdate` → `collectLightUpdate` →
+   `drainLightMasks` → `ClientboundLightUpdatePacket` 光桥已于 2026-09-19 整体删除，见 §7）。
+4. **帧尾落地**：`drainReady` 渲染前预算内把 ready 整柱包倒进 `handleLevelChunkWithLight`。
 5. **失败降级**：影子端启动失败（`ShadowServerRegistry.failShadowServer`）→ 关缓存/SeedGen/影子光照，全程原版路径（服务端不剥光——剥光在握手协商）
 
 ## 5. 关键组件
@@ -89,7 +94,7 @@ ClientChunkCache.replaceWithPacketData → renderer
 | `ShadowLightCompute` | 投递队列（pending/generated/delta/inflight）+ 屏障重试 + 帧尾落地编排 |
 | `ShadowServerRegistry` | 影子端共享单例：握手后创建、失败降级、断连关闭 |
 | `ShadowSeedServer` | 进程内 ServerLevel + 官方光照引擎：注入 / 清光（vanilla updateChunkStatus 同款）/ 增量清光 / 完整度校验 |
-| `MixinServerChunkCache` / `collectLightUpdate` | 影子端光出口事件 → 光更新桥梁 |
+| `MixinServerChunkCache` | 影子端**区块取数桥**（`getChunkForLighting` / `getChunk`，F17 死锁修复）。原 `onLightUpdate` 光出口注入已随光桥删除 |
 
 ## 6. 退役引用说明
 
@@ -103,17 +108,17 @@ ClientChunkCache.replaceWithPacketData → renderer
 
 ## 7. 2026-09-19 交付侧叠甲清理
 
-三项删除（用户决策；动机：方块更新导致的光照变化客户端本地本就会算，影子端只推完整光，
-不应由交付侧拦异常样本）：
+用户决策：**方块更新导致的光照变化客户端本地本就会算；影子端只推完整光，交付侧不应拦异常样本**。
+影子端的光是**快照**（与原版专用服一致：区块推一次，不重新加载就不会刷新），客户端自身也在算光。
+故一切「交付侧补票 / 拦异常样本」的叠甲均删除。
+
+### 7.1 第一波：三项删除
 
 - **LightDelta 全链（死代码）**：`HassiumChannels.LIGHT_DELTA_S2C` / `LightDeltaS2CPacket` /
   `PayloadHandlers.handleLightDelta` / `INetworkManagerService.sendLightDeltaPacket`（三端实现
   均无调用者）/ 三端注册与 receiver / `ShadowLightCompute.submitLightDelta` +
   `pendingLightUpdates` + `LightWork` + `LightSource.LIGHT_ONLY` + `ShadowSeedServer.invalidateLightSections`。
   直连拓扑下服务端从不发该包 → receiver 永不触达 → 该链恒不可达。
-  **真正的「方块更新 → 光回传」路径**：`MixinClientPacketListener.hassium$onBlockUpdate`
-  （HEAD 未取消，客户端本地也算）→ `ClientMetadataHandler.forwardBlockUpdate` → 影子端 setBlock
-  → 引擎 `onLightUpdate` → `collectLightUpdate` → `drainLightMasks`。
 - **整柱包空层收窄**（原 `SeedGenChunkCodec.deliveryLightMasks`）：交付掩码一律走 vanilla 全柱枚举
   （`null/null`）。原收窄按「客户端已持有该柱」只下发「线上确有光」的 section，用于规避空 section
   被记成 `emptyYMask` → 客户端显式置 0（2026-09-16 flyroundtrip `skyTop=0` 采样 31→3）。删除依据：
@@ -123,4 +128,49 @@ ClientChunkCache.replaceWithPacketData → renderer
   不再清位（仍排除空层）；方块光侧保留。实测 4 轮天光降级 0 命中（方块光 27 命中、maxΔ=2），
   故该分支为死代码。
 
-**未删除**（仍活跃）：`isLightMidCompute` 中间态扣发、方块光侧降级过滤、`LightNeighborhoodGate` 齐套门。
+### 7.2 第二波：光桥整体删除
+
+**「方块更新 → 光回传」的 section 级链路整体删除**（用户决策：单独的光桥已无必要；光照应参考原版
+专用服，随整柱包下发一次）。
+
+删除清单：
+
+- `MixinServerChunkCache.hassium$onLightUpdate`（唯一 `onLightUpdate` 注入点）
+- `ShadowLightCompute.collectLightUpdate` / `drainLightMasks` / `pushLightReady` / `offerLightReady` /
+  `applyReadyLight` / `ReadyItem.lightPacket` / `LightMask` / `lightUpdates` / `fullApplyTraces` /
+  `retainNoDowngrade` / `classifyAssert` / `isLightMidCompute` / `lightFollowUps` +
+  `requeueLightFollowUp` + `MAX_LIGHT_FOLLOW_UPS` / `shouldApplyLightThisFrame` /
+  `shouldPackLightMaskThisFrame` / 全部 `probeMask*` / `probeAssert*` / `probeDowngrade*` / `probeWireLight*`
+- `SeedGenChunkCodec.wireLightMask`（及其 `probeWireLightScan` 计数）
+- `ShadowLightCompute` 的 `LIGHT_BRIDGE_DEFER_TIMEOUT_MS` / `bridgeDeferSinceMs`
+
+**保留**：`SeedGenChunkCodec.hasWireLight`（调用方是 `ShadowSeedServer.isColumnSurfaceLightReady` 的
+柱地表光就绪判定，与光桥无关）；`MixinServerChunkCache` 的 `getChunkForLighting` / `getChunk`
+两处取数桥（F17 死锁修复）；`LightNeighborhoodGate` 齐套门。
+
+**删除依据**：影子服务端没有真实玩家连接，vanilla `ChunkMap.broadcast` 无收件人，故当初自建 section
+级回传；而 vanilla 原生通道早已在跑——`MixinPlayerChunkSender:117-130`（`sendChunk` 的 `send`
+`@Redirect`）/ `MixinChunkMap:87-112`（`playerLoadedChunk` HEAD）/ `MixinServerPlayer:65` 均调
+`ShadowOfficialPacketBridge.forwardToRealClient`，带光整柱包直达真实客户端。光桥是重复通道。
+
+**量化**（删除前探针 run，`build/smoke-test/probe/<SessionId>/round{1,2}.json`）：
+`maskCollected` 414154 vs `maskDrained` 4951（98.8% 白收集）；`maskDiscarded/maskDrained ≈ 9.0`；
+`wireLightFullScans` 848657/866756/850924（≈3.5e9 格读/run）；`deliveryEmptyClientLit` 三轮均 0
+（被删的空层收窄从未拦住真实风险）；`downgradeSky` 三轮均 0（天光降级分支是死代码）。
+
+**回归风险**：光桥曾是「假收敛态」的兜底（2026-09-16 flyroundtrip：撤 `retainNoDowngrade` →
+regression=15）。删除后若出现「客户端停在 standing 首包欠光（skyTop=0）」，按用户口径属**投喂/算光侧**
+问题，应修源头（读盘柱光源表、齐套门、屏障收敛），不在交付侧补票。
+
+**未删除**（仍活跃）：`LightNeighborhoodGate` 齐套门、`ShadowOfficialPacketBridge` 官方通道转发、
+`isLightConverged` 收敛判据（`drainReady` → `confirmLightsCorrectIfConverged`）。
+
+## 8. 后续设计：齐套自驱动 + 唯一交付出口（进行中）
+
+光桥删除后交付变成**一次性快照**（错了就一直在），由此暴露三处已确认的不一致：光环常量
+`ShadowPullRadii.LIGHT_HALO_RADIUS` 是死代码、**交付域比计算域宽 4 环**、交付侧没有「3×3 已就绪」门
+（降级放行也算 `promoted`）。实测缺邻降级占放行总数 **11.0%**（2026-09-19 手动 run）。
+
+设计已拍板（三区状态机 / 参数化光环 / 200ms / 3×3 域分组排序 / 7 个交付入口收敛为 1），
+见 [`handoff/handoff-2026-09-19-light-halo-selfdriven-delivery.md`](handoff/handoff-2026-09-19-light-halo-selfdriven-delivery.md)。
+

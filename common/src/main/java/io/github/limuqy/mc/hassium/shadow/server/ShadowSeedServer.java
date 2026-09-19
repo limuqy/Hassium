@@ -1601,7 +1601,8 @@ public class ShadowSeedServer extends MinecraftServer {
     }
 
     /**
-     * 按维度版本的收敛判据（光桥在客户端主线程判「现在回传的是收敛值还是传播中间态」）。
+     * 按维度版本的收敛判据（消费方 {@code ShadowLightCompute.drainReady} 帧尾调
+     * {@code confirmLightsCorrectIfConverged} 决定是否可标记整批光正确）。
      * 只读引擎队列是否为空：不读引擎数据层（与光照 worker 并发读 fastutil 会自旋），
      * 也不排新光任务（推高 {@code lightTasks} 水位 → 主线程 injectChunk 5s 忙等 → 卡死）。
      * 探针失败返回 true（= 不推迟，与护栏引入前的行为一致）；{@link #isLightConverged()}

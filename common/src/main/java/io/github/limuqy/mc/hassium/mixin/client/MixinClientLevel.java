@@ -13,7 +13,7 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-/** 客户端区块卸载：只作废光桥凭据（§6.0 原版对齐，不拆影子注入表）。 */
+/** 客户端区块卸载：只作废落地凭据（§6.0 原版对齐，不拆影子注入表）。 */
 @Mixin(ClientLevel.class)
 public class MixinClientLevel {
     @Inject(method = "unload", at = @At("HEAD"))
@@ -25,7 +25,7 @@ public class MixinClientLevel {
         // 旧世界 unload 会打到错误 DimensionKey，上一维 epoch 残留。
         io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute
                 .onClientChunkUnloaded(pos, dim);
-        // 清光桥凭据；若影子仍在 tracking 窗内则入重发队列（§6.0）
+        // 清落地凭据（epoch）；若影子仍在 tracking 窗内则入重发队列（§6.0）
         // 必须传入正在卸的 ClientLevel 维 id，与 Light 侧一致
         io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession.getInstance()
                 .onClientChunkUnloaded(pos, dim);

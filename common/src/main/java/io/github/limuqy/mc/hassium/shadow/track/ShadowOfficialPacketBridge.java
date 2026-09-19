@@ -61,7 +61,7 @@ public final class ShadowOfficialPacketBridge {
                         chunkPacket.getX(), chunkPacket.getZ());
                 return false;
             }
-            // 回归原版 trackChunk：不因「光未对齐」丢弃官方整柱包；欠光首包光桥后补。
+            // 回归原版 trackChunk：不因「光未对齐」丢弃官方整柱包；欠光首包由后续整柱重交付补。
         }
         if (dimension != null && packet instanceof ClientboundLightUpdatePacket lightPacket
                 && io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate

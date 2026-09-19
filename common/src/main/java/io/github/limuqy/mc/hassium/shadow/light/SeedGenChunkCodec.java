@@ -2,12 +2,9 @@ package io.github.limuqy.mc.hassium.shadow.light;
 
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.compat.ShadowServerCompat;
-import java.util.BitSet;
 import net.minecraft.core.BlockPos;
-import net.minecraft.core.SectionPos;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.level.LightLayer;
 import net.minecraft.world.level.chunk.DataLayer;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.lighting.LevelLightEngine;
@@ -40,33 +37,22 @@ public final class SeedGenChunkCodec {
     }
 
 
-    /** 掩码：只收「该层线上确有非 0 半字节」的 section（位 = sectionY − minLightSection）。 */
-    static BitSet wireLightMask(LevelLightEngine engine, net.minecraft.world.level.ChunkPos pos, LightLayer layer) {
-        BitSet mask = new BitSet();
-        int minLightSection = engine.getMinLightSection();
-        for (int i = 0; i < engine.getLightSectionCount(); i++) {
-            if (hasWireLight(engine.getLayerListener(layer)
-                    .getDataLayerData(SectionPos.of(pos, minLightSection + i)))) {
-                mask.set(i);
-            }
-        }
-        return mask;
-    }
-
     /**
      * 该层是否存在非 0 半字节（{@code get} 低 4 位 = vanilla 打包写入线格式的值，同口径）。
      * 无数组层走 {@code isDefinitelyHomogenous} 的 O(1) 分支——清光占位层正是这一形态，
      * 既快又不会调 {@code getData()} 去 materialize 共享实例（有副作用）。
+     * <p>
+     * 【2026-09-19】唯一调用点是 {@code ShadowSeedServer.isColumnSurfaceLightReady}
+     * （柱地表光就绪判定）；曾经的第二个调用点 {@code wireLightMask}（交付掩码收窄）已随
+     * 光桥删除。原先挂在本方法上的 {@code probeWireLightScan} 扫描计数随之移除。
      */
     public static boolean hasWireLight(DataLayer layer) {
         if (layer == null) {
             return false;
         }
         if (layer.isDefinitelyHomogenous()) {
-            ShadowLightCompute.probeWireLightScan(false);
             return (layer.get(0, 0, 0) & 15) != 0;
         }
-        ShadowLightCompute.probeWireLightScan(true);
         for (int y = 15; y >= 0; y--) {
             for (int z = 0; z < 16; z++) {
                 for (int x = 0; x < 16; x++) {

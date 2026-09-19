@@ -20,8 +20,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * 口径：覆盖**所有**出站 chunk 包（{@code ClientboundLevelChunkWithLightPacket}）——
  * 含握手完成前原版直发（真实 light）与 Hassium 接管后的剥光包（空 BitSet，~6B）；
  * 客户端只 decode 不调 write，天然只统计服务端。增量 light 包（
- * {@code ClientboundLightUpdatePacket}）被 {@code MixinChunkHolder} 拦截转
- * LightDeltaS2C，不参与此统计。
+ * {@code ClientboundLightUpdatePacket}）原被 {@code MixinChunkHolder} 拦截转
+ * LightDeltaS2C——该链 2026-09-19 已删（直连拓扑下服务端从不发），故增量包不参与此统计。
  * <p>
  * 线程安全：encode 在 pushPool/Netty 多线程执行，ThreadLocal 隔离测量，AtomicLong 累计。
  */

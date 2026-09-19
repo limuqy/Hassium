@@ -214,7 +214,7 @@ public final class LightNeighborhoodGate {
      * <p>
      * <b>齐套判定</b>：邻柱必须「已过 INITIALIZE_LIGHT」（空 DataLayer 已安装）才算就绪——
      * 对齐原版生成金字塔：邻柱先到 INITIALIZE_LIGHT，中心柱才跑 LIGHT，
-     * 这样中心柱传播时可写入邻柱空层，触发 onLightUpdate → 光桥下发。
+     * 这样中心柱传播时邻柱已有可写入的空层（缺邻时引擎按 Bedrock 挡光 → 屋檐/洞口黑）。
      *
      * @return 齐套时返回 enqueue 时传入的 context；未齐套 / 条目不存在返回 null
      */

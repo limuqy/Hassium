@@ -79,7 +79,8 @@ d 已经有影子端、Bloom 分流、hash 查找链、客户端旧链清理。�
 
 **当时**：管道化两阶段（`initializeLight` → 等 8 邻建层 → `lightChunk`，`NEIGHBOR_PACK_WAIT_MS=2000`）+ 区块/光同 FIFO + `drainReady(frameDeadlineNs)`。三项各自有正确性动机（屋檐天空光、旧空光后到盖暗、主线程尖峰），合在一起导致进服首波邻柱互等、FIFO 旧光吃掉 JoinBoost 预算、mesh 编译打满双 JVM CPU。
 
-**现行（2.0.0）**：`isChunkLightComplete` 不挡首包（欠光可先落地，光桥后补）；`drainReady` 帧尾预算内落地；光桥只对「影子区块包已落地且客户端未卸载」的柱发送。原版对齐交付（`47e4a4a` 波）后「进范围必交付」不再被防抖拦截。
+**现行（2.0.0）**：`isChunkLightComplete` 不挡首包（欠光可先落地，由后续整柱重交付补）；`drainReady` 帧尾预算内落地。原版对齐交付（`47e4a4a` 波）后「进范围必交付」不再被防抖拦截。
+**2026-09-19**：section 级光桥已整体删除——光只随整柱包一次性下发（见 [`client-chunk-light-flow.md`](client-chunk-light-flow.md) §7.2）。
 
 ### 4.3 明确不当补丁的改动（仍然有效的方法论）
 
@@ -92,7 +93,7 @@ d 已经有影子端、Bloom 分流、hash 查找链、客户端旧链清理。�
 - 在 `respreadNeighborLightSources` 里 `awaitEngineTaskDrain`
 - 绑核 / 把定额加到 16 当验收
 
-光照模型允许：**`initializeLight` + 一次 `lightChunk` 后立刻打包**，屋檐/天空不对也先落地，余光走 light 桥；空屋檐可从 sky mask 省略。
+光照模型允许：**`initializeLight` + 一次 `lightChunk` 后立刻打包**，屋檐/天空不对也先落地，由后续整柱重交付修正（2026-09-19 前为「余光走 light 桥」，该桥已删）。
 
 ## 5. 冒烟怎么比（方法论仍有效）
 
@@ -114,7 +115,7 @@ pwsh -ExecutionPolicy Bypass -File .\scripts\runtime-smoke-test.ps1 `
 |------|--------|------------|
 | `mixin/MixinServerPlayer` 1.20.1 `trackChunk` | 立刻 `submitMetadataTask` | `<init>` TAIL 消费协商位 + 压制原版区块窗口（`ServerHandshakeActivation.onPlayerInit`） |
 | `network/ServerChunkPushManager` | tick drain 定额；无 admission | 原版 tracking 推送 + 每 tick 提交上限（admission 已退役） |
-| `network/seedgen/ShadowLightCompute` | 批收敛 → 无预算 `drainReady` | 邻柱屏障不挡首包 + 带预算 `drainReady` + 光桥 |
+| `network/seedgen/ShadowLightCompute` | 批收敛 → 无预算 `drainReady` | 邻柱屏障不挡首包 + 带预算 `drainReady`（光随整柱包下发，无 section 级回传） |
 | `network/seedgen/ShadowSeedServer.injectChunk` | 空壳 + `injectedChunks` | ChunkMap 正规加载 + 原版打包 + `onChunkMaterialized` 必交付 |
 | `mixin/MixinClientTick` | flush 预算队列后无上限 drain | `drainReady(deadline)` 帧尾预算内落地 |
 

@@ -397,7 +397,7 @@ java.lang.IllegalStateException: Should always be able to create a chunk!
 - [ ] §7.5 影子端创建失败 → 空 ClientChunkCache（协议级修复）
 - [ ] C2ME chunk system × 影子 `ChunkSource` 的 `Error upgrading chunk`（影子端是否需支持按需造柱）
 - [ ] 1.21.11 客户端 JVM `0xC0000409`（场景已 PASS 却判 FAIL）。**根因已定位（2026-09-19）**：
-  断连/退出拆除期会**凭空新建一台影子端**——`ShadowLightCompute.drainLightMasks` 在
+  断连/退出拆除期会**凭空新建一台影子端**——原 `ShadowLightCompute.drainLightMasks` 在
   `lightUpdates` 非空时**先** `ShadowServerRegistry.getOrCreate()`，**后**才判
   `connection == null` 丢弃；于是队列残留光更新触发一次无人使用的新装配。日志实证
   （`1.21.1_fabric_I_dimfix2_tf`，05:21:24）：`disconnecting` → `shadow shutdown waited 19ms`
@@ -406,14 +406,19 @@ java.lang.IllegalStateException: Should always be able to create a chunk!
   （`[SHADOW_TRACK] shadow level not assembled for twilightforest:twilight_forest; session deferred`）。
   退出期同理：`mc.stop()` 期间再起一台装配，冒烟 2s 后强退 → JVM 异常退出
   （seedgen 单轮无 R2 也崩，证明不需要 R2 就能触发）。
-  **修法探索（已试，回退）**：把断连判断前移到 `getOrCreate()` 之前（`drainLightMasks` 4 行重排）
+  **⚠ 该触发路径已消失（2026-09-19 光桥删除）**：`drainLightMasks` / `lightUpdates` 随光桥整体删除
+  （见 [`client-chunk-light-flow.md`](client-chunk-light-flow.md) §7.2），故「队列残留光更新 → 断连期
+  `getOrCreate()`」这条链不复存在。**但症状是否消失未验证**——需在删光桥后的树上重跑
+  `1.21.1_fabric_I`（1.21.11 / NeoForge）确认 `0xC0000409` 与断开窗口内 `Shadow seed server started`
+  是否同时归零。若仍复现，说明另有创建路径。
+  **修法探索（已试，回退）**：把断连判断前移到 `getOrCreate()` 之前（4 行重排）
   确实让「断开窗口内不再出现 `Shadow packs available` / `Shadow seed server started`」（口径 1 通过），
   但 **R2 直接变全黑**——对照实测：改前 R2 `applied` 1162/1236/1128（fabric/neoforge 三场），
   改后 **0**，且 `[SHADOW_TRACK] shadow level not assembled for twilightforest` 从零星涨到 **910 行**。
   **即断连拆除期那次「多余」的创建，实际上是 R2 复用实例的来源**（park/reuse 语义）。
   结论：这不是「顺手删掉一个多余创建」就能解决的问题——**须先理清 R2 的创建/复用路径**
   （谁在 R2 登录时创建、TF 维何时装配、park 实例如何跨会话复用），再决定断连期该不该创建。
-  该改动已回退（`ShadowLightCompute.drainLightMasks` 恢复原顺序，仅留注释）。
+  该改动已回退。
 - [ ] TF NeoForge：`applied` 计数与 `ClientChunkCache` 不一致
 - [ ] 冒烟日志审计与客户端日志落盘的竞态（ERROR 可能漏判）
 - [ ] 反透视 + Hassium 客户端：矿石仍应被混淆

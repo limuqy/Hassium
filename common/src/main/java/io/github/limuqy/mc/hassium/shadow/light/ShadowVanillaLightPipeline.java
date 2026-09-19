@@ -60,7 +60,7 @@ public final class ShadowVanillaLightPipeline {
         }
         String resolvedDimension = dimension == null ? currentDimension() : dimension;
         // 已有正确光的柱：跳过 injectChunk（会清光）。
-        // R2 remote_pull 重注入不得重置已修正的光（否则光桥再修一遍 = 黑块窗口）。
+        // R2 remote_pull 重注入不得重置已修正的光（否则清光后须重算再重交付 = 黑块窗口）。
         // 完整层 → publishCachedChunk；仅 isLightCorrect 但层未齐 → 只补光屏障，
         // 禁止 inject（清光）或 REUSE 空包（整柱抹光）。
         net.minecraft.world.level.chunk.LevelChunk existing =

@@ -78,43 +78,6 @@ class ShadowLightComputeTimingRegressionTest {
 
 
     @Test
-    @DisplayName("JoinBoost：有 chunk 在等时本帧不落地光包")
-    void shouldApplyLightThisFramePrefersChunksDuringJoinBoost() {
-        assertTrue(ShadowLightCompute.shouldApplyLightThisFrame(false, true, 0),
-                "非 JoinBoost 保持 FIFO，光包可与 chunk 交错");
-        assertTrue(ShadowLightCompute.shouldApplyLightThisFrame(false, false, 0));
-        assertFalse(ShadowLightCompute.shouldApplyLightThisFrame(true, true, 0),
-                "JoinBoost 且队列还有 chunk：光包 reoffer，不得 force 消化旧光");
-        assertFalse(ShadowLightCompute.shouldApplyLightThisFrame(true, true, 1),
-                "本帧已落地过 chunk 但队列仍有 chunk：继续优先 chunk");
-        assertTrue(ShadowLightCompute.shouldApplyLightThisFrame(true, false, 1),
-                "本帧 chunk 过完：剩余预算落地光");
-        assertTrue(ShadowLightCompute.shouldApplyLightThisFrame(true, false, 0),
-                "本帧没有 chunk：光包可用剩余预算");
-    }
-
-    @Test
-    @DisplayName("JoinBoost：光桥本帧最多打包 1 条，且仅在 chunk 过完且 deadline 未到")
-    void shouldPackLightMaskThisFrameLimitsJoinBoost() {
-        assertTrue(ShadowLightCompute.shouldPackLightMaskThisFrame(false, true, 0, false, 0),
-                "非 JoinBoost 不受 0～1 条限制");
-        assertTrue(ShadowLightCompute.shouldPackLightMaskThisFrame(false, false, 0, true, 0),
-                "非 JoinBoost：第一条不受 deadline 约束");
-        assertFalse(ShadowLightCompute.shouldPackLightMaskThisFrame(false, false, 0, true, 1),
-                "非 JoinBoost：已打包后才受 deadline 约束");
-        assertFalse(ShadowLightCompute.shouldPackLightMaskThisFrame(true, true, 0, false, 0),
-                "JoinBoost 且 chunk 在等：不打包光桥");
-        assertFalse(ShadowLightCompute.shouldPackLightMaskThisFrame(true, false, 1, true, 0),
-                "JoinBoost deadline 已到：不打包");
-        assertTrue(ShadowLightCompute.shouldPackLightMaskThisFrame(true, false, 1, false, 0),
-                "本帧已 apply 过 chunk 且 deadline 未到：允许 1 条");
-        assertFalse(ShadowLightCompute.shouldPackLightMaskThisFrame(true, false, 1, false, 1),
-                "JoinBoost 本帧最多 1 条");
-        assertTrue(ShadowLightCompute.shouldPackLightMaskThisFrame(true, false, 0, false, 0),
-                "本帧无 chunk：仍允许 1 条光桥补光");
-    }
-
-    @Test
     @DisplayName("影子回传 FIFO：后入队的优先级数值更大")
     void shadowApplyIsFifoNotDistance() {
         double first = ShadowLightCompute.fifoApplyPriority();
@@ -180,7 +143,7 @@ class ShadowLightComputeTimingRegressionTest {
     @DisplayName("客户端已落地影子全量包时 hash 命中不得整柱重推")
     void skipsRedundantFullPushWhenClientAlreadyHasShadowPacket() {
         assertTrue(ShadowLightCompute.shouldSkipRedundantFullPush(true),
-                "走近触发的 hash 命中再推全量会把 emptySkyYMask 盖掉光桥屋檐光");
+                "客户端已持有影子整柱包（含光）：走近触发的 hash 命中再推全量是纯重复交付");
         assertFalse(ShadowLightCompute.shouldSkipRedundantFullPush(false),
                 "加载屏 blocks-only / 尚未影子落地：仍要首次带光回传");
         assertTrue(ShadowLightCompute.shouldSkipUnchangedRepush(true, false, false, true),

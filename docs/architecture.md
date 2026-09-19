@@ -113,7 +113,7 @@ Hassium/
 |------|----------|----------------|
 | **进范围** `!was && now` | `playerLoadedChunk` → `trackChunk` **无条件**发 `ClientboundLevelChunkWithLightPacket` | `onChunkMaterialized` **必交付**：影子有数据 → `publishCachedChunk`；无数据 → pull 落地后再交付 |
 | **出范围** `was && !now` | `untrackChunk` → `ForgetLevelChunkPacket` | 影子 tracking 出窗 → 影子内存按自身 unload 语义回收；真实客户端 Forget 来自**真实服务端**几何 tracking（PULL 模式下 trackChunk 被压制，forget 仍透传） |
-| **客户端** | `ClientChunkCache` 槽位收包即写 / Forget 即 drop | 同左；`MixinClientLevel.unload` 清光桥凭据；若影子仍在可见形状内且有数据 → **入重发队列**（真实服 Forget 半径可能 &lt; 影子 vd，不能等 tracking 边沿） |
+| **客户端** | `ClientChunkCache` 槽位收包即写 / Forget 即 drop | 同左；`MixinClientLevel.unload` 清落地凭据（`shadowApplyEpochs`）；若影子仍在可见形状内且有数据 → **入重发队列**（真实服 Forget 半径可能 &lt; 影子 vd，不能等 tracking 边沿） |
 | **「已发送」记忆** | **无** | **无**。`requestedMisses` 仅防「对真实服务端」的重复 compare-pull，**不得**挡「影子 → 真实客户端」交付 |
 
 ```mermaid
@@ -184,7 +184,7 @@ sequenceDiagram
 
 - 接收并 `apply` 影子发出的官方 `ClientboundLevelChunkWithLightPacket`
 - 接收真实服务端 `ForgetLevelChunkPacket` 并 `ClientChunkCache.drop`
-- unload 时清光桥 epoch（`shadowApplyEpochs`），供后续 light 包门控
+- unload 时清落地凭据（`shadowApplyEpochs`），供后续整柱交付判定「客户端是否已有」
 
 **不做**（已从旧模型移除）：
 
