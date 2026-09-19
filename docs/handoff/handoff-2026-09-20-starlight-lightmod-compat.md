@@ -204,6 +204,20 @@ A 修好之前 B **不可观测**（整包 0 光时客户端一律读 15），�
 
 ---
 
+**离线取证脚本**（影子缓存 type-126 落盘字节，不需要跑游戏）：
+
+```bash
+python scripts/dump-shadow-light.py <region_dir> [limit]
+# region_dir 例：fabric/run/client/hassium_cache/server_127.0.0.1_25565/world/region
+```
+
+用 `common/src/main/resources/assets/hassium/hassium-dictionary.bin` 作 zstd 字典解 type 126 →
+走 NBT → 统计 `sections[].SkyLight`（all-15 / all-0 段占比 + nibble 直方图）。
+**注意口径**：Starlight 血缘**不把光写回 chunk section 数组**，所以这个脚本适合看「落盘产物形态」，
+**不适合**判断「交付包里有没有光」——后者必须用上面的 `[TEMP-DIAG-*]` 探针。
+
+---
+
 ## §5 测量纪律（**本次踩过的坑，务必遵守**）
 
 1. **两侧同时量**：只量一侧分不清「包没带光」与「带了但客户端没落地」。交付点掩码 + 客户端 nibble 状态必须成对读。
