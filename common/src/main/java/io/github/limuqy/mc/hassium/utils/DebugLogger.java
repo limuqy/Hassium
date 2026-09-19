@@ -23,7 +23,7 @@ public class DebugLogger {
         CHUNK_APPLY,    // 区块应用 (APPLY_CHUNK / CHUNK_PROBE 非 light)
         NETWORK,        // 网络传输
         CACHE,          // 缓存操作
-        LIGHT_VERIFY    // 光照验算 + 光包落地探针 (CHUNK_PROBE source=light)
+        LIGHT           // 光照调试总开关：算光链路日志 + 光包落地/引擎探针（debug.lightLogging，别名 debug.lightVerify）
     }
 
     /**
@@ -75,7 +75,8 @@ public class DebugLogger {
         if (debug.chunkApplyLogging()) bits |= 1 << LogType.CHUNK_APPLY.ordinal();
         if (debug.networkLogging()) bits |= 1 << LogType.NETWORK.ordinal();
         if (debug.cacheLogging()) bits |= 1 << LogType.CACHE.ordinal();
-        if (debug.lightVerify()) bits |= 1 << LogType.LIGHT_VERIFY.ordinal();
+        // 光照调试总开关：新键 debug.lightLogging，或历史别名 debug.lightVerify（两者任一开即生效）。
+        if (debug.lightLogging() || debug.lightVerify()) bits |= 1 << LogType.LIGHT.ordinal();
         return bits;
     }
 

@@ -396,11 +396,6 @@ public interface HassiumMetrics {
     long getLightRecomputeCount();
 
     /**
-     * 获取收到 LightDeltaS2CPacket 的条目数
-     */
-    long getLightDeltaReceivedCount();
-
-    /**
      * 获取光照验算差异格数（debug.lightVerify 开启时 BFS vs 官方引擎）
      */
     long getLightVerifyMismatchCount();
@@ -574,7 +569,7 @@ public interface HassiumMetrics {
      * （直连命中 + 影子复用）/（命中 + 本地重算）。剥光协商下直连命中
      * （{@link #getLightCacheHitCount()}）恒 0，实际复用由影子链路
      * （{@link #getLightReuseShadowBytes()}）承担；本地重算（光标脏缓存命中）
-     * 计入 {@link #getLightCacheMissBytes()}。邻柱 LIGHT_ONLY 补光不计入。
+     * 计入 {@link #getLightCacheMissBytes()}。
      * 所有区块均由影子端原版光照链路提供，不再区分 OVD/renderOnly 柱。
      */
     default double getLightCacheHitRate() {

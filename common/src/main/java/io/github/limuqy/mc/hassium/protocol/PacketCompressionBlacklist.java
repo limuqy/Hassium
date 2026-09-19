@@ -36,13 +36,12 @@ public class PacketCompressionBlacklist {
      *    导致 chunkHash / IndexSync / play_init / shadow_pull_response 等永不触达或卡住进服）
      */
     private static final Set<String> HARDCODED_BLACKLIST = Set.of(
-            // 控制面：字典 / 索引 / 激活 / 光照增量 / Pull 响应
+            // 控制面：字典 / 索引 / 激活 / Pull 响应
             HassiumPacketIds.DICTIONARY_SYNC_S2C,
             HassiumPacketIds.INDEX_SYNC_S2C,
             HassiumPacketIds.PLAY_INIT_S2C,
             HassiumPacketIds.SHADOW_PULL_RESPONSE_S2C,
             HassiumPacketIds.CHUNK_AUTHORITY_S2C,
-            HassiumPacketIds.LIGHT_DELTA_S2C,
             // 技术限制：Forge/NeoForge SimpleChannel 共用通道
             HassiumPacketIds.MAIN_CHANNEL,
             // 聚合包自身（递归聚合）

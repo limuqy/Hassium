@@ -153,7 +153,7 @@ public final class LightNeighborhoodGate {
             return entry;
         });
         noteNeighborhoodProgress(dimension, pos, now);
-        DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+        DebugLogger.info(DebugLogger.LogType.LIGHT,
                 "[LIGHT_GATE] Enqueue ({}, {}) dim={} pending={}",
                 pos.x, pos.z, dimension, awaiting.size());
     }
@@ -278,13 +278,13 @@ public final class LightNeighborhoodGate {
             return null;
         }
         if (notInjected > 0 || outsideWindow > 0) {
-            DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+            DebugLogger.info(DebugLogger.LogType.LIGHT,
                     "[LIGHT_GATE] Promote ({}, {}) dim={} missingInWindow={} outsideWindow={} "
                             + "timedOut={} waited={}ms sinceProgress={}ms (no placeholders)",
                     pos.x, pos.z, dimension, notInjected, outsideWindow,
                     timedOut, waitedMs, sinceProgressMs);
         } else {
-            DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+            DebugLogger.info(DebugLogger.LogType.LIGHT,
                     "[LIGHT_GATE] Promote ({}, {}) dim={} neighborhood ready "
                             + "(timedOut={} waited={}ms sinceProgress={}ms)",
                     pos.x, pos.z, dimension, timedOut, waitedMs, sinceProgressMs);
@@ -307,7 +307,7 @@ public final class LightNeighborhoodGate {
         if (!blockedLogged.add(key)) {
             return;
         }
-        DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+        DebugLogger.info(DebugLogger.LogType.LIGHT,
                 "[LIGHT_GATE] Blocked ({}, {}) dim={} waited={}ms neighbors=[{}] "
                         + "injectedNotInit={} notInjected={}",
                 pos.x, pos.z, dimension, waitedMs, neighbors,

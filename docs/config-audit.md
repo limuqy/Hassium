@@ -23,7 +23,7 @@
 
 键名前缀：区块核心 `chunk.*` / 服务端传输面 `master.*` / 存储 `storage.*` / 兼容 `compat.*` / 调试 `debug.*`。说明列与 `ConfigSchema` commentZh 一致（= TOML 注释中文行）。
 
-### A. CLIENT 键（client.toml / client spec，24 键）
+### A. CLIENT 键（client.toml / client spec，25 键）
 
 **A1. chunk.\*（14 键，区块核心）**
 
@@ -55,7 +55,8 @@
 | `debug.chunkApplyLogging` | `false` | 区块 apply 调试日志 |
 | `debug.networkLogging` | `false` | 网络调试日志 |
 | `debug.cacheLogging` | `false` | 缓存调试日志 |
-| `debug.lightVerify` | `false` | 光照验算与光包落地探针 |
+| `debug.lightVerify` | `false` | 历史别名，等价 `debug.lightLogging`（任一开即生效） |
+| `debug.lightLogging` | `false` | 光照调试总开关：算光链路日志 + 引擎/光包探针 + 冒烟 `lightProbe` 块 |
 | `debug.networkMetricsEnabled` | `false` | 是否启用客户端网络指标 |
 | `debug.networkMetricsAutoReset` | `true` | 登出服务器时自动重置网络指标 |
 
@@ -104,7 +105,7 @@
 | `compat.requireClientMod` | `false` | 是否强制要求客户端安装 Hassium |
 | `compat.autoDowngradeOnError` | `true` | 出错时是否自动降级 |
 
-**B5. debug.\*（SERVER 5 键；与 CLIENT 同名键共用路径，scope 隔离；不含元数据/缓存/光照验算）**
+**B5. debug.\*（SERVER 5 键；与 CLIENT 同名键共用路径，scope 隔离；不含元数据/缓存/光照）**
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|

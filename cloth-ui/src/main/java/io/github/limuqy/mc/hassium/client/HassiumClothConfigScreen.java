@@ -109,6 +109,8 @@ public final class HassiumClothConfigScreen {
                 draft.cacheLogging, dDebug.cacheLogging(), v -> draft.cacheLogging = v));
         debugCat.addEntry(bool(entries, "hassium.configuration.debug.lightVerify",
                 draft.lightVerify, dDebug.lightVerify(), v -> draft.lightVerify = v));
+        debugCat.addEntry(bool(entries, "hassium.configuration.debug.lightLogging",
+                draft.lightLogging, dDebug.lightLogging(), v -> draft.lightLogging = v));
         return builder.build();
     }
 
@@ -187,6 +189,7 @@ public final class HassiumClothConfigScreen {
         boolean networkLogging;
         boolean cacheLogging;
         boolean lightVerify;
+        boolean lightLogging;
 
         static Draft from(HassiumConfig c) {
             Draft d = new Draft();
@@ -216,6 +219,7 @@ public final class HassiumClothConfigScreen {
             d.networkLogging = debug.networkLogging();
             d.cacheLogging = debug.cacheLogging();
             d.lightVerify = debug.lightVerify();
+            d.lightLogging = debug.lightLogging();
             return d;
         }
 
@@ -239,7 +243,7 @@ public final class HassiumClothConfigScreen {
                     new HassiumConfig.DebugConfig(
                             metadataLogging, dispatcherLogging, asyncLogging, compressionLogging,
                             chunkApplyLogging, networkLogging, cacheLogging,
-                            lightVerify, metricsEnabled, metricsAutoReset));
+                            lightVerify, lightLogging, metricsEnabled, metricsAutoReset));
         }
     }
 }

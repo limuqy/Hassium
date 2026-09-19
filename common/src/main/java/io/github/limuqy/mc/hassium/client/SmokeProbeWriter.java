@@ -77,6 +77,7 @@ public final class SmokeProbeWriter {
             }
             sb.append(",\n");
             appendStats(sb, NetworkStats.getMetrics());
+            io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.appendLightProbeJson(sb);
             appendClientCache(sb, mc, dimension);
             appendContentCheck(sb, mc);
             appendCounters(sb);

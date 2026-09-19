@@ -78,8 +78,6 @@ public class NeoForgeNetworkManager implements INetworkManagerService {
             payloadType(HassiumChannels.SHADOW_PULL_REQUEST_C2S);
     public static final CustomPacketPayload.Type<ByteArrayPayload> SHADOW_PULL_RESPONSE_TYPE =
             payloadType(HassiumChannels.SHADOW_PULL_RESPONSE_S2C);
-    public static final CustomPacketPayload.Type<ByteArrayPayload> LIGHT_DELTA_TYPE =
-            payloadType(HassiumChannels.LIGHT_DELTA_S2C);
     /** 权威边沿 enter 通知（服务端声明权威集合 + 权威 chunkHash）。 */
     public static final CustomPacketPayload.Type<ByteArrayPayload> CHUNK_AUTHORITY_TYPE =
             payloadType(HassiumChannels.CHUNK_AUTHORITY_S2C);
@@ -302,10 +300,6 @@ public class NeoForgeNetworkManager implements INetworkManagerService {
 
         // ===== S2C（客户端处理；与服务端发送方向一一对应）=====
 
-        // LightDelta S2C（直连拓扑：客户端影子端经 vanilla 通道消费）
-        registrar.playToClient(LIGHT_DELTA_TYPE, codec(LIGHT_DELTA_TYPE),
-                (payload, ctx) -> PayloadHandlers.handleLightDelta(payload.data()));
-
         // 权威边沿 enter S2C：客户端三分支解析（hash 命中 → 零请求本地交付 + 记缓存全命中）
         registrar.playToClient(CHUNK_AUTHORITY_TYPE, codec(CHUNK_AUTHORITY_TYPE),
                 (payload, ctx) -> ctx.enqueueWork(() -> PayloadHandlers.handleChunkAuthority(payload.data())));
@@ -389,13 +383,6 @@ public class NeoForgeNetworkManager implements INetworkManagerService {
     @Override
     public void sendChunkAuthorityS2C(ServerPlayer player, FriendlyByteBuf buf) {
         sendServerPayload(player, new ByteArrayPayload(CHUNK_AUTHORITY_TYPE, PayloadHandlers.drain(buf)));
-    }
-
-    @Override
-    public void sendLightDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
-        // 直连拓扑：网关帧链路（LIGHT_DELTA 原唯一消费方）已裁剪，改经 vanilla play S2C payload
-        // 下发，客户端影子端 ShadowLightCompute 直连消费（任意线程安全）。
-        sendServerPayload(player, new ByteArrayPayload(LIGHT_DELTA_TYPE, PayloadHandlers.drain(buf)));
     }
 
     /**

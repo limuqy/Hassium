@@ -198,11 +198,12 @@ public record HassiumConfig(
             boolean networkLogging,
             boolean cacheLogging,
             boolean lightVerify,
+            boolean lightLogging,
             boolean networkMetricsEnabled,
             boolean networkMetricsAutoReset
     ) {
         public static final DebugConfig DEFAULT = new DebugConfig(
-                false, false, false, false, false, false, false, false, false, true
+                false, false, false, false, false, false, false, false, false, false, true
         );
     }
 }

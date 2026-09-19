@@ -29,11 +29,11 @@ public class MixinThreadedLevelLightEngine {
             at = @At("HEAD"), require = 1)
     private void hassium$traceLightChunk(ChunkAccess chunk, boolean lit,
                                          CallbackInfoReturnable<CompletableFuture<ChunkAccess>> cir) {
-        if (!DebugLogger.isEnabled(DebugLogger.LogType.LIGHT_VERIFY) || chunk == null) {
+        if (!DebugLogger.isEnabled(DebugLogger.LogType.LIGHT) || chunk == null) {
             return;
         }
         ChunkPos pos = chunk.getPos();
-        DebugLogger.info(DebugLogger.LogType.LIGHT_VERIFY,
+        DebugLogger.info(DebugLogger.LogType.LIGHT,
                 "[LIGHT_CALL] pos=({},{}) lit={} class={} thread={}",
                 pos.x, pos.z, lit, chunk.getClass().getSimpleName(),
                 Thread.currentThread().getName());

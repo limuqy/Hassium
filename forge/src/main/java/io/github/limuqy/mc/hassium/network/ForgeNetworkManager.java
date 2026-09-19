@@ -216,14 +216,6 @@ public class ForgeNetworkManager implements INetworkManagerService {
                     ctx.get().setPacketHandled(true);
                 }, java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
         );
-        CHANNEL.<LightDeltaWrapper>registerMessage(
-                packetId++, LightDeltaWrapper.class,
-                LightDeltaWrapper::encode, LightDeltaWrapper::decode,
-                (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> PayloadHandlers.handleLightDelta(msg.data()));
-                    ctx.get().setPacketHandled(true);
-                }, java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
-        );
 
         LOGGER.info("Hassium: Registered {} network packets", packetId);
     }
@@ -290,11 +282,8 @@ public class ForgeNetworkManager implements INetworkManagerService {
                                 playCodec(ChunkAuthorityWrapper::encode, ChunkAuthorityWrapper::decode),
                                 (msg, ctx) -> ctx.enqueueWork(() ->
                                         PayloadHandlers.handleChunkAuthority(msg.data())))
-                        .addMain(LightDeltaWrapper.class,
-                                playCodec(LightDeltaWrapper::encode, LightDeltaWrapper::decode),
-                                (msg, ctx) -> ctx.enqueueWork(() -> PayloadHandlers.handleLightDelta(msg.data())))
                 .build();
-        LOGGER.info("Hassium: Registered Forge 50+ ChannelBuilder play channel (2 C2S + 8 S2C)");
+        LOGGER.info("Hassium: Registered Forge 50+ ChannelBuilder play channel (2 C2S + 7 S2C)");
     }
 
     private static <M> StreamCodec<RegistryFriendlyByteBuf, M> playCodec(
@@ -494,22 +483,6 @@ public class ForgeNetworkManager implements INetworkManagerService {
 #endif
     }
 
-    @Override
-    // 直连拓扑（2026-08-23 裁决修订）：光照增量经 LightDelta play S2C 通道下发，
-    // 客户端影子端 ShadowLightCompute 消费。
-    public void sendLightDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
-        byte[] data = new byte[buf.readableBytes()];
-        buf.readBytes(data);
-        buf.release();
-#if MC_VER < MC_1_21_1
-        if (CHANNEL != null) {
-            CHANNEL.sendTo(new LightDeltaWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
-        }
-#else
-        sendToPlayer(player, new LightDeltaWrapper(data));
-#endif
-    }
-
     // ========== 数据包记录 ==========
 
     // play_init S2C 记录已删除：直接注册 common {@link LoginHandshake.PlayInitPayload}
@@ -616,28 +589,6 @@ public class ForgeNetworkManager implements INetworkManagerService {
 
         public static AggregationReadyWrapper decode(FriendlyByteBuf buf) {
             return new AggregationReadyWrapper(buf.readBoolean());
-        }
-    }
-
-    /**
-     * 光照增量（S2C）：直连拓扑经 vanilla play 通道下发；
-     * 客户端 receiver 解码为 common {@code LightDeltaS2CPacket} 交影子端消费。
-     */
-    public record LightDeltaWrapper(byte[] data) {
-        public void encode(FriendlyByteBuf buf) {
-            buf.writeVarInt(data.length);
-            buf.writeBytes(data);
-        }
-
-        public static LightDeltaWrapper decode(FriendlyByteBuf buf) {
-            // length 校验同款（恶意超大 varInt 拒绝分配）
-            int length = buf.readVarInt();
-            if (length < 0 || length > buf.readableBytes()) {
-                throw new IllegalArgumentException("invalid LightDeltaWrapper length: " + length);
-            }
-            byte[] data = new byte[length];
-            buf.readBytes(data);
-            return new LightDeltaWrapper(data);
         }
     }
 

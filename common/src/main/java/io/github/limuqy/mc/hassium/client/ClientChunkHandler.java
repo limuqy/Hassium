@@ -350,7 +350,7 @@ public class ClientChunkHandler {
                                         long fullApplyAgeMs, long lightQueueDelayMs,
                                         boolean fullAppliedAfterLightQueued, boolean chunkPresent) {
         boolean lightProbe = !countAsApply;
-        if (!DebugLogger.isEnabled(lightProbe ? LogType.LIGHT_VERIFY : LogType.CHUNK_APPLY)) {
+        if (!DebugLogger.isEnabled(lightProbe ? LogType.LIGHT : LogType.CHUNK_APPLY)) {
             return;
         }
         if (level == null || pos == null) {
@@ -359,7 +359,7 @@ public class ClientChunkHandler {
         String origin = fullOrigin == null ? "unknown" : fullOrigin.logValue();
         String fullView = fullApplySequence < 0L ? "unknown" : fullRenderOnly ? "ovd" : "authoritative";
         if (!countAsApply && !chunkPresent) {
-            DebugLogger.info(LogType.LIGHT_VERIFY,
+            DebugLogger.info(LogType.LIGHT,
                     "[CHUNK_PROBE] source=light pos=({},{}) fullOrigin={} fullView={} fullApplySeq={} fullApplyAgeMs={} lightQueueDelayMs={} fullAppliedAfterLightQueued={} chunkPresent=false",
                     pos.x, pos.z, origin, fullView, fullApplySequence, fullApplyAgeMs, lightQueueDelayMs,
                     fullAppliedAfterLightQueued);
@@ -409,7 +409,7 @@ public class ClientChunkHandler {
             scheduleProbeRecheck(pos);
         }
         if (!countAsApply) {
-            DebugLogger.info(LogType.LIGHT_VERIFY,
+            DebugLogger.info(LogType.LIGHT,
                     "[CHUNK_PROBE] source=light pos=({},{}) apply#={} fullOrigin={} fullView={} fullApplySeq={} fullApplyAgeMs={} lightQueueDelayMs={} fullAppliedAfterLightQueued={} chunkPresent=true topY={} skyTop={} skyAir={} blockLow={} topBlock={} fixedY={} fixedBlock={} secY={} skyMid={} skyW={} skyE={} skyN={} skyS={}",
                     pos.x, pos.z, count, origin, fullView, fullApplySequence, fullApplyAgeMs, lightQueueDelayMs,
                     fullAppliedAfterLightQueued, topY, skyTop, skyAir, blockLow, topBlock, fixedY, fixedBlock,

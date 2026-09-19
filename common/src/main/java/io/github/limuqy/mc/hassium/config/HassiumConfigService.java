@@ -310,9 +310,14 @@ public class HassiumConfigService {
         return Math.max(1, config.chunk().maxChunksPerFrame());
     }
 
-    /** 光照验算（官方引擎对照 BFS 结果；默认关）。 */
-    public boolean isLightVerifyEnabled() {
-        return config.debug().lightVerify();
+    /**
+     * 光照调试总开关（新键 {@code debug.lightLogging}，或历史别名 {@code debug.lightVerify}）。
+     * <p>
+     * 实际门控统一走 {@code DebugLogger.LogType.LIGHT}（与 {@code DebugLogger.isEnabled} 同源），
+     * 本方法供需要「开关真值」的非日志调用点使用。
+     */
+    public boolean isLightLoggingEnabled() {
+        return config.debug().lightLogging() || config.debug().lightVerify();
     }
 
     public int getMainThreadChunkBudgetMs() {

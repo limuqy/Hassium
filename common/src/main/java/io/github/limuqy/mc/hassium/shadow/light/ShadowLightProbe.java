@@ -4,7 +4,7 @@ import io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer;
 import io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry;
 
 import io.github.limuqy.mc.hassium.Constants;
-import io.github.limuqy.mc.hassium.config.HassiumConfigService;
+import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import io.github.limuqy.mc.hassium.utils.DimensionKey;
 import java.util.Base64;
 import java.util.BitSet;
@@ -55,10 +55,10 @@ public final class ShadowLightProbe {
 
     private ShadowLightProbe() {}
 
-    /** 门控：debug.lightVerify（CLIENT，默认 false）。 */
+    /** 门控：{@code debug.lightLogging}（新键）/ {@code debug.lightVerify}（历史别名），CLIENT，默认 false。 */
     public static boolean enabled() {
         try {
-            return HassiumConfigService.getInstance().isLightVerifyEnabled();
+            return DebugLogger.isEnabled(DebugLogger.LogType.LIGHT);
         } catch (Throwable t) {
             return false;
         }

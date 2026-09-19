@@ -4,9 +4,7 @@ import io.github.limuqy.mc.hassium.compat.HassiumChannels;
 import io.github.limuqy.mc.hassium.compat.PacketId;
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
-import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
 import net.minecraft.network.FriendlyByteBuf;
-import net.minecraft.server.level.ServerPlayer;
 #if MC_VER >= MC_1_21_1
 import io.github.limuqy.mc.hassium.network.FabricPayloadRegistry;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
@@ -35,28 +33,12 @@ public final class FabricSendCompat {
 #endif
     }
 
-    /** 服务端 → 玩家（S2C）。channel 传 HassiumChannels 常量。 */
-    public static void sendToPlayer(ServerPlayer player, PacketId channel, FriendlyByteBuf buf) {
-#if MC_VER < MC_1_21_1
-        ServerPlayNetworking.send(player, ResourceLocationCompat.vanilla(channel), buf);
-#else
-        ServerPlayNetworking.send(player, s2cPayload(channel, buf));
-#endif
-    }
-
 #if MC_VER >= MC_1_21_1
     private static CustomPacketPayload c2sPayload(PacketId channel, FriendlyByteBuf buf) {
         if (channel.equals(HassiumChannels.SHADOW_PULL_REQUEST_C2S)) {
             return FabricPayloadRegistry.toPayload(FabricPayloadRegistry.SHADOW_PULL_REQUEST_C2S_TYPE, buf);
         }
         throw new IllegalArgumentException("Unknown Hassium C2S channel: " + channel);
-    }
-
-    private static CustomPacketPayload s2cPayload(PacketId channel, FriendlyByteBuf buf) {
-        if (channel.equals(HassiumChannels.LIGHT_DELTA_S2C)) {
-            return FabricPayloadRegistry.toPayload(FabricPayloadRegistry.LIGHT_DELTA_S2C_TYPE, buf);
-        }
-        throw new IllegalArgumentException("Unknown Hassium S2C channel: " + channel);
     }
 #endif
 }

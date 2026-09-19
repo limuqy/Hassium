@@ -41,7 +41,7 @@ class ConfigRestructureRoundTripTest {
                     "bindHost", "authToken", "controlReachableEndpoints", "udpListeners",
                     "seedGenThreads", "serverChunkPushThreads");
 
-    // === 1. defaults 生成：52 键齐全 ===
+    // === 1. defaults 生成：53 键齐全 ===
 
     @Test
     void defaultsCoverAll78NewKeys() {
@@ -49,13 +49,13 @@ class ConfigRestructureRoundTripTest {
         Map<String, ConfigEntry<?>> byPath = ConfigSchema.entries().stream()
                 .collect(Collectors.toMap(e -> e.scope() + "/" + e.path(), Function.identity()));
 
-        assertEquals(52, ConfigSchema.entries().size(), "schema 留存键数");
-        assertEquals(52, values.asMap().size(), "defaults 键数");
+        assertEquals(53, ConfigSchema.entries().size(), "schema 留存键数");
+        assertEquals(53, values.asMap().size(), "defaults 键数");
 
         Map<String, Long> prefixCounts = ConfigSchema.entries().stream()
                 .collect(Collectors.groupingBy(e -> e.path().substring(0, e.path().indexOf('.') + 1),
                         Collectors.counting()));
-        assertEquals(Map.of("chunk.", 16L, "master.", 17L, "debug.", 15L,
+        assertEquals(Map.of("chunk.", 16L, "master.", 17L, "debug.", 16L,
                 "storage.", 2L, "compat.", 2L), prefixCounts);
 
         // 双端同名键 chunk.seedGenEnabled 各一
@@ -81,7 +81,7 @@ class ConfigRestructureRoundTripTest {
                 true, 8192, 0.5, 0.8, 0.2, 1200, 1024, 200,
                 true, true, 16, 12, 30, true, true);
         HassiumConfig.DebugConfig debug = new HassiumConfig.DebugConfig(
-                true, false, true, false, true, false, true, true, true, false);
+                true, false, true, false, true, false, true, true, true, true, false);
         // 网关拓扑退役：client.toml 不再承载任何 master.* 键（原迁移策略 6 键已删）
         HassiumConfig.MasterCoreConfig master = HassiumConfig.MasterCoreConfig.DEFAULT;
         HassiumConfig original = new HassiumConfig(
@@ -117,7 +117,7 @@ class ConfigRestructureRoundTripTest {
                 true, true, 16, 6, 15, false, false);
         HassiumConfig.CompatConfig compat = new HassiumConfig.CompatConfig(true, false);
         HassiumConfig.DebugConfig debug = new HassiumConfig.DebugConfig(
-                false, true, false, true, false, true, false, false, false, true);
+                false, true, false, true, false, true, false, false, false, false, true);
 
         HassiumConfig original = new HassiumConfig(storage, chunk, master, compat, debug);
         FabricTomlConfigIO.saveServer(root, original);

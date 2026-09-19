@@ -65,6 +65,7 @@ public final class ConfigSnapshotAdapter {
                 .with(ConfigSchema.CLIENT_DEBUG_NETWORK, debug.networkLogging())
                 .with(ConfigSchema.CLIENT_DEBUG_CACHE, debug.cacheLogging())
                 .with(ConfigSchema.CLIENT_DEBUG_LIGHT_VERIFY, debug.lightVerify())
+                .with(ConfigSchema.CLIENT_DEBUG_LIGHT, debug.lightLogging())
                 .with(ConfigSchema.CLIENT_DEBUG_NETWORK_METRICS, debug.networkMetricsEnabled())
                 .with(ConfigSchema.CLIENT_DEBUG_NETWORK_METRICS_AUTO_RESET, debug.networkMetricsAutoReset())
                 .with(ConfigSchema.SERVER_DEBUG_DISPATCHER, debug.dispatcherLogging())
@@ -107,7 +108,7 @@ public final class ConfigSnapshotAdapter {
      * Restores a runtime snapshot from schema values, choosing CLIENT or SERVER {@code debug.*}
      * keys according to the running physical side. Dual-scoped flags (dispatcher / async /
      * compression / chunkApply / network) read the matching side; client-only flags
-     * (metadata / cache / lightVerify) always come from their own schema key (the other side
+     * (metadata / cache / lightVerify / lightLogging) always come from their own schema key (the other side
      * keeps the default {@code false}).
      * The same side-routing applies to the double-scoped {@code chunk.seedGenEnabled}.
      */
@@ -152,6 +153,7 @@ public final class ConfigSnapshotAdapter {
                 debugValue(values, physicalClient, ConfigSchema.CLIENT_DEBUG_NETWORK, ConfigSchema.SERVER_DEBUG_NETWORK),
                 values.get(ConfigSchema.CLIENT_DEBUG_CACHE),
                 values.get(ConfigSchema.CLIENT_DEBUG_LIGHT_VERIFY),
+                values.get(ConfigSchema.CLIENT_DEBUG_LIGHT),
                 values.get(ConfigSchema.CLIENT_DEBUG_NETWORK_METRICS),
                 values.get(ConfigSchema.CLIENT_DEBUG_NETWORK_METRICS_AUTO_RESET));
         return new HassiumConfig(new HassiumConfig.StorageConfig(

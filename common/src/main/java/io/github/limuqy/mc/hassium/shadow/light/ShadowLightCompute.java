@@ -91,13 +91,6 @@ public final class ShadowLightCompute {
             new ConcurrentHashMap<>();
     /** 本地生成队列：复合键 -> (chunk, level)（SeedGen worldgen 完成 / 磁盘光脏 relight，打包回传）。 */
     private static final ConcurrentHashMap<Long, GenEntry> generated = new ConcurrentHashMap<>();
-    /**
-     * 增量算光队列（LightDelta 消费）：复合键 -> 变更掩码。REPLACE/合并不冲突——
-     * 服务端 LightDelta 是「哪几个 section 刚变完」的增量信号，同柱后到与先到的
-     * 掩码取并集即可（影子端按并集清光重算，最终一致性不变）。
-     */
-    private static final ConcurrentHashMap<Long, LightWork> pendingLightUpdates =
-            new ConcurrentHashMap<>();
     /** 管道在途光屏障：复合键 -> 提交上下文（submitLightBatch 提交，completeLight/超时扫表
      *  条件移除；size = 在途计数，上限 {@link #PIPELINE_MAX_INFLIGHT}，断连清空）。 */
     private static final ConcurrentHashMap<Long, InflightLight> inflightLight = new ConcurrentHashMap<>();
@@ -145,7 +138,7 @@ public final class ShadowLightCompute {
      * 引擎每完成一个 section 的光计算写数据层 → {@code onLightUpdate}（MixinServerChunkCache
      * 拦截，T2）→ {@link #collectLightUpdate} 收集绝对 sectionY；主线程帧尾
      * {@link #drainLightMasks} 攒批打包入回传队列。维度取客户端当前所在维度
-     * （LightDelta 协议与 mixin 入口均无维度上下文；影子端只装配三主维度）。
+     * （光桥与 mixin 入口均无维度上下文；影子端只装配三主维度）。
      */
     private static final ConcurrentHashMap<Long, LightMask> lightUpdates = new ConcurrentHashMap<>();
 
@@ -190,6 +183,174 @@ public final class ShadowLightCompute {
     private static final ConcurrentHashMap<Long, net.minecraft.world.level.chunk.ChunkAccess>
             nativeLightChunks = new ConcurrentHashMap<>();
 
+    // ===== 影子算光「重复计算」量化探针 =====
+    /**
+     * 纯只读计数（不改变任何行为），随 {@code roundN.json} 的顶层 {@code lightProbe} 块输出，
+     * 轮次边界由 {@link #resetLightProbeCounters()} 清零。口径：
+     * <ul>
+     *   <li>{@code initPhase1}/{@code initPhase1Skipped}/{@code initBarrier}：INITIALIZE_LIGHT
+     *       引擎 pass 的发起次数（phase-1 实际发起 / 幂等门挡下 / 屏障内另行发起）。
+     *       {@code initPhase1 + initBarrier} = 该轮 INITIALIZE 引擎 pass 总量。</li>
+     *   <li>{@code barrierRecompute}/{@code barrierReuse}：进入屏障的柱数（按 metric）。</li>
+     *   <li>{@code barrierReuseWithEngineLight}：REUSE 柱中**仍**以 {@code lightCorrect=true}
+     *       建 native chunk 跑引擎两阶段的柱数（复用柱未跳过算光的量）。</li>
+     *   <li>{@code barrierReusedPhase1}：复用 phase-1 native chunk 跳过 INITIALIZE 的次数。</li>
+     *   <li>{@code reusableProbeCalls}：{@link #isLightReusable} 调用次数（每次含全柱层扫描）。</li>
+     *   <li>{@code gatePumpCalls}/{@code gateTryPromoteCalls}/{@code gatePromoted}：齐套门
+     *       扫描轮次 / 邻域求值次数 / 放行柱数。</li>
+     *   <li>{@code maskCollected}/{@code maskDrained}/{@code maskDiscarded}：光桥收集 /
+     *       实际打包下发 / 被丢弃的 section 数（{@code collected - drained} 即白收集量）。</li>
+     *   <li>{@code wireLightCalls}/{@code wireLightFullScans}/{@code assertSafeCalls}：交付侧
+     *       整柱逐格扫描次数（{@code wireLightFullScans} 每次扫满 4096 格）。</li>
+     *   <li><b>降级判定分布</b>（2026-09-19 新增，用于验证「黑块来自提前推/半成品」假说）：
+     *       {@code assertSafeSections}（通过）/ {@code assertEmptySections}（全 0 或层 null）/
+     *       {@code downgradeSections}（因 {@code shadow < client} 被拦）；格差
+     *       {@code downgradeDeltaSum}/{@code downgradeDeltaMax}；
+     *       {@code downgradeClientAt15}（首个命中格 client==15 = 「见天格被影子算暗」的强证据）；
+     *       分桶 {@code downgradeSky}/{@code downgradeBlock} 与
+     *       {@code downgradePromoted}/{@code downgradeNotPromoted}（是否过齐套门）；
+     *       {@code assertIncreaseSections}（该 section 确实携带「变亮」增量）。</li>
+     * </ul>
+     */
+    private static final AtomicLong probeInitPhase1 = new AtomicLong();
+    private static final AtomicLong probeInitPhase1Skipped = new AtomicLong();
+    private static final AtomicLong probeInitBarrier = new AtomicLong();
+    private static final AtomicLong probeBarrierRecompute = new AtomicLong();
+    private static final AtomicLong probeBarrierReuse = new AtomicLong();
+    private static final AtomicLong probeBarrierReuseWithEngineLight = new AtomicLong();
+    /** 屏障内复用 phase-1 只跑 LIGHT（INITIALIZE 只算一遍）的次数。 */
+    private static final AtomicLong probeBarrierReusedPhase1 = new AtomicLong();
+    private static final AtomicLong probeReusableProbeCalls = new AtomicLong();
+    private static final AtomicLong probeGatePumpCalls = new AtomicLong();
+    private static final AtomicLong probeGateTryPromoteCalls = new AtomicLong();
+    private static final AtomicLong probeGatePromoted = new AtomicLong();
+    private static final AtomicLong probeMaskCollected = new AtomicLong();
+    private static final AtomicLong probeMaskDrained = new AtomicLong();
+    private static final AtomicLong probeMaskDiscarded = new AtomicLong();
+    private static final AtomicLong probeWireLightCalls = new AtomicLong();
+    private static final AtomicLong probeWireLightFullScans = new AtomicLong();
+    private static final AtomicLong probeAssertSafeCalls = new AtomicLong();
+
+    // --- 交付前「影子 ≥ 客户端」逐格校验的判定分布（2026-09-19：验证「黑块来自提前推/半成品」假说）---
+    /** shadow 层为 null（引擎里没有该层）。 */
+    private static final AtomicLong probeAssertNullSections = new AtomicLong();
+    /** shadow 层存在但整层全 0（占位/清光层）。 */
+    private static final AtomicLong probeAssertEmptySections = new AtomicLong();
+    /** 通过：非全 0 且逐格 shadow ≥ client。 */
+    private static final AtomicLong probeAssertSafeSections = new AtomicLong();
+    /** 通过且存在 shadow > client 的格（该 section 确实携带「变亮」增量）。 */
+    private static final AtomicLong probeAssertIncreaseSections = new AtomicLong();
+    /** 客户端侧该 section 层为 null（无可比对象 → client 视为 0，不可能降级）。 */
+    private static final AtomicLong probeClientLayerNullSections = new AtomicLong();
+    /** 因存在 shadow < client 的格被拦下的 section 数（核心指标）。 */
+    private static final AtomicLong probeDowngradeSections = new AtomicLong();
+    /** 降级事件的「首个命中格」格差（client − shadow）累计，用于求均值。 */
+    private static final AtomicLong probeDowngradeDeltaSum = new AtomicLong();
+    /** 降级事件的最大格差（client − shadow）。 */
+    private static final AtomicLong probeDowngradeDeltaMax = new AtomicLong();
+    /** 降级且首个命中格 client == 15（「见天格被影子算暗」的强证据）。 */
+    private static final AtomicLong probeDowngradeClientAt15 = new AtomicLong();
+    private static final AtomicLong probeDowngradeSky = new AtomicLong();
+    private static final AtomicLong probeDowngradeBlock = new AtomicLong();
+    /** 降级发生在「已过齐套门」的柱上。 */
+    private static final AtomicLong probeDowngradePromoted = new AtomicLong();
+    /** 降级发生在「未过齐套门」（超时降级/缺邻放行）的柱上。 */
+    private static final AtomicLong probeDowngradeNotPromoted = new AtomicLong();
+
+    private static final int ASSERT_SAFE = 0;
+    private static final int ASSERT_EMPTY = 1;
+    private static final int ASSERT_DOWNGRADE = 2;
+
+    /** 交付侧线掩码扫描探针（{@code SeedGenChunkCodec.hasWireLight} 调用）。 */
+    public static void probeWireLightScan(boolean fullScan) {
+        probeWireLightCalls.incrementAndGet();
+        if (fullScan) {
+            probeWireLightFullScans.incrementAndGet();
+        }
+    }
+
+    /** 轮次边界清零（{@code ScenarioEngine.resetNetworkStatsForRound2}）。 */
+    public static void resetLightProbeCounters() {
+        probeInitPhase1.set(0);
+        probeInitPhase1Skipped.set(0);
+        probeInitBarrier.set(0);
+        probeBarrierRecompute.set(0);
+        probeBarrierReuse.set(0);
+        probeBarrierReuseWithEngineLight.set(0);
+        probeBarrierReusedPhase1.set(0);
+        probeReusableProbeCalls.set(0);
+        probeGatePumpCalls.set(0);
+        probeGateTryPromoteCalls.set(0);
+        probeGatePromoted.set(0);
+        probeMaskCollected.set(0);
+        probeMaskDrained.set(0);
+        probeMaskDiscarded.set(0);
+        probeWireLightCalls.set(0);
+        probeWireLightFullScans.set(0);
+        probeAssertSafeCalls.set(0);
+        probeAssertNullSections.set(0);
+        probeAssertEmptySections.set(0);
+        probeAssertSafeSections.set(0);
+        probeAssertIncreaseSections.set(0);
+        probeClientLayerNullSections.set(0);
+        probeDowngradeSections.set(0);
+        probeDowngradeDeltaSum.set(0);
+        probeDowngradeDeltaMax.set(0);
+        probeDowngradeClientAt15.set(0);
+        probeDowngradeSky.set(0);
+        probeDowngradeBlock.set(0);
+        probeDowngradePromoted.set(0);
+        probeDowngradeNotPromoted.set(0);
+    }
+
+    /** 追加顶层 {@code "lightProbe": {...},} 块（冒烟 JSON 顶层键只增不改名）。 */
+    public static void appendLightProbeJson(StringBuilder sb) {
+        // 光照调试开关（debug.lightLogging，别名 debug.lightVerify）关闭时不输出该块。
+        if (!DebugLogger.isEnabled(DebugLogger.LogType.LIGHT)) {
+            return;
+        }
+        sb.append("  \"lightProbe\": {\n");
+        probeField(sb, "initPhase1", probeInitPhase1.get());
+        probeField(sb, "initPhase1Skipped", probeInitPhase1Skipped.get());
+        probeField(sb, "initBarrier", probeInitBarrier.get());
+        probeField(sb, "barrierRecompute", probeBarrierRecompute.get());
+        probeField(sb, "barrierReuse", probeBarrierReuse.get());
+        probeField(sb, "barrierReuseWithEngineLight", probeBarrierReuseWithEngineLight.get());
+        probeField(sb, "barrierReusedPhase1", probeBarrierReusedPhase1.get());
+        probeField(sb, "reusableProbeCalls", probeReusableProbeCalls.get());
+        probeField(sb, "gatePumpCalls", probeGatePumpCalls.get());
+        probeField(sb, "gateTryPromoteCalls", probeGateTryPromoteCalls.get());
+        probeField(sb, "gatePromoted", probeGatePromoted.get());
+        probeField(sb, "maskCollected", probeMaskCollected.get());
+        probeField(sb, "maskDrained", probeMaskDrained.get());
+        probeField(sb, "maskDiscarded", probeMaskDiscarded.get());
+        probeField(sb, "wireLightCalls", probeWireLightCalls.get());
+        probeField(sb, "wireLightFullScans", probeWireLightFullScans.get());
+        probeField(sb, "assertSafeCalls", probeAssertSafeCalls.get());
+        probeField(sb, "assertSafeSections", probeAssertSafeSections.get());
+        probeField(sb, "assertIncreaseSections", probeAssertIncreaseSections.get());
+        probeField(sb, "assertNullSections", probeAssertNullSections.get());
+        probeField(sb, "assertEmptySections", probeAssertEmptySections.get());
+        probeField(sb, "clientLayerNullSections", probeClientLayerNullSections.get());
+        probeField(sb, "downgradeSections", probeDowngradeSections.get());
+        probeField(sb, "downgradeDeltaSum", probeDowngradeDeltaSum.get());
+        probeField(sb, "downgradeDeltaMax", probeDowngradeDeltaMax.get());
+        probeField(sb, "downgradeClientAt15", probeDowngradeClientAt15.get());
+        probeField(sb, "downgradeSky", probeDowngradeSky.get());
+        probeField(sb, "downgradeBlock", probeDowngradeBlock.get());
+        probeField(sb, "downgradePromoted", probeDowngradePromoted.get());
+        probeLastField(sb, "downgradeNotPromoted", probeDowngradeNotPromoted.get());
+        sb.append("  },\n");
+    }
+
+    private static void probeField(StringBuilder sb, String name, long value) {
+        sb.append("    \"").append(name).append("\": ").append(value).append(",\n");
+    }
+
+    private static void probeLastField(StringBuilder sb, String name, long value) {
+        sb.append("    \"").append(name).append("\": ").append(value).append('\n');
+    }
+
     private static final AtomicBoolean consumeRunning = new AtomicBoolean(false);
 
     /** 原版 LIGHT future 请求的提交顺序锁；不持有该锁等待 future 或执行打包。 */
@@ -210,7 +371,7 @@ public final class ShadowLightCompute {
      * 看到「已注入但无 accountedIngress」会把网络柱误 publish 成缓存全命中。
      */
     private static final java.util.Set<Long> networkInFlight = java.util.concurrent.ConcurrentHashMap.newKeySet();
-    /** 光照命中/重算已记账柱（复合键）。邻柱 LIGHT_ONLY 补光会把同一片柱刷成千上万次。 */
+    /** 光照命中/重算已记账柱（复合键）：一柱一次命中或一次重算。 */
     private static final java.util.Set<Long> accountedLights = java.util.concurrent.ConcurrentHashMap.newKeySet();
 
     /** hash 分流计数（会话累计；断连清零）。冒烟探针字段兼容保留；热路径不再写入诊断集合（④）。 */
@@ -493,7 +654,6 @@ public final class ShadowLightCompute {
         pending.clear();
         pendingDeltas.clear();
         generated.clear();
-        pendingLightUpdates.clear();
         inflightLight.clear();
         networkInFlight.clear();
         requestedMisses.clear();
@@ -528,7 +688,7 @@ public final class ShadowLightCompute {
      * 不因层不全/全局收敛挡回传；超时仍 pushReady（标脏），补光走 drainLightMasks。
      */
     private static final long CONVERGENCE_WAIT_TIMEOUT_MS = 10_000L;
-    /** 每轮消费循环「光屏障提交」总量上限（含 pending/generated/delta/light 全部来源，
+    /** 每轮消费循环「光屏障提交」总量上限（含 pending/generated/delta 来源，
      *  不再仅限 pending 批）。两阶段屏障每柱仅 ~3 个引擎任务（initializeLight PRE+POST、
      *  lightChunk PRE+POST 的提交单元），24 柱 ≈ 72 任务，远低于 1000 并发阈值。 */
     private static final int CONSUME_BATCH_LIMIT = 24;
@@ -553,30 +713,6 @@ public final class ShadowLightCompute {
     private static final int PIPELINE_LOW_WATER = CONSUME_BATCH_LIMIT;
 
     private record DeltaWork(String dimension, io.github.limuqy.mc.hassium.protocol.SectionDeltaS2CPacket.DeltaEntry entry) {}
-
-    /** LightDelta 变更掩码合并单元（BitSet 由 packet decode 创建，提交后不再被外部修改）。 */
-    private record LightWork(BitSet skyMask, BitSet blockMask,
-                              BitSet emptySkyMask, BitSet emptyBlockMask) {
-        boolean hasSections() {
-            return !skyMask.isEmpty() || !blockMask.isEmpty()
-                    || !emptySkyMask.isEmpty() || !emptyBlockMask.isEmpty();
-        }
-
-        LightWork merged(LightWork other) {
-            if (other == null) {
-                return this;
-            }
-            BitSet sky = (BitSet) this.skyMask.clone();
-            BitSet block = (BitSet) this.blockMask.clone();
-            BitSet emptySky = (BitSet) this.emptySkyMask.clone();
-            BitSet emptyBlock = (BitSet) this.emptyBlockMask.clone();
-            sky.or(other.skyMask);
-            block.or(other.blockMask);
-            emptySky.or(other.emptySkyMask);
-            emptyBlock.or(other.emptyBlockMask);
-            return new LightWork(sky, block, emptySky, emptyBlock);
-        }
-    }
 
     private ShadowLightCompute() {}
 
@@ -684,16 +820,7 @@ public final class ShadowLightCompute {
                 && (!remoteHashPresent || hashMatches);
     }
 
-    /** 在途屏障被新的整柱方块或同柱光增量取代。 */
-    public static boolean isSupersededByNewerWork(boolean fullChunkTask, boolean hasBlockWork,
-                                           boolean hasLightDelta) {
-        return hasBlockWork || (!fullChunkTask && hasLightDelta);
-    }
-
-    public static boolean canStartLightDeltaNow(boolean chunkBarrierBusy) {
-        return !chunkBarrierBusy;
-    }
-
+    /** 在途屏障被新的整柱方块工作取代（同柱 pending/generated 重推）。 */
     private static boolean isChunkBarrierBusy(long key) {
         return inflightLight.containsKey(key)
                 || pending.containsKey(key)
@@ -706,23 +833,12 @@ public final class ShadowLightCompute {
     }
 
     private static boolean isSuperseded(LightTask t) {
-        return t != null && isSupersededByNewerWork(
-                t.source != LightSource.LIGHT_ONLY,
-                hasQueuedBlockWork(t.key),
-                pendingLightUpdates.containsKey(t.key));
+        return t != null && hasQueuedBlockWork(t.key);
     }
 
     /** 现在就能开屏障的投递。 */
     private static boolean hasStartablePendingWork() {
-        if (!pending.isEmpty() || !pendingDeltas.isEmpty() || !generated.isEmpty()) {
-            return true;
-        }
-        for (Long key : pendingLightUpdates.keySet()) {
-            if (canStartLightDeltaNow(isChunkBarrierBusy(key))) {
-                return true;
-            }
-        }
-        return false;
+        return !pending.isEmpty() || !pendingDeltas.isEmpty() || !generated.isEmpty();
     }
 
     /** 服务端直推注入：同一柱的 hash miss 只记一次。 */
@@ -1083,7 +1199,7 @@ public final class ShadowLightCompute {
     /**
      * 光照缓存按柱去重：一柱一次命中或一次重算。{@code reuse=true} 仅可在
      * 引擎已有已应用的光（{@code isLightCorrect} 且 {@code lightChunk(..., true)}）时传入；
-     * 有缓存区块但仍需传播的路径必须记重算。邻柱 LIGHT_ONLY 补光不走这里。
+     * 有缓存区块但仍需传播的路径必须记重算。
      */
     public static boolean accountLightColumn(String dimension, ChunkPos pos, boolean reuse) {
         if (pos == null) {
@@ -1102,11 +1218,6 @@ public final class ShadowLightCompute {
                     io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_LIGHT_BYTES);
         }
         return true;
-    }
-
-    /** 邻柱 / LightDelta 的 LIGHT_ONLY 不是「这一柱的光照缓存」事件。 */
-    public static boolean shouldAccountLightBarrierMetric(boolean lightOnly) {
-        return !lightOnly;
     }
 
 
@@ -1179,8 +1290,7 @@ public final class ShadowLightCompute {
 
 
     private static boolean hasPendingWork() {
-        return !pending.isEmpty() || !pendingDeltas.isEmpty() || !generated.isEmpty()
-                || !pendingLightUpdates.isEmpty();
+        return !pending.isEmpty() || !pendingDeltas.isEmpty() || !generated.isEmpty();
     }
 
     /**
@@ -1340,41 +1450,12 @@ public final class ShadowLightCompute {
         pump();
     }
 
-    /**
-     * 增量算光入口（LightDeltaS2CPacket 消费，任意线程：网关 Netty / 数据面事件循环）。
-     * <p>
-     * 服务端把官方 {@code ClientboundLightUpdatePacket} 剥成掩码后推送；影子端把对应
-     * section（含 empty 掩码 = 变全空的 section）的光清掉 → 重算收敛 → 以官方
-     * {@code ClientboundLightUpdatePacket}（全柱光，见 {@link #pushLightReady}）回传。
-     * 同柱掩码合并（REPLACE 并集）：LightDelta 是逐 tick 的增量信号，并集重算不丢信息。
-     * 目标柱未注入时不丢弃：标脏由 consumeLoop 的失败分支完成，R2 读盘命中会走 relight 链。
-     */
-    public static void submitLightDelta(io.github.limuqy.mc.hassium.protocol.LightDeltaS2CPacket packet) {
-        if (packet == null || packet.entries().isEmpty() || !isEnabled()) {
-            return;
-        }
-        int queued = 0;
-        for (io.github.limuqy.mc.hassium.protocol.LightDeltaS2CPacket.Entry entry : packet.entries()) {
-            if (entry == null || !entry.hasAnySection()) {
-                continue;
-            }
-            // LightDelta 协议无 dimension 字段（REQ 明细8 核对）：以客户端当前维度作键上下文
-            // （影子端只装配三主维度，玩家所在维度即数据归属维度）。
-            long key = DimensionKey.key(currentDimension(), entry.chunkX(), entry.chunkZ());
-            LightWork work = new LightWork((BitSet) entry.skyYMask().clone(),
-                    (BitSet) entry.blockYMask().clone(),
-                    (BitSet) entry.emptySkyYMask().clone(),
-                    (BitSet) entry.emptyBlockYMask().clone());
-            pendingLightUpdates.merge(key, work, LightWork::merged);
-            queued++;
-        }
-        if (queued > 0) {
-            DebugLogger.info(DebugLogger.LogType.ASYNC,
-                    "[SHADOW_LIGHT] LightDelta queued {} chunks for shadow relight", queued);
-            pump();
-        }
-    }
-
+    // 【2026-09-19 已删除】原 submitLightDelta（LightDeltaS2CPacket 消费入口）+ pendingLightUpdates
+    // + LightWork + LightSource.LIGHT_ONLY 全链：直连拓扑下 INetworkManagerService.sendLightDeltaPacket
+    // 三端实现均无调用者 → 服务端从不发该包 → 三端 receiver 永不触达 → 该入口恒不可达（死代码）。
+    // 真正的「方块更新 → 光回传」路径是 MixinClientPacketListener.hassium$onBlockUpdate（未取消，
+    // 客户端本地也算）→ ClientMetadataHandler.forwardBlockUpdate → 影子端 setBlock → 引擎
+    // onLightUpdate → collectLightUpdate → 帧尾 drainLightMasks → retainNoDowngrade。
 
     /** 客户端当前维度 id（{@code namespace:path}）。
      * 优先 {@code mc.level}；切维窗口 level 为空时用影子 tracking 维度，**不得**静默回落
@@ -1591,8 +1672,10 @@ public final class ShadowLightCompute {
                                            LevelChunk chunk,
                                            net.minecraft.server.level.ServerLevel level) {
         if (lightInitialized.contains(key)) {
+            probeInitPhase1Skipped.incrementAndGet();
             return; // 已初始化：幂等
         }
+        probeInitPhase1.incrementAndGet();
         try {
             net.minecraft.world.level.chunk.ProtoChunk nativeChunk =
                     io.github.limuqy.mc.hassium.compat.ShadowServerCompat
@@ -1601,20 +1684,20 @@ public final class ShadowLightCompute {
                     .initializeNativeLight(level, nativeChunk)
                     .whenComplete((ignored, throwable) -> {
                         if (throwable != null) {
-                            DebugLogger.warn(DebugLogger.LogType.ASYNC,
+                            DebugLogger.warn(DebugLogger.LogType.LIGHT,
                                     "[SHADOW_LIGHT] INITIALIZE_LIGHT failed ({}, {})",
                                     DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
                         } else {
                             nativeLightChunks.put(key, nativeChunk);
                             lightInitialized.add(key);
                             lightInitPassed.add(key); // 齐套门控判据（单调，见字段注释）
-                            DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+                            DebugLogger.info(DebugLogger.LogType.LIGHT,
                                     "[SHADOW_LIGHT] INITIALIZE_LIGHT done ({}, {})",
                                     DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
                         }
                     });
         } catch (Throwable failure) {
-            DebugLogger.warn(DebugLogger.LogType.ASYNC,
+            DebugLogger.warn(DebugLogger.LogType.LIGHT,
                     "[SHADOW_LIGHT] INITIALIZE_LIGHT exception ({}, {})",
                     DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key), failure);
         }
@@ -1648,14 +1731,14 @@ public final class ShadowLightCompute {
         try {
             // B6：与 deliverLocal / pushReady 同一口径
             if (!ShadowTrackingSession.isDeliverableToClient(pos.x, pos.z)) {
-                DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+                DebugLogger.info(DebugLogger.LogType.LIGHT,
                         "[SHADOW_LIGHT] native light skip beyond view+margin ({}, {})",
                         pos.x, pos.z);
                 return;
             }
             if (io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
                     .blockClientDelivery(dimension, pos.x, pos.z)) {
-                DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+                DebugLogger.info(DebugLogger.LogType.LIGHT,
                         "[SHADOW_LIGHT] native light skip seedGenAwaitingCompare ({}, {})",
                         pos.x, pos.z);
                 return;
@@ -1823,9 +1906,8 @@ public final class ShadowLightCompute {
                     // 不可恢复创建失败：维持既有全会话降级清理语义。
                     pending.clear();
                     pendingDeltas.clear();
-                    generated.clear();
-                    pendingLightUpdates.clear();
-                    inflightLight.clear();
+        generated.clear();
+        inflightLight.clear();
                     return;
                 }
                 sweepLightTimeouts(); // 超时兜底第二扫描点（主线程帧尾为主，低帧率兜底）
@@ -1861,17 +1943,7 @@ public final class ShadowLightCompute {
                     deltaBatch.add(e);
                 }
                 remaining -= deltaBatch.size();
-                List<Map.Entry<Long, LightWork>> lightBatch = new ArrayList<>();
-                for (Map.Entry<Long, LightWork> e : pendingLightUpdates.entrySet()) {
-                    if (lightBatch.size() >= remaining) {
-                        break;
-                    }
-                    if (!canStartLightDeltaNow(isChunkBarrierBusy(e.getKey()))) {
-                        continue;
-                    }
-                    lightBatch.add(e);
-                }
-                if (batch.isEmpty() && genBatch.isEmpty() && deltaBatch.isEmpty() && lightBatch.isEmpty()) {
+                if (batch.isEmpty() && genBatch.isEmpty() && deltaBatch.isEmpty()) {
                     // 仍需扫描齐套队列：邻柱后到可能让等待中的柱齐套；超时条目强制降级
                     if (LightNeighborhoodGate.pendingCount() > 0) {
                         List<LightTask> gateTasks = new ArrayList<>();
@@ -1883,8 +1955,8 @@ public final class ShadowLightCompute {
                     return;
                 }
                 org.slf4j.LoggerFactory.getLogger("Hassium/ShadowDisk")
-                        .debug("consumeLoop batch={} gen={} delta={} light={}",
-                                batch.size(), genBatch.size(), deltaBatch.size(), lightBatch.size());
+                        .debug("consumeLoop batch={} gen={} delta={}",
+                                batch.size(), genBatch.size(), deltaBatch.size());
                 List<LightTask> lightTasks = new ArrayList<>();
                 // 先扫描齐套队列：邻柱后到可能让等待中的柱齐套
                 pumpGateReady(server, lightTasks);
@@ -2009,38 +2081,6 @@ public final class ShadowLightCompute {
                             gen.lightReuse ? LightMetric.REUSE_CACHE : LightMetric.RECOMPUTE,
                             gen.renderOnly, gen.traceOrigin));
                 }
-                // 增量算光（LightDelta）：只清服务端声明变化的 section，重算后回传光包
-                // （不回传整柱 chunk 包——方块数据未变，整柱重推是水面「亮→黑→亮」跳变源）。
-                for (Map.Entry<Long, LightWork> e : lightBatch) {
-                    long key = e.getKey();
-                    LightWork work = e.getValue();
-                    if (work == null || !work.hasSections()) {
-                        pendingLightUpdates.remove(key, work);
-                        continue;
-                    }
-                    if (!canStartLightDeltaNow(isChunkBarrierBusy(e.getKey()))) {
-                        // 竞态：收集后又有整柱投递 / 首包 waiter。LightDelta 留队。
-                        continue;
-                    }
-                    // LightDelta 无维度字段：键以客户端当前维度登记（submitLightDelta）。
-                    String dimension = DimensionKey.dimensionOf(key);
-                    ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
-                    boolean invalidated = server.invalidateLightSections(dimension, pos,
-                            work.skyMask(), work.blockMask(), work.emptySkyMask(), work.emptyBlockMask());
-                    if (!invalidated) {
-                        // 柱未注入：不能重算。不请求全量：方块数据未变，hash 命中时本柱
-                        // 会经读盘 isLightCorrect 决定是否续算。
-                        pendingLightUpdates.remove(key, work);
-                        continue;
-                    }
-                    LevelChunk lightChunk = server.injectedChunk(dimension, pos.x, pos.z);
-                    if (lightChunk != null) {
-                        server.syncLightCorrect(lightChunk, false);
-                    }
-                    lightTasks.add(new LightTask(key, LightSource.LIGHT_ONLY, work,
-                            server.injectedChunk(dimension, pos.x, pos.z), server.level(dimension),
-                            LightMetric.RECOMPUTE, false, null));
-                }
                 // 管道化：提交后不等待，立即回循环取下一批（批间零空转）；在途上限由轮顶检查约束。
                 submitLightBatch(server, lightTasks);
             }
@@ -2092,11 +2132,6 @@ public final class ShadowLightCompute {
                         break;
                     case DELTA:
                         break; // delta 条目已在 apply 时移除
-                    case LIGHT_ONLY:
-                        if (!pendingLightUpdates.remove(t.key, t.token)) {
-                            continue; // 同柱有更新的 LightDelta 并集：下一轮处理
-                        }
-                        break;
                     case GATE:
                         // 占位邻柱 relight 等无队列 token 的任务：提交时无需条件移除
                         break;
@@ -2122,20 +2157,52 @@ public final class ShadowLightCompute {
     }
 
     /**
-     * 影子区块光照第二阶段：只跑 LIGHT（传播），复用第一阶段已初始化的 nativeChunk。
+     * 屏障内是否复用 phase-1 的 {@link #nativeLightChunks} 只跑 LIGHT（**生产语义，默认 true**）。
+     * <p>
+     * 语义等价性：phase-1（{@link #initializeLightImmediately}）已对**同一 ChunkPos** 跑过
+     * INITIALIZE，而引擎的层存储按 SectionPos 索引（不按 chunk 实例），所以屏障内再跑一遍
+     * 是重复劳动，不是正确性来源。
+     * <p>
+     * <b>2026-09-19 解除红线</b>（原「必须从零 INITIALIZE_LIGHT + LIGHT」已作废）：
+     * <ul>
+     *   <li>原理：天光**播种在 LIGHT 步**——{@code propagateLightSources} 读
+     *       {@code ChunkSkyLightSources} 高度图源逐列播种（源以上 15、向下衰减）再传播；
+     *       INITIALIZE 只做「装空层 / 启用该柱光照数据 / retainData 记账」，**不算任何亮度值**。
+     *       屋檐黑属于播种问题 → 与 INITIALIZE 是否复用无关。</li>
+     *   <li>实证：2026-09-19 用户多轮手动 run 未复现屋檐黑。</li>
+     *   <li>历史 2026-09-18 ⑤ 结论（复用 → 移动后屋檐柱全黑）**不再作为依据**：该实验是在
+     *       {@code 9595ee9d} 去门回归与 {@code 7d335166} 光源表修复之前的树上做的，归因混杂。</li>
+     * </ul>
+     * {@code nativeLightChunks} 无条目（如 REUSE 柱、phase-1 未完成）时自动回落到从零
+     * INITIALIZE+LIGHT。置 {@code false} 可整体退回历史语义做对照。
+     * <p>
+     * <b>不变量（仍钉死）</b>：{@link LightNeighborhoodGate} 齐套门不得拆；验收须含**移动中**
+     * 的屋檐/洞口，冒烟 PASS 不能代替目视。
+     */
+    private static final boolean REUSE_PHASE1_INITIALIZE = true;
+
+    /**
+     * 影子区块光照第二阶段：跑 LIGHT（传播）。
      * <p>
      * 两阶段对齐原版生成金字塔：第一阶段（{@link #initializeLightImmediately}）在注入时
      * 立即跑 INITIALIZE_LIGHT 装空 DataLayer；本阶段等 3×3 邻域都过 INITIALIZE_LIGHT 后
      * 才跑 LIGHT——这样传播可写入邻柱空层，触发 onLightUpdate → 光桥下发。
+     * <p>
+     * 屏障内是否复用 phase-1 的 native chunk（省掉一遍重复 INITIALIZE）见
+     * {@link #REUSE_PHASE1_INITIALIZE}；两条路径的 **LIGHT 步完全相同**，天光播种都在这里。
      */
     private static void startLightBarrier(ShadowSeedServer server,
                                           LightTask t, long deadlineMs) {
         ChunkPos barrierPos = new ChunkPos(DimensionKey.chunkXOf(t.key), DimensionKey.chunkZOf(t.key));
         String barrierDim = DimensionKey.dimensionOf(t.key);
+        if (t.metric == LightMetric.REUSE_CACHE) {
+            probeBarrierReuse.incrementAndGet();
+        } else {
+            probeBarrierRecompute.incrementAndGet();
+        }
         // 【钉死】非 REUSE 且未 promote：必须入 LightNeighborhoodGate，等 3×3 INITIALIZE 再 light。
         // 2026-09-18 去门实验导致屋檐黑+无补光；用户目视回退后恢复——禁止再拆（见项目 MEMORY Rules）。
-        if (t.source != LightSource.LIGHT_ONLY
-                && t.metric != LightMetric.REUSE_CACHE
+        if (t.metric != LightMetric.REUSE_CACHE
                 && t.chunk != null
                 && !LightNeighborhoodGate.wasPromoted(t.key)) {
             if (t.level != null) {
@@ -2155,11 +2222,37 @@ public final class ShadowLightCompute {
         try {
             net.minecraft.server.level.ServerLevel level = t.level != null
                     ? t.level : server.overworld();
-            // 【钉死 · ⑤ 已回退 2026-09-18】禁止「复用 phase-1 只跑 LIGHT」。
-            // 运动目视：无天光、靠邻域传播的屋檐柱部分全黑（spawn 附近冒烟可正常）。
-            // 与历史 swc 一致：必须从零 INITIALIZE_LIGHT + LIGHT；nativeLightChunks.remove。
-            // 齐套门仍钉死保留——门与本段是两回事。
-            nativeLightChunks.remove(t.key);
+            // 屏障内复用 phase-1 native chunk（2026-09-19 起为生产语义，见 REUSE_PHASE1_INITIALIZE）。
+            // 历史 2026-09-18 ⑤ 曾判定「复用 → 移动后屋檐柱全黑」并回退；该判定已作废（归因混杂：
+            // 当时树上正在做去门回归、且尚无读盘柱光源表修复）。齐套门仍钉死保留——门与本段是两回事。
+            net.minecraft.world.level.chunk.ChunkAccess phase1 =
+                    nativeLightChunks.remove(t.key);
+            if (t.metric == LightMetric.REUSE_CACHE) {
+                // REUSE 柱仍以 lightCorrect=true 建 native chunk 跑引擎两阶段（探针 B）。
+                probeBarrierReuseWithEngineLight.incrementAndGet();
+            }
+            if (REUSE_PHASE1_INITIALIZE && phase1 != null
+                    && t.metric != LightMetric.REUSE_CACHE) {
+                // 生产语义（2026-09-19 起）：phase-1 已对同一 ChunkPos 跑过 INITIALIZE
+                // （空层已装、section 状态已标记），屏障内只跑 LIGHT。
+                // 天光播种在 LIGHT 步（propagateLightSources），不在 INITIALIZE —— 见常量 javadoc。
+                probeBarrierReusedPhase1.incrementAndGet();
+                DebugLogger.info(DebugLogger.LogType.LIGHT,
+                        "[SHADOW_LIGHT] barrier reuse phase-1, skip INITIALIZE ({}, {}) dim={}",
+                        DimensionKey.chunkXOf(t.key), DimensionKey.chunkZOf(t.key), barrierDim);
+                inf.nativeChunk = phase1;
+                io.github.limuqy.mc.hassium.compat.ShadowServerCompat
+                        .completeNativeLight(level, inf.nativeChunk)
+                        .whenComplete((ignored, throwable) -> {
+                            if (throwable != null) {
+                                abortLight(t.key, throwable);
+                            } else {
+                                completeLight(inf, true);
+                            }
+                        });
+                return;
+            }
+            probeInitBarrier.incrementAndGet();
             inf.nativeChunk = io.github.limuqy.mc.hassium.compat.ShadowServerCompat
                     .createNativeLightChunk(level, t.chunk,
                             lightChunkHasExistingLight(t.metric == LightMetric.REUSE_CACHE));
@@ -2205,7 +2298,6 @@ public final class ShadowLightCompute {
     /** LIGHT 未完成时退出该柱光照，不广播 partial；其它柱继续。 */
     private static void abortLight(long key, Throwable cause) {
         inflightLight.remove(key);
-        pendingLightUpdates.remove(key);
         noteSingleColumnFailure(
                 "[SHADOW_LIGHT] abort ({}, {}) dim={}",
                 DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key),
@@ -2226,12 +2318,12 @@ public final class ShadowLightCompute {
             //（skyTop=0），引擎已亮也送不出去。仍下发当前引擎光包兜底。
             if (server != null && task.chunk != null && task.level != null) {
                 try {
-                    pushLightReady(pos, task.level, task.chunk, true, null);
-                    DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+                    pushLightReady(pos, task.level, task.chunk, true);
+                    DebugLogger.info(DebugLogger.LogType.LIGHT,
                             "[SHADOW_LIGHT] Superseded finish still pushed light ({}, {})",
                             pos.x, pos.z);
                 } catch (Throwable lightPushFailure) {
-                    DebugLogger.warn(DebugLogger.LogType.ASYNC,
+                    DebugLogger.warn(DebugLogger.LogType.LIGHT,
                             "[SHADOW_LIGHT] Superseded light push failed ({}, {})",
                             pos.x, pos.z);
                 }
@@ -2248,25 +2340,20 @@ public final class ShadowLightCompute {
             io.github.limuqy.mc.hassium.metrics.NetworkStats.recordLightRecomputeBackgroundTime(elapsedNs);
         }
         try {
-            if (task.source == LightSource.LIGHT_ONLY) {
-                LightWork work = task.token instanceof LightWork w ? w : null;
-                pushLightReady(pos, task.level, task.chunk, converged, work);
-            } else {
-                // 对齐原版 lightChunk POST：先记「本会话 LIGHT 完成」，再整柱打包。
-                if (server != null && task.chunk != null && !task.chunk.isLightCorrect()
-                        && server.hasCompleteLightLayers(pos, task.chunk)
-                        && server.hasUsableEngineLight(pos, task.chunk)) {
-                    server.syncLightCorrect(task.chunk, true);
-                }
-                markClientPackLightCompleted(task.key);
-                if (server != null && !isLightReusable(server, pos, task.chunk)) {
-                    DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
-                            "[SHADOW_LIGHT] pack after light task (non-ideal light) ({}, {}) metric={}",
-                            pos.x, pos.z, task.metric);
-                }
-                pushReady(task.key, task.chunk, task.level, converged, task.renderOnly,
-                        task.traceOrigin);
+            // 对齐原版 lightChunk POST：先记「本会话 LIGHT 完成」，再整柱打包。
+            if (server != null && task.chunk != null && !task.chunk.isLightCorrect()
+                    && server.hasCompleteLightLayers(pos, task.chunk)
+                    && server.hasUsableEngineLight(pos, task.chunk)) {
+                server.syncLightCorrect(task.chunk, true);
             }
+            markClientPackLightCompleted(task.key);
+            if (server != null && !isLightReusable(server, pos, task.chunk)) {
+                DebugLogger.info(DebugLogger.LogType.LIGHT,
+                        "[SHADOW_LIGHT] pack after light task (non-ideal light) ({}, {}) metric={}",
+                        pos.x, pos.z, task.metric);
+            }
+            pushReady(task.key, task.chunk, task.level, converged, task.renderOnly,
+                    task.traceOrigin);
         } catch (Throwable t) {
             DebugLogger.warn(DebugLogger.LogType.ASYNC,
                     "[SHADOW_CHUNK] Build failed ({}, {})", pos.x, pos.z);
@@ -2284,6 +2371,7 @@ public final class ShadowLightCompute {
         LightMask mask = lightUpdates.remove(key);
         if (mask != null) {
             synchronized (mask) {
+                probeMaskDiscarded.addAndGet(mask.skySections.size() + mask.blockSections.size());
                 mask.discarded = true;
                 mask.skySections.clear();
                 mask.blockSections.clear();
@@ -2315,7 +2403,6 @@ public final class ShadowLightCompute {
         pending.remove(key);
         generated.remove(key);
         pendingDeltas.remove(key);
-        pendingLightUpdates.remove(key);
         inflightLight.remove(key);
         lightUpdates.remove(key);
         shadowApplyEpochs.remove(key);
@@ -2325,7 +2412,7 @@ public final class ShadowLightCompute {
         nativeLightChunks.remove(key);
         LightNeighborhoodGate.cancel(key);
         discardLightMask(key);
-        DebugLogger.info(DebugLogger.LogType.ASYNC,
+        DebugLogger.info(DebugLogger.LogType.LIGHT,
                 "[SHADOW_LIGHT] Cancelled work before unload ({}, {})",
                 DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
     }
@@ -2369,7 +2456,7 @@ public final class ShadowLightCompute {
         // B6：统一交付门 = ServerVD+余量；更远柱不进 ready（原版会 Ignore）
         if (!renderOnly && !standingPreview
                 && !ShadowTrackingSession.isDeliverableToClient(pos.x, pos.z)) {
-            DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+            DebugLogger.info(DebugLogger.LogType.LIGHT,
                     "[SHADOW_LIGHT] skip beyond view+margin ({}, {}) dim={}",
                     pos.x, pos.z, DimensionKey.dimensionOf(key));
             return;
@@ -2426,7 +2513,7 @@ public final class ShadowLightCompute {
         }
         if (io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
                 .blockClientDelivery(DimensionKey.dimensionOf(key), pos.x, pos.z)) {
-            DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+            DebugLogger.info(DebugLogger.LogType.LIGHT,
                     "[SHADOW_LIGHT] offerReady blocked seedGenAwaitingCompare ({}, {})",
                     pos.x, pos.z);
             return;
@@ -2447,33 +2534,16 @@ public final class ShadowLightCompute {
     }
 
     /**
-     * 打包纯光包入回传队列——LightDelta / 邻柱补光等「方块数据未变、只更新光」的路径。
-     * 不发整柱 chunk 包：整柱重推会先黑一帧再由光包修正，正是水面「有光→黑→有光」
-     * 跳变的来源。
-     * <p>
-     * 掩码只用 LightDelta 声明变化的 section（skyMask ∪ emptySkyMask、blockMask ∪
-     * emptyBlockMask）：未变化的 section 不在包内，客户端保留旧光——全柱 null 掩码会
-     * 把所有「当前为空」的 section 打成 empty 掩码，客户端显式置 0，正是
-     * 「已亮区块被覆盖成暗」的来源之一。旧协议/未知 work 回退 null（全柱）。
+     * 打包纯光包入回传队列（方块数据未变、只更新光）：superseded 收口的兜底下发路径。
+     * 掩码一律收敛为「线上确有该层光」的 section——vanilla 会把「层存在但线上全 0」的
+     * section 记进 {@code emptyYMask}，客户端 {@code readSectionList} 据此显式写全 0 = 黑/灭灯；
+     * 空 section 不进包 → 客户端保留旧光。{@code chunk == null} 时回退全柱枚举（null/null）。
      */
     private static void pushLightReady(ChunkPos pos, net.minecraft.server.level.ServerLevel level,
                                        net.minecraft.world.level.chunk.LevelChunk chunk,
-                                       boolean converged, LightWork work) {
+                                       boolean converged) {
         BitSet skyMask = null;
         BitSet blockMask = null;
-        if (work != null) {
-            skyMask = (BitSet) work.skyMask().clone();
-            skyMask.or(work.emptySkyMask());
-            blockMask = (BitSet) work.blockMask().clone();
-            blockMask.or(work.emptyBlockMask());
-        }
-        // 不得断言「空 section」（vanilla 记成 emptyYMask → 客户端显式置 0 = 黑/灭灯），
-        // 掩码一律收敛为「线上确有该层光」且「开天格全 15」的 section。
-        // 这里必须覆盖两个来源：work 声明的变化 section（{@code work.emptySkyMask()} 会把
-        // 「算空的」section 也声明进来）以及 **work == null 的全柱请求**（superseded 收口路径；
-        // 旧代码只替换 sky 一侧、blockMask 留 null → 构造器对整个 block 层逐 section 断言，
-        // 空 block section 全被显式置 0 = 洞内灭灯）。只看 seed 侧 epoch 也会漏：epoch 会在
-        // 客户端卸载时被摘掉，而回传只发 light-only 包（不进 apply 计数），客户端可能仍持有该柱。
         if (chunk != null) {
             skyMask = SeedGenChunkCodec.wireLightMask(level.getLightEngine(),
                     chunk.getPos(), LightLayer.SKY);
@@ -2487,13 +2557,13 @@ public final class ShadowLightCompute {
         ClientboundLightUpdatePacket packet =
                 new ClientboundLightUpdatePacket(pos, level.getLightEngine(), skyMask, blockMask);
         offerLightReady(pos, packet);
-        DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+        DebugLogger.info(DebugLogger.LogType.LIGHT,
                 "[SHADOW_LIGHT] Queued full light update ({}, {}), converged={}",
                 pos.x, pos.z, converged);
     }
 
     private static void offerLightReady(ChunkPos pos, ClientboundLightUpdatePacket packet) {
-        Long lightQueuedAtMs = DebugLogger.isEnabled(DebugLogger.LogType.CHUNK_APPLY)
+        Long lightQueuedAtMs = DebugLogger.isEnabled(DebugLogger.LogType.LIGHT)
                 ? System.currentTimeMillis()
                 : null;
         ready.offer(new ReadyItem(null, packet, false, null, lightQueuedAtMs, null),
@@ -2566,7 +2636,7 @@ public final class ShadowLightCompute {
         }
         // 服务端 ACK 窗口在 100/s 平台期已满：一旦本帧 ready 空、又不再 submit()，
         // consumeLoop 不会被 pump，pending 会一直趴着直到 30s delivery timeout。
-        // 只用可开工的投递唤醒：林火 LightDelta 在整柱屏障后排队，等 finishLight 触发，
+        // 只用可开工的投递唤醒：在整柱屏障后排队的工作等 finishLight 触发，
         // 不在每帧 drain 里空转扫描。
         if ((hasStartablePendingWork() || !ready.isEmpty())
                 && inflightLight.size() < PIPELINE_MAX_INFLIGHT
@@ -2763,7 +2833,7 @@ public final class ShadowLightCompute {
         }
         ChunkPos lightPos = new ChunkPos(item.lightPacket.getX(), item.lightPacket.getZ());
         connection.handleLightUpdatePacket(item.lightPacket);
-        if (!DebugLogger.isEnabled(DebugLogger.LogType.LIGHT_VERIFY)
+        if (!DebugLogger.isEnabled(DebugLogger.LogType.LIGHT)
                 || mc == null || mc.level == null) {
             return;
         }
@@ -2861,6 +2931,7 @@ public final class ShadowLightCompute {
                 if (mask.discarded) {
                     // completeLight 已把最终全量光入队（或即将入队）：旧引用里的
                     // 中间波次禁止再构建，否则会排在最终光之后造成跳变。
+                    probeMaskDiscarded.addAndGet(mask.skySections.size() + mask.blockSections.size());
                     mask.skySections.clear();
                     mask.blockSections.clear();
                     continue;
@@ -2895,8 +2966,8 @@ public final class ShadowLightCompute {
             Minecraft mcForLight = Minecraft.getInstance();
             net.minecraft.client.multiplayer.ClientLevel clientLevel =
                     mcForLight == null ? null : mcForLight.level;
-            retainNoDowngrade(skyMask, engine, clientLevel, pos, LightLayer.SKY);
-            retainNoDowngrade(blockMask, engine, clientLevel, pos, LightLayer.BLOCK);
+            retainNoDowngrade(skyMask, engine, clientLevel, pos, LightLayer.SKY, key);
+            retainNoDowngrade(blockMask, engine, clientLevel, pos, LightLayer.BLOCK, key);
             if (skyMask.isEmpty() && blockMask.isEmpty()) {
                 noteLightAssertSuppressed(pos);
                 continue;
@@ -2916,9 +2987,10 @@ public final class ShadowLightCompute {
                 continue;
             }
             try {
+                probeMaskDrained.addAndGet(skyMask.cardinality() + blockMask.cardinality());
                 offerLightReady(pos, new ClientboundLightUpdatePacket(pos, engine, skyMask, blockMask));
             } catch (Throwable t) {
-                DebugLogger.warn(DebugLogger.LogType.ASYNC,
+                DebugLogger.warn(DebugLogger.LogType.LIGHT,
                         "[SHADOW_LIGHT] Build failed ({}, {})", pos.x, pos.z);
             }
         }
@@ -2930,10 +3002,15 @@ public final class ShadowLightCompute {
      * 只应客户端主线程调用（读客户端光照引擎，与写区块同线程）。掩码里没有的 section 客户端
      * 保持旧光，因此这里的判据同时承担两件事：排除空 section（vanilla 会记成 emptyYMask →
      * 客户端显式置 0），以及排除影子侧**半成品** section（逐格比客户端暗）。
+     * <p>
+     * <b>2026-09-19：天光侧不再做「更暗」拦截</b>（仅保留空层排除）——方块更新导致的光照变化
+     * 客户端本地本来就会算，影子端只推完整光，天光「更暗」是合法变化（放方块挡天光），不该由
+     * 交付侧拦下等整柱重投递。实测 4 轮天光降级 0 命中（方块光侧 27 命中、maxΔ=2），故该分支
+     * 为死代码；方块光侧的「更暗」拦截保留。
      */
     private static void retainNoDowngrade(BitSet mask, LevelLightEngine engine,
                                           net.minecraft.client.multiplayer.ClientLevel clientLevel,
-                                          ChunkPos pos, LightLayer layer) {
+                                          ChunkPos pos, LightLayer layer, long key) {
         if (mask.isEmpty()) {
             return;
         }
@@ -2948,37 +3025,84 @@ public final class ShadowLightCompute {
             DataLayer client = clientEngine == null
                     ? null
                     : clientEngine.getLayerListener(layer).getDataLayerData(sectionPos);
-            if (!isAssertSafe(shadow, client)) {
+            if (client == null) {
+                probeClientLayerNullSections.incrementAndGet();
+            }
+            int verdict = classifyAssert(shadow, client);
+            if (verdict != ASSERT_SAFE) {
+                if (verdict == ASSERT_DOWNGRADE) {
+                    // 测量上下文：哪一层、是否过了齐套门（区分「缺邻降级放行」与「齐套后仍偏暗」）。
+                    if (layer == LightLayer.SKY) {
+                        probeDowngradeSky.incrementAndGet();
+                    } else {
+                        probeDowngradeBlock.incrementAndGet();
+                    }
+                    if (LightNeighborhoodGate.wasPromoted(key)) {
+                        probeDowngradePromoted.incrementAndGet();
+                    } else {
+                        probeDowngradeNotPromoted.incrementAndGet();
+                    }
+                    // 天光侧不拦「更暗」（见方法 javadoc）：本 section 仍下发（含合法变暗）。
+                    if (layer == LightLayer.SKY) {
+                        continue;
+                    }
+                }
                 mask.clear(i);
             }
         }
     }
 
     /**
-     * 影子 section 可否断言行（逐格 {@code shadow >= client}，且至少一格非 0）。
+     * 影子 section 交付判定（语义与旧 {@code isAssertSafe} 完全一致，只是把结果分类以便计数）：
+     * <ul>
+     *   <li>{@link #ASSERT_SAFE}：至少一格非 0，且逐格 {@code shadow >= client}</li>
+     *   <li>{@link #ASSERT_EMPTY}：{@code shadow == null} 或整层全 0</li>
+     *   <li>{@link #ASSERT_DOWNGRADE}：存在 {@code shadow < client} 的格（会把客户端打暗）</li>
+     * </ul>
      * {@code client == null}（客户端没有该 section）退化为「有非 0 光即可」。
-     * 占位层 {@code new DataLayer(2048)} 取值被 {@code & 15} 归一为 0 → 判为「无光」不下发
-     * （该层的线上 payload 恰好是全 0，直接下发就是黑板）。
+     * 占位层 {@code new DataLayer(2048)} 取值被 {@code & 15} 归一为 0 → 判为「无光」不下发。
      */
-    private static boolean isAssertSafe(DataLayer shadow, DataLayer client) {
+    private static int classifyAssert(DataLayer shadow, DataLayer client) {
+        probeAssertSafeCalls.incrementAndGet();
         if (shadow == null) {
-            return false;
+            probeAssertNullSections.incrementAndGet();
+            return ASSERT_EMPTY;
         }
         boolean anyLight = false;
+        boolean anyIncrease = false;
         for (int y = 0; y < 16; y++) {
             for (int z = 0; z < 16; z++) {
                 for (int x = 0; x < 16; x++) {
                     int shadowValue = shadow.get(x, y, z) & 15;
-                    if (shadowValue < (client == null ? 0 : (client.get(x, y, z) & 15))) {
-                        return false; // 会把客户端打暗：本 section 整体不下发
+                    int clientValue = client == null ? 0 : (client.get(x, y, z) & 15);
+                    if (shadowValue < clientValue) {
+                        int delta = clientValue - shadowValue;
+                        probeDowngradeSections.incrementAndGet();
+                        probeDowngradeDeltaSum.addAndGet(delta);
+                        probeDowngradeDeltaMax.accumulateAndGet(delta, Math::max);
+                        if (clientValue == 15) {
+                            probeDowngradeClientAt15.incrementAndGet();
+                        }
+                        return ASSERT_DOWNGRADE; // 会把客户端打暗：本 section 整体不下发
                     }
                     if (shadowValue != 0) {
                         anyLight = true;
                     }
+                    if (shadowValue > clientValue) {
+                        anyIncrease = true;
+                    }
                 }
             }
         }
-        return anyLight;
+        if (!anyLight) {
+            probeAssertEmptySections.incrementAndGet();
+            return ASSERT_EMPTY;
+        }
+        probeAssertSafeSections.incrementAndGet();
+        if (anyIncrease) {
+            probeAssertIncreaseSections.incrementAndGet();
+        }
+        return ASSERT_SAFE;
     }
 
     /** 绝对 sectionY 集合 → 包掩码 BitSet（位 = sectionY − minLightSection；越界丢弃）。 */
@@ -3015,7 +3139,7 @@ public final class ShadowLightCompute {
             return;
         }
         lastMidComputeWithholdLogMs = now;
-        DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+        DebugLogger.info(DebugLogger.LogType.LIGHT,
                 "[SHADOW_LIGHT] Withheld mid-compute light update ({}, {}) total={}",
                 pos.x, pos.z, total);
     }
@@ -3041,7 +3165,7 @@ public final class ShadowLightCompute {
             return;
         }
         lastDeferLogMs = now;
-        DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+        DebugLogger.info(DebugLogger.LogType.LIGHT,
                 "[SHADOW_LIGHT] Deferred light update for held chunk ({}, {}) total={}",
                 pos.x, pos.z, total);
     }
@@ -3050,7 +3174,23 @@ public final class ShadowLightCompute {
     private static final java.util.concurrent.atomic.AtomicLong suppressedLightAssertions =
             new java.util.concurrent.atomic.AtomicLong();
     private static volatile long lastSuppressedAssertLogMs;
+    /** 上一次「扣包」日志时的分类计数快照 → 日志输出**窗口增量**。 */
+    private static long lastSuppressedEmpty;
+    private static long lastSuppressedDowngrade;
+    private static long lastSuppressedDowngradeSky;
+    private static long lastSuppressedDowngradeBlock;
+    private static long lastSuppressedDowngradeAt15;
 
+    /**
+     * 光桥「掩码收窄后无可下发内容」的扣包计数与节流日志（诊断：确认护栏生效）。
+     * <p>
+     * 2026-09-19 起同时输出**窗口增量**分类：直接回答「被挡下的是空层（客户端也空→无害）
+     * 还是更暗（客户端有光→会盖黑）」，且**手动 run 的日志就能读**（不需要 probeDir）。
+     * <p>
+     * 说明：本方法由 {@code drainLightMasks}（渲染线程）与 {@code pushLightReady}
+     * （finishLight 线程，可能是 client 池）两处调用；窗口快照字段为普通 long，跨线程竞态只会
+     * 让某一行增量略有偏差，不影响判读。
+     */
     private static void noteLightAssertSuppressed(ChunkPos pos) {
         long total = suppressedLightAssertions.incrementAndGet();
         long now = System.currentTimeMillis();
@@ -3058,9 +3198,26 @@ public final class ShadowLightCompute {
             return;
         }
         lastSuppressedAssertLogMs = now;
-        DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
-                "[SHADOW_LIGHT] Suppressed light assert (empty/partial) ({}, {}) total={}",
-                pos.x, pos.z, total);
+        long empty = probeAssertEmptySections.get() + probeAssertNullSections.get();
+        long down = probeDowngradeSections.get();
+        long downSky = probeDowngradeSky.get();
+        long downBlock = probeDowngradeBlock.get();
+        long downAt15 = probeDowngradeClientAt15.get();
+        DebugLogger.info(DebugLogger.LogType.LIGHT,
+                "[SHADOW_LIGHT] Suppressed light assert ({}, {}) total={} "
+                        + "window[empty={} downgrade={}(sky={},block={},clientAt15={})] maxDeltaAll={}",
+                pos.x, pos.z, total,
+                empty - lastSuppressedEmpty,
+                down - lastSuppressedDowngrade,
+                downSky - lastSuppressedDowngradeSky,
+                downBlock - lastSuppressedDowngradeBlock,
+                downAt15 - lastSuppressedDowngradeAt15,
+                probeDowngradeDeltaMax.get());
+        lastSuppressedEmpty = empty;
+        lastSuppressedDowngrade = down;
+        lastSuppressedDowngradeSky = downSky;
+        lastSuppressedDowngradeBlock = downBlock;
+        lastSuppressedDowngradeAt15 = downAt15;
     }
 
 
@@ -3096,6 +3253,7 @@ public final class ShadowLightCompute {
                     continue; // 已被 drain 回收：重试拿新登记（不丢数据）
                 }
                 (layer == LightLayer.SKY ? mask.skySections : mask.blockSections).add(sectionPos.y());
+                probeMaskCollected.incrementAndGet();
                 return;
             }
         }
@@ -3137,7 +3295,7 @@ public final class ShadowLightCompute {
             // 清掉未完成的光/回传工作与网络来源 GenEntry：否则回程 publishCached 的
             // submitPreLight 会因「queued 是 REMOTE_PULL」被静默 return true 而不交付。
             cancelChunkWork(chunkKey);
-            DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
+            DebugLogger.info(DebugLogger.LogType.LIGHT,
                     "[SHADOW_LIGHT] Client unload invalidated ({}, {}) epoch={} cache-flags-cleared",
                     pos.x, pos.z, removedEpoch);
         }
@@ -3157,7 +3315,6 @@ public final class ShadowLightCompute {
         pending.clear();
         pendingDeltas.clear();
         generated.clear();
-        pendingLightUpdates.clear();
         inflightLight.clear(); // 在途光屏障：回调侧条件移除失败即短路丢弃（断连竞态）
         ready.clear();
         lightUpdates.clear();
@@ -3241,7 +3398,7 @@ public final class ShadowLightCompute {
     }
 
     /** 光屏障来源：决定 submitLightBatch 提交时的队列条件移除与 finishLight 回传前 REPLACE 校验方式。
-     *  预览算光仅 PENDING / GENERATED（且 LightMetric.RECOMPUTE）；DELTA / LIGHT_ONLY 跳过。 */
+     *  预览算光仅 PENDING / GENERATED（且 LightMetric.RECOMPUTE）；DELTA 跳过。 */
     private enum LightSource {
         /** 远程全量注入（{@link #submit} → pending）。预览覆盖。 */
         PENDING,
@@ -3249,8 +3406,6 @@ public final class ShadowLightCompute {
         GENERATED,
         /** 分段增量（{@link #submitDelta} → pendingDeltas）。不做预览。 */
         DELTA,
-        /** 增量算光 / 邻柱补光：只回传光包（{@link #submitLightDelta} → pendingLightUpdates）。不做预览。 */
-        LIGHT_ONLY,
         /** 占位邻柱 relight 等无队列 token 的任务：submitLightBatch 不做条件移除。 */
         GATE
     }
@@ -3278,11 +3433,14 @@ public final class ShadowLightCompute {
         if (LightNeighborhoodGate.pendingCount() == 0) {
             return;
         }
+        probeGatePumpCalls.incrementAndGet();
         for (long key : LightNeighborhoodGate.snapshotKeys()) {
+            probeGateTryPromoteCalls.incrementAndGet();
             Object context = LightNeighborhoodGate.tryPromote(server, key);
             if (!(context instanceof GateContext gateCtx)) {
                 continue;
             }
+            probeGatePromoted.incrementAndGet();
             lightTasks.add(gateCtx.toLightTask(key));
             // 一并 promote 同批未算光邻柱：避免中心柱算光时邻柱 DataLayer 为空
             String dimension = DimensionKey.dimensionOf(key);
@@ -3303,6 +3461,7 @@ public final class ShadowLightCompute {
                     }
                     Object nCtx = LightNeighborhoodGate.tryPromote(server, nKey);
                     if (nCtx instanceof GateContext neighborGateCtx) {
+                        probeGatePromoted.incrementAndGet();
                         lightTasks.add(neighborGateCtx.toLightTask(nKey));
                     }
                 }
@@ -3311,8 +3470,7 @@ public final class ShadowLightCompute {
     }
 
     /** 光照统计口径：REUSE_CACHE = 命中点已记 shadow reuse（跳过预览）；
-     *  RECOMPUTE = 光屏障完成后记 miss + 重算耗时（PENDING/GENERATED 提交隔离预览）。
-     *  LIGHT_ONLY 不记柱级 miss（邻柱补光会把次数刷到数万）。 */
+     *  RECOMPUTE = 光屏障完成后记 miss + 重算耗时（PENDING/GENERATED 提交隔离预览）。 */
     public enum LightMetric {
         REUSE_CACHE,
         RECOMPUTE
@@ -3321,7 +3479,7 @@ public final class ShadowLightCompute {
     private static class LightTask {
         final long key;
         final LightSource source;
-        /** PENDING: 提交的 packet；GENERATED: 提交的 GenEntry；DELTA: null；LIGHT_ONLY: LightWork。 */
+        /** PENDING: 提交的 packet；GENERATED: 提交的 GenEntry；DELTA: null。 */
         final Object token;
         final net.minecraft.world.level.chunk.LevelChunk chunk;
         final net.minecraft.server.level.ServerLevel level;

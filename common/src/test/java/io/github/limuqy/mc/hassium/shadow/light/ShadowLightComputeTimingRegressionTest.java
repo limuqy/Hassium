@@ -398,39 +398,10 @@ class ShadowLightComputeTimingRegressionTest {
                     "仅传入引擎已应用的光时才记复用");
             assertEquals(1, NetworkStats.getMetrics().getLightCacheMissCount());
             assertEquals(1, NetworkStats.getMetrics().getLightReuseShadowCount());
-            assertFalse(ShadowLightCompute.shouldAccountLightBarrierMetric(true),
-                    "邻柱 LIGHT_ONLY 不是区块级光照缓存事件");
-            assertTrue(ShadowLightCompute.shouldAccountLightBarrierMetric(false));
         } finally {
             ShadowLightCompute.onDisconnect();
             NetworkStats.reset();
             NetworkStats.setEnabled(false);
         }
-    }
-
-    @Test
-    @DisplayName("林火 LightDelta / 分段增量不得作废整柱首包；只作废 LIGHT_ONLY")
-    void lightDeltaDoesNotSupersedeFullChunkBarrier() {
-        assertFalse(ShadowLightCompute.isSupersededByNewerWork(true, false, true),
-                "整柱 PENDING/GENERATED/DELTA 在途时 LightDelta 只排队，finishLight 后再 relight");
-        assertFalse(ShadowLightCompute.isSupersededByNewerWork(true, false, false),
-                "section delta 不算 hasBlockWork：岩浆/着火方块蔓延不得取消首包");
-        assertTrue(ShadowLightCompute.isSupersededByNewerWork(true, true, false),
-                "整柱重推（pending/generated）才取消在途整柱");
-        assertTrue(ShadowLightCompute.isSupersededByNewerWork(true, true, true));
-        assertTrue(ShadowLightCompute.isSupersededByNewerWork(false, false, true),
-                "后续 LightDelta 取消过时的 LIGHT_ONLY");
-        assertTrue(ShadowLightCompute.isSupersededByNewerWork(false, true, false));
-        assertFalse(ShadowLightCompute.isSupersededByNewerWork(false, false, false));
-    }
-
-
-    @Test
-    @DisplayName("整柱屏障在途时不启动 LightDelta，等首包完成触发")
-    void defersLightDeltaUntilFullChunkBarrierFinishes() {
-        assertFalse(ShadowLightCompute.canStartLightDeltaNow(true),
-                "同柱 inflight/waiting/pending 时 LightDelta 不得开第二条屏障");
-        assertTrue(ShadowLightCompute.canStartLightDeltaNow(false),
-                "整柱已推完：LightDelta 由 finishLight 的 pump 触发");
     }
 }

@@ -101,13 +101,6 @@ ResourceLocation
 #else
 Identifier
 #endif
-LIGHT_DELTA_S2C = ResourceLocationCompat.vanilla(HassiumChannels.LIGHT_DELTA_S2C);
-    public static final
-#if MC_VER < MC_1_21_11
-ResourceLocation
-#else
-Identifier
-#endif
 SHADOW_PULL_REQUEST_C2S = ResourceLocationCompat.vanilla(HassiumChannels.SHADOW_PULL_REQUEST_C2S);
     public static final
 #if MC_VER < MC_1_21_11
@@ -208,16 +201,6 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
 #else
         ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(
                 FabricPayloadRegistry.CHUNK_AUTHORITY_S2C_TYPE, buf));
-#endif
-    }
-
-    @Override
-    public void sendLightDeltaPacket(ServerPlayer player, FriendlyByteBuf buf) {
-        // 直连拓扑：光照增量经 vanilla play S2C 通道直发，客户端 receiver 直收。
-#if MC_VER < MC_1_21_1
-        ServerPlayNetworking.send(player, LIGHT_DELTA_S2C, buf);
-#else
-        ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.LIGHT_DELTA_S2C_TYPE, buf));
 #endif
     }
 

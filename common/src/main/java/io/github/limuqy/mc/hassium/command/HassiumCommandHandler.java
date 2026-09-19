@@ -161,7 +161,7 @@ public class HassiumCommandHandler {
         // 命中率按内容等价值字节计（口径与 getLightCacheHitRate 一致，对齐区块缓存行）：
         // （直连命中字节 + 影子复用字节）/（命中 + 本地重算）。影子端本会话重算的光
         // （远程全量注入 / 分段增量 / 磁盘光脏续算）按柱记一次 lightCacheMiss。
-        // 邻柱 LIGHT_ONLY 收敛补光不进重算分母（按引擎任务计会把一柱刷成几十次）。
+        // 邻柱补光不进重算分母（按引擎任务计会把一柱刷成几十次）。
         // 未注入柱（Compare+Pull 对齐路径）由本地影子端全量服务，记复用不进重算分母。
         long lightHit = m.getLightCacheHitCount() + m.getLightReuseShadowCount();
         long lightHitBytes = m.getLightCacheHitBytes() + m.getLightReuseShadowBytes();

@@ -26,8 +26,6 @@ public final class HassiumChannels {
 
     public static final PacketId DICTIONARY_SYNC_S2C = new PacketId(Constants.MOD_ID, "dictionary_sync");
 
-    public static final PacketId LIGHT_DELTA_S2C = new PacketId(Constants.MOD_ID, "light_delta_s2c");
-
     /** Play 期激活（登录协商结果 + SeedGen 种子；S2C）。 */
     public static final PacketId PLAY_INIT_S2C = new PacketId(Constants.MOD_ID, "play_init_s2c");
 

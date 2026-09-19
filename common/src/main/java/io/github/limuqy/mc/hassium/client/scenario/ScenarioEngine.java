@@ -491,6 +491,7 @@ public final class ScenarioEngine {
         try {
             io.github.limuqy.mc.hassium.metrics.NetworkStats.reset();
             io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.resetHashClassify();
+            io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.resetLightProbeCounters();
             io.github.limuqy.mc.hassium.shadow.light.SmokeChunkTrace.reset();
             LOGGER.info("HassiumSmokeTest: network stats reset for ROUND2");
         } catch (Throwable t) {

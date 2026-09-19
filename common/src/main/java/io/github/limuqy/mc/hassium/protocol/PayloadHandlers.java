@@ -4,7 +4,6 @@ import io.github.limuqy.mc.hassium.client.ChunkAuthorityClient;
 import io.github.limuqy.mc.hassium.protocol.handshake.LoginHandshake;
 import io.github.limuqy.mc.hassium.protocol.handshake.PlayInitClient;
 import io.github.limuqy.mc.hassium.server.ChunkAuthorityS2CPacket;
-import io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.server.level.ServerPlayer;
@@ -107,20 +106,6 @@ public final class PayloadHandlers {
         FriendlyByteBuf buf = wrap(data);
         try {
             PlayInitClient.handle(LoginHandshake.PlayInitPayload.decode(buf));
-        } finally {
-            buf.release();
-        }
-    }
-
-    /**
-     * light_delta_s2c：光照增量 → 影子端 {@link ShadowLightCompute}（任意线程安全）。
-     */
-    public static void handleLightDelta(byte[] data) {
-        FriendlyByteBuf buf = wrap(data);
-        try {
-            ShadowLightCompute.submitLightDelta(LightDeltaS2CPacket.decode(buf));
-        } catch (Exception e) {
-            LOGGER.error("[CLIENT] Failed to handle light delta", e);
         } finally {
             buf.release();
         }

@@ -88,8 +88,7 @@ package io.github.limuqy.mc.hassium.metrics;
  *       计数器：{@code lightReuseShadowCount/Bytes}（剥光协商下直连
  *       {@code lightCacheHitCount} 恒 0）。</li>
  *   <li><b>重算</b>：光未完成（网络注入 {@code setLightCorrect(false)} 等）。
- *       计数器：{@code lightCacheMissCount/Bytes}。
- *       邻柱 LIGHT_ONLY 补光不进分母。</li>
+ *       计数器：{@code lightCacheMissCount/Bytes}。</li>
  * </ul>
  * 锚点（S3：首记胜出，按柱去重 {@code accountLightColumn}）：
  * <ul>

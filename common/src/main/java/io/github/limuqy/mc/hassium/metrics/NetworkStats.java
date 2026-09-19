@@ -532,14 +532,6 @@ public class NetworkStats {
     }
 
     /**
-     * 记录收到 LightDeltaS2CPacket 条目
-     */
-    public static void recordLightDeltaReceived(long count) {
-        if (!enabled) return;
-        metrics.recordLightDeltaReceived(count);
-    }
-
-    /**
      * 记录光照验算差异格数（debug.lightVerify）
      */
     public static void recordLightVerifyMismatch(long count) {

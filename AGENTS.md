@@ -143,8 +143,8 @@ fabric/ | forge/ | neoforge/
 ## 算光红线（钉死）
 
 - **`LightNeighborhoodGate`（3×3 齐套后再 `lightChunk`）禁止拆除/旁路**。非 REUSE 且未 promote 时必须入齐套门；缺邻时引擎按 Bedrock 挡天光 → 屋檐/洞口黑且可能无补光。
-- **`startLightBarrier` 禁止复用 phase-1 `nativeLightChunks` 只跑 LIGHT**：必须 `nativeLightChunks.remove` + 从零 INITIALIZE_LIGHT+LIGHT。2026-09-18 ⑤ 复用实验：冒烟/spawn 正常，**移动后**邻域传播屋檐柱部分全黑（用户目视回退）。
-- 2026-09-18 去门实验：冒烟可 PASS，但**游戏内屋檐变黑**；用户目视回退后恢复。**冒烟绿不能作为拆门/复用 phase-1 的依据**；验收须含移动中的屋檐/洞口。
+- **`startLightBarrier` 复用 phase-1 `nativeLightChunks` 只跑 LIGHT（2026-09-19 解除红线，现为生产语义）**：phase-1 已对**同一 ChunkPos** 跑过 INITIALIZE，而引擎层存储按 SectionPos 索引（不按 chunk 实例）→ 屏障内再跑一遍是重复劳动，不是正确性来源；`nativeLightChunks` 无条目（REUSE 柱 / phase-1 未完成）时自动回落到从零 INITIALIZE+LIGHT。开关：`ShadowLightCompute.REUSE_PHASE1_INITIALIZE`（默认 true；置 false 可整体退回旧语义做对照）。**解除依据**：① 原理——天光**播种在 LIGHT 步**（`propagateLightSources` 读 `ChunkSkyLightSources` 逐列播种：源以上 15、向下衰减），INITIALIZE 只做「装空层 / 启用该柱光照数据 / retainData 记账」，**不算任何亮度值**；屋檐黑属播种问题，与 INITIALIZE 是否复用无关。② 2026-09-19 用户多轮手动 run 未复现屋檐黑。**历史 2026-09-18 ⑤ 结论（复用 → 移动后屋檐柱全黑）作废**：该实验是在 `9595ee9d` 去门回归、且尚无 `7d335166` 读盘柱光源表修复的树上做的，归因混杂；本次**未做 A/B**。
+- 2026-09-18 去门实验：冒烟可 PASS，但**游戏内屋檐变黑**；用户目视回退后恢复。**冒烟绿不能作为拆齐套门的依据**；验收须含移动中的屋檐/洞口。
 - 锚点：`shadow/light/LightNeighborhoodGate.java`、`ShadowLightCompute.startLightBarrier` / `submitLightNoNeighborhoodGate` / `enqueueInjectedForLight`。详见 `docs/client-chunk-light-flow.md` §4。
 
 ## 配置红线
@@ -178,7 +178,7 @@ fabric/ | forge/ | neoforge/
 Mod 客户端 ←──唯一 vanilla TCP（登录期握手 + Play 期自定义 payload）──→ Mod 服务端
    ├ 登录期：login_hello（1.20.1）/ 配置任务 hello + PreHandshakePayload 应答（1.21.1+，Fabric 为 START 主动声明）
    ├ Play 期：dict/index → 聚合 PENDING → play_init 激活 → 客户端 aggregation_ready ACK → 聚合放行
-   └ 区块/实体/业务自定义 payload 全走 vanilla 通道（shadow_pull/section_delta/light_delta）
+   └ 区块/实体/业务自定义 payload 全走 vanilla 通道（shadow_pull/section_delta）
 ```
 
 - 网络核心（`network/core/` 进程内网关）、UDP 数据面（`network/dataplane/`）、续流迁移（ResumeTicket）均已裁剪，不复活

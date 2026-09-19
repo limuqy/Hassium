@@ -52,9 +52,4 @@ public final class HassiumPacketIds {
 
     /** Play 期激活（协商位 + SeedGen 种子）；进服控制面，禁止进 PENDING 聚合。 */
     public static final String PLAY_INIT_S2C = HassiumChannels.PLAY_INIT_S2C.fullId();
-
-    /**
-     * 服务端 -> 客户端：光照增量通知
-     */
-    public static final String LIGHT_DELTA_S2C = HassiumChannels.LIGHT_DELTA_S2C.fullId();
 }

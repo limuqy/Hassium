@@ -122,7 +122,7 @@ public final class ConfigSchema {
     public static final ConfigKey<Boolean> COMPAT_AUTO_DOWNGRADE = bool("compat.autoDowngradeOnError", ConfigScope.SERVER, Domain.COMPAT, true,
             "出错时是否自动降级", "Auto-downgrade on error");
 
-    // === 调试（debug.*；CLIENT 10 键：元数据/缓存/光照验算/网络指标为客户端专属）===
+    // === 调试（debug.*；CLIENT 11 键：元数据/缓存/光照/网络指标为客户端专属）===
     public static final ConfigKey<Boolean> CLIENT_DEBUG_METADATA = bool("debug.metadataLogging", ConfigScope.CLIENT, Domain.DEBUG, false,
             "元数据调试日志", "Metadata debug logging");
     public static final ConfigKey<Boolean> CLIENT_DEBUG_DISPATCHER = bool("debug.dispatcherLogging", ConfigScope.CLIENT, Domain.DEBUG, false,
@@ -138,13 +138,16 @@ public final class ConfigSchema {
     public static final ConfigKey<Boolean> CLIENT_DEBUG_CACHE = bool("debug.cacheLogging", ConfigScope.CLIENT, Domain.DEBUG, false,
             "缓存调试日志", "Cache debug logging");
     public static final ConfigKey<Boolean> CLIENT_DEBUG_LIGHT_VERIFY = bool("debug.lightVerify", ConfigScope.CLIENT, Domain.DEBUG, false,
-            "光照验算与光包落地探针", "Light verification and light-packet apply probes");
+            "光照验算与光包落地探针（历史别名）", "Legacy alias of debug.lightLogging");
+    /** 光照调试总开关：算光链路日志（[SHADOW_LIGHT]/[LIGHT_GATE]）+ 引擎/光包探针 + lightProbe 计数块。 */
+    public static final ConfigKey<Boolean> CLIENT_DEBUG_LIGHT = bool("debug.lightLogging", ConfigScope.CLIENT, Domain.DEBUG, false,
+            "光照调试（算光链路日志 + 探针）", "Light debug logging (light pipeline logs + probes)");
     public static final ConfigKey<Boolean> CLIENT_DEBUG_NETWORK_METRICS = bool("debug.networkMetricsEnabled", ConfigScope.CLIENT, Domain.DEBUG, false,
             "是否启用客户端网络指标", "Enable client network metrics");
     public static final ConfigKey<Boolean> CLIENT_DEBUG_NETWORK_METRICS_AUTO_RESET = bool("debug.networkMetricsAutoReset", ConfigScope.CLIENT, Domain.DEBUG, true,
             "登出服务器时自动重置网络指标", "Auto-reset network metrics when leaving a server");
 
-    // === 调试（debug.*；SERVER 5 键：不含元数据/缓存/光照验算/网络指标）===
+    // === 调试（debug.*；SERVER 5 键：不含元数据/缓存/光照/网络指标）===
     public static final ConfigKey<Boolean> SERVER_DEBUG_DISPATCHER = bool("debug.dispatcherLogging", ConfigScope.SERVER, Domain.DEBUG, false,
             "主线程调度调试日志", "Main-thread dispatcher debug logging");
     public static final ConfigKey<Boolean> SERVER_DEBUG_ASYNC = bool("debug.asyncLogging", ConfigScope.SERVER, Domain.DEBUG, false,

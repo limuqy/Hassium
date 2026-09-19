@@ -17,11 +17,6 @@ public interface INetworkManagerService {
     }
 
     /**
-     * 发送光照增量通知到客户端（服务端调用；vanilla 通道 play S2C 直发）
-     */
-    void sendLightDeltaPacket(ServerPlayer player, FriendlyByteBuf buf);
-
-    /**
      * 服务端主动推送 shadowPullV1 响应（待推送队列泵用；复用原 requestId）。
      * buf 所有权转移给实现（未消费时释放）。
      */

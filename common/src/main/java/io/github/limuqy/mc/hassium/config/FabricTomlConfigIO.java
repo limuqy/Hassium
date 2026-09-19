@@ -573,6 +573,7 @@ public final class FabricTomlConfigIO {
                 getBool(cfg, "debug.networkLogging", d.networkLogging()),
                 getBool(cfg, "debug.cacheLogging", d.cacheLogging()),
                 getBool(cfg, "debug.lightVerify", d.lightVerify()),
+                getBool(cfg, "debug.lightLogging", d.lightLogging()),
                 getBool(cfg, "debug.networkMetricsEnabled", d.networkMetricsEnabled()),
                 getBool(cfg, "debug.networkMetricsAutoReset", d.networkMetricsAutoReset())
         );
@@ -586,7 +587,8 @@ public final class FabricTomlConfigIO {
         set(cfg, "debug.chunkApplyLogging", d.chunkApplyLogging(), "区块 apply 调试日志", ConfigScope.CLIENT);
         set(cfg, "debug.networkLogging", d.networkLogging(), "网络调试日志", ConfigScope.CLIENT);
         set(cfg, "debug.cacheLogging", d.cacheLogging(), "缓存调试日志", ConfigScope.CLIENT);
-        set(cfg, "debug.lightVerify", d.lightVerify(), "光照验算与光包落地探针（CHUNK_PROBE source=light）", ConfigScope.CLIENT);
+        set(cfg, "debug.lightVerify", d.lightVerify(), "光照验算与光包落地探针（历史别名，等价 debug.lightLogging）", ConfigScope.CLIENT);
+        set(cfg, "debug.lightLogging", d.lightLogging(), "光照调试总开关：算光链路日志 + 引擎/光包探针", ConfigScope.CLIENT);
         set(cfg, "debug.networkMetricsEnabled", d.networkMetricsEnabled(), "客户端网络指标", ConfigScope.CLIENT);
         set(cfg, "debug.networkMetricsAutoReset", d.networkMetricsAutoReset(), "退出服务器时自动复位网络指标", ConfigScope.CLIENT);
     }

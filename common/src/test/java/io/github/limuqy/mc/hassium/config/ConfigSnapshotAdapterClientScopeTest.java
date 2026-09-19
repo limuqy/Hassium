@@ -43,7 +43,7 @@ class ConfigSnapshotAdapterClientScopeTest {
     @Test
     void clientDebugFlagsRoundTripThroughValues() {
         HassiumConfig.DebugConfig debug = new HassiumConfig.DebugConfig(
-                true, false, true, false, true, false, true, true, true, false);
+                true, false, true, false, true, false, true, true, true, true, false);
         HassiumConfig original = HassiumConfig.DEFAULT.withDebug(debug);
 
         ConfigValues values = ConfigSnapshotAdapter.toValues(original);
@@ -56,12 +56,13 @@ class ConfigSnapshotAdapterClientScopeTest {
         assertEquals(false, values.get(ConfigSchema.CLIENT_DEBUG_NETWORK));
         assertEquals(true, values.get(ConfigSchema.CLIENT_DEBUG_CACHE));
         assertEquals(true, values.get(ConfigSchema.CLIENT_DEBUG_LIGHT_VERIFY));
+        assertEquals(true, values.get(ConfigSchema.CLIENT_DEBUG_LIGHT));
     }
 
     @Test
     void fromValuesOnClientSideReadsClientDebugFlags() {
         HassiumConfig.DebugConfig debug = new HassiumConfig.DebugConfig(
-                true, false, true, false, true, false, true, true, true, false);
+                true, false, true, false, true, false, true, true, true, true, false);
         HassiumConfig original = HassiumConfig.DEFAULT.withDebug(debug);
 
         ConfigValues values = ConfigSnapshotAdapter.toValues(original);
@@ -73,7 +74,7 @@ class ConfigSnapshotAdapterClientScopeTest {
     @Test
     void fromValuesOnServerSideReadsServerDebugFlags() {
         HassiumConfig.DebugConfig debug = new HassiumConfig.DebugConfig(
-                false, true, false, true, false, true, false, false, false, true);
+                false, true, false, true, false, true, false, false, false, false, true);
         HassiumConfig original = HassiumConfig.DEFAULT.withDebug(debug);
 
         ConfigValues values = ConfigSnapshotAdapter.toValues(original);

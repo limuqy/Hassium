@@ -109,7 +109,6 @@ public class HassiumMetricsImpl implements HassiumMetrics {
     private final AtomicLong lightRecomputeBackgroundTimeNs = new AtomicLong(0);
     /** 被计入 {@link #lightRecomputeBackgroundTimeNs} 的重算任务数（任务口径，与按柱口径的 lightCacheMissCount 可能不等）。 */
     private final AtomicLong lightRecomputeCount = new AtomicLong(0);
-    private final AtomicLong lightDeltaReceivedCount = new AtomicLong(0);
     private final AtomicLong lightVerifyMismatchCount = new AtomicLong(0);
     /** 服务端出站 chunk 包光照数据线格式字节实测（MixinLightDataWrite 累计；剥光时接近 0）。 */
     private final AtomicLong lightDataBytesWritten = new AtomicLong(0);
@@ -449,11 +448,6 @@ public class HassiumMetricsImpl implements HassiumMetrics {
         return lightRecomputeCount.get();
     }
 
-    @Override
-    public long getLightDeltaReceivedCount() {
-        return lightDeltaReceivedCount.get();
-    }
-
     /**
      * 记录服务端出站 chunk 包光照数据线格式字节（MixinLightDataWrite 调用）。
      *
@@ -585,7 +579,6 @@ public class HassiumMetricsImpl implements HassiumMetrics {
         lightRecomputeTimeNs.set(0);
         lightRecomputeBackgroundTimeNs.set(0);
         lightRecomputeCount.set(0);
-        lightDeltaReceivedCount.set(0);
         lightVerifyMismatchCount.set(0);
         lightDataBytesWritten.set(0);
         lightDataWriteCount.set(0);
@@ -886,15 +879,6 @@ public class HassiumMetricsImpl implements HassiumMetrics {
         if (timeNs > 0) {
             lightRecomputeBackgroundTimeNs.addAndGet(timeNs);
             lightRecomputeCount.incrementAndGet();
-        }
-    }
-
-    /**
-     * 记录收到 LightDeltaS2CPacket 条目
-     */
-    public void recordLightDeltaReceived(long count) {
-        if (count > 0) {
-            lightDeltaReceivedCount.addAndGet(count);
         }
     }
 

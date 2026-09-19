@@ -166,7 +166,6 @@ public class NetworkOptimizationTest {
                 HassiumPacketIds.INDEX_SYNC_S2C,
                 HassiumPacketIds.PLAY_INIT_S2C,
                 HassiumPacketIds.SHADOW_PULL_RESPONSE_S2C,
-                HassiumPacketIds.LIGHT_DELTA_S2C,
                 HassiumPacketIds.MAIN_CHANNEL,
                 HassiumPacketIds.AGGREGATION_S2C
         };
