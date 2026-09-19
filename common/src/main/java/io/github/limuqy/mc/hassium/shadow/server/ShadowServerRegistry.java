@@ -281,8 +281,14 @@ public final class ShadowServerRegistry {
         return false;
     }
 
-    /** 重建重试上界：创建进行中最多等 ~4s（20 × 200ms），超时放弃本会话重建。 */
-    static final int SEED_REBUILD_MAX_RETRIES = 20;
+    /**
+     * 重建重试上界：创建进行中最多等 {@code 100 × 200ms = 20s}，超时放弃本会话重建。
+     * 必须盖住冷装配——WorldLoader 首次装配实测 1.4–3.9s，旧上界 4s 与之同量级，
+     * play_init 落在装配早期时会被超时截断 → 自定义维永久缺装配 → 整场虚空。
+     * 本等待跑在后台执行器线程（{@code HassiumTaskExecutor} BEST_EFFORT / lifecycle
+     * scheduler），不阻塞渲染线程。
+     */
+    static final int SEED_REBUILD_MAX_RETRIES = 100;
     static final long SEED_REBUILD_RETRY_MS = 200L;
 
     /**
@@ -310,20 +316,46 @@ public final class ShadowServerRegistry {
      * 投机影子常早于 play_init 装配（seedGen 关闭时 seed 恒 0，不走 seed 重建），
      * 自定义维度未进 WorldDimensions → 该维只能原版透传。清单含未装配自定义维时
      * 关停重建，使缓存/SeedGen 能覆盖 TF/AoA 等维度。
+     * <p>
+     * <b>装配窗口内到达同样要登记</b>：{@code server} 只在装配完成后才赋值（见
+     * {@link #getOrCreate()}，冷装配实测 1.4–3.9s），play_init 落在窗口内时清单
+     * 晚于 {@code resolveCustomDimensionStems} 读取 → 最终实例不含自定义维。此时
+     * 直接 return 会让该维永久缺装配：tracking 每拍重试都取不到 ServerLevel，
+     * 整场虚空（实测 1.21.1 fabric/neoforge tf 场 R2 {@code applied=0}、908 行
+     * {@code shadow level not assembled}）。故不再以「实例是否已存在」作为丢弃条件，
+     * 判定推迟到 {@link #scheduleRebuild} 等装配结束之后。
      */
     public void onServerDimensionIdsArrived(java.util.List<String> dimensionIds) {
-        ShadowSeedServer current = server;
-        if (current == null || !shouldRebuildForDimensions(dimensionIds, current.storageDimensions())) {
+        if (dimensionIds == null || dimensionIds.isEmpty()) {
             return;
         }
-        java.util.Set<String> assembled = current.storageDimensions();
-        Constants.LOG.info("Hassium: Shadow rebuild for custom dimensions (assembled={}, arrived={})",
-                assembled, dimensionIds);
+        ShadowSeedServer current = server;
+        if (current != null) {
+            if (!shouldRebuildForDimensions(dimensionIds, current.storageDimensions())) {
+                return;
+            }
+            Constants.LOG.info("Hassium: Shadow rebuild for custom dimensions (assembled={}, arrived={})",
+                    current.storageDimensions(), dimensionIds);
+        } else {
+            // 装配中（或尚未开始）：装配结果未知，重建判定推迟到实例就绪之后
+            Constants.LOG.info("Hassium: Shadow dimension ids arrived during assembly; "
+                    + "rebuild decision deferred (arrived={})", dimensionIds);
+        }
         scheduleRebuild("custom dimensions " + dimensionIds,
-                () -> {
-                    ShadowSeedServer s = server;
-                    return s != null && shouldRebuildForDimensions(dimensionIds, s.storageDimensions());
-                });
+                () -> isDimensionRebuildNeeded(dimensionIds));
+    }
+
+    /**
+     * 自定义维重建是否仍需要（{@link #scheduleRebuild} 的复判谓词，装配结束后调用）：
+     * 实例已就绪 → 比对已装配维度；实例仍未就绪且创建未失败 → 仍需重建（等就绪后再判）。
+     * 创建失败（{@code failed}）则放弃，避免无实例时空转。
+     */
+    private boolean isDimensionRebuildNeeded(java.util.List<String> dimensionIds) {
+        ShadowSeedServer s = server;
+        if (s != null) {
+            return shouldRebuildForDimensions(dimensionIds, s.storageDimensions());
+        }
+        return !failed;
     }
 
     private void scheduleRebuild(String reason, java.util.function.BooleanSupplier stillNeeded) {
