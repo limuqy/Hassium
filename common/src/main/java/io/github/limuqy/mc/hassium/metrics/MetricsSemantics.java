@@ -87,8 +87,11 @@ package io.github.limuqy.mc.hassium.metrics;
  *   <li><b>命中</b>：S3 口径——{@code isLightCorrect()==true}（读盘完整光）。
  *       计数器：{@code lightReuseShadowCount/Bytes}（剥光协商下直连
  *       {@code lightCacheHitCount} 恒 0）。</li>
- *   <li><b>重算</b>：光未完成（网络注入 {@code setLightCorrect(false)} 等）。
- *       计数器：{@code lightCacheMissCount/Bytes}。</li>
+ *   <li><b>重算</b>：**口径 2026-09-20 用户拍板 = 区块加载 + 部分命中**——只有「新数据」
+ *       （网络全量 / 服务端直推）与「变更数据」（分段增量）才需要算光；光环柱（计算域含交付窗
+ *       外邻柱）的引擎工作不计入本指标。取值为
+ *       {@code getLightRecomputeEffectiveCount()}（展示 / 命中率 / 节省均取它）；
+ *       原始引擎侧按柱计数 {@code getLightCacheMissCount()} 保留给探针诊断。</li>
  * </ul>
  * 锚点（S3：首记胜出，按柱去重 {@code accountLightColumn}）：
  * <ul>

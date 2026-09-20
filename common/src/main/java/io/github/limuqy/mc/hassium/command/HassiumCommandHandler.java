@@ -163,13 +163,15 @@ public class HassiumCommandHandler {
         // （远程全量注入 / 分段增量 / 磁盘光脏续算）按柱记一次 lightCacheMiss。
         // 邻柱补光不进重算分母（按引擎任务计会把一柱刷成几十次）。
         // 未注入柱（Compare+Pull 对齐路径）由本地影子端全量服务，记复用不进重算分母。
+        // 【口径 2026-09-20 用户拍板】重算 = 区块加载 + 部分命中（新数据/变更数据才要算光；
+        // 光环柱的引擎工作不计）。原始引擎计数见 getLightCacheMissCount（探针用）。
         long lightHit = m.getLightCacheHitCount() + m.getLightReuseShadowCount();
         long lightHitBytes = m.getLightCacheHitBytes() + m.getLightReuseShadowBytes();
-        long lightMiss = m.getLightCacheMissCount();
+        long lightMiss = m.getLightRecomputeEffectiveCount();
         return String.format("§e光照缓存：§r%s（命中 %d/%s，重算 %d/%s）",
                 MetricsTextFormatter.formatPercent(m.getLightCacheHitRate() * 100.0),
                 lightHit, MetricsTextFormatter.formatBytes(lightHitBytes),
-                lightMiss, MetricsTextFormatter.formatBytes(m.getLightCacheMissBytes()));
+                lightMiss, MetricsTextFormatter.formatBytes(m.getLightRecomputeEffectiveBytes()));
     }
 
     private static String formatSavingsLine(HassiumMetricsImpl m) {

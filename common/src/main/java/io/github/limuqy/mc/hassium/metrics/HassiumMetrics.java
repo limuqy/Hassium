@@ -378,6 +378,25 @@ public interface HassiumMetrics {
     long getLightCacheMissBytes();
 
     /**
+     * 光照重算（**口径 2026-09-20 用户拍板**）= **区块加载 + 部分命中**。
+     * <p>
+     * 语义：只有「新数据」（网络全量 / 服务端直推）与「变更数据」（分段增量）才需要算光；
+     * 光环柱（计算域含交付窗外邻柱）的引擎工作**不进本指标**——本指标回答「客户端这批柱里
+     * 有多少光必须算」，而不是「影子光引擎跑了多少次」。
+     * <p>
+     * 展示行 / {@link #getLightCacheHitRate()} / {@link #getNoModReceiveBytes()} 均取本值；
+     * 原始引擎侧计数 {@link #getLightCacheMissCount()}（按柱首记胜出，含光环柱）保留给探针诊断。
+     */
+    default long getLightRecomputeEffectiveCount() {
+        return getFullChunkRequestCount() + getServerPushAppliedCount() + getCachePartialHitCount();
+    }
+
+    /** 光照重算等价字节（每柱 16KB，与 {@link #getLightCacheMissBytes()} 同口径）。 */
+    default long getLightRecomputeEffectiveBytes() {
+        return getLightRecomputeEffectiveCount() * NetworkStats.ESTIMATED_CHUNK_BYTES;
+    }
+
+    /**
      * 获取光照重算总耗时（纳秒）
      */
     long getLightRecomputeTimeNs();
@@ -507,7 +526,8 @@ public interface HassiumMetrics {
         long lightWireEstimate = VanillaZlibEstimator.estimate((int) NetworkStats.ESTIMATED_LIGHT_BYTES);
         long avoidedCacheHits = Math.max(0L,
                 getCacheHitFullChunkCount() - getCacheHitNetworkReplacedCount());
-        long lightTotal = getLightCacheHitCount() + getLightReuseShadowCount() + getLightCacheMissCount();
+        long lightTotal = getLightCacheHitCount() + getLightReuseShadowCount()
+                + getLightRecomputeEffectiveCount();
         return getVanillaBytesReceived()
                 + chunkWireEstimate * getLocallyGeneratedChunkCount()
                 + chunkWireEstimate * avoidedCacheHits
@@ -574,11 +594,11 @@ public interface HassiumMetrics {
      */
     default double getLightCacheHitRate() {
         long hitBytes = getLightCacheHitBytes() + getLightReuseShadowBytes();
-        long totalBytes = hitBytes + getLightCacheMissBytes();
+        long totalBytes = hitBytes + getLightRecomputeEffectiveBytes();
         if (totalBytes == 0) {
             // 无字节数据时回退到按次数计算
             long hit = getLightCacheHitCount() + getLightReuseShadowCount();
-            long total = hit + getLightCacheMissCount();
+            long total = hit + getLightRecomputeEffectiveCount();
             if (total == 0) return 0.0;
             return (double) hit / total;
         }

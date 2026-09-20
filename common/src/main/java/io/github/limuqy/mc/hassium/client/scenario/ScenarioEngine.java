@@ -1088,13 +1088,13 @@ public final class ScenarioEngine {
             long expectedHit = m.getLightCacheHitCount() + m.getLightReuseShadowCount();
             if (Math.abs(displayedRate - expectedRate) > 0.06
                     || !countsNear(displayedHit, expectedHit)
-                    || !countsNear(recompute, m.getLightCacheMissCount())) {
+                    || !countsNear(recompute, m.getLightRecomputeEffectiveCount())) {
                 LOGGER.error("{} {} stats validation FAILED: light formula mismatch " +
                                 "displayed={}/{} recompute={}, expected={}/{} recompute={}",
                         MARKER_FAIL, roundLabel,
                         displayedRate, displayedHit, recompute,
                         String.format(java.util.Locale.ROOT, "%.1f", expectedRate),
-                        expectedHit, m.getLightCacheMissCount());
+                        expectedHit, m.getLightRecomputeEffectiveCount());
                 ok = false;
             }
         }
