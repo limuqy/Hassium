@@ -913,9 +913,13 @@ public final class ShadowLightCompute {
     }
 
     /**
-     * 缓存全命中按**次**记账，不做会话内去重：原版 A→B→A 会把 A 的柱再推一次，MOD 侧第二次
-     * 交付走本地缓存同样替掉了一次网络推送——重复读取本身就是流量节省的一部分（用户 2026-09-19
-     * 决策）。每次落地（{@link #accountAuthoritativeLanded}）恰好调用一次，不会重复计同一交付。
+     * 缓存全命中**唯一锚点**（口径 2026-09-20 用户拍板）：服务端裁决
+     * {@code ShadowPullResponse.UNCHANGED}（未下发整柱载荷）且客户端回放成功。
+     * <p>
+     * 覆盖两条路径：冷读取盘缓存建立的基线、圈外转权威（重入）——两者都表现为 UNCHANGED。
+     * 调用点：{@code ShadowPullClient.handleResponse} 的 UNCHANGED 分支。
+     * 交付出口的本地源交付（内存/盘）**不再计入**（见 {@link #accountAuthoritativeLanded}）：
+     * 那是统一交付的常规一步，不构成网络节省。
      */
     public static boolean accountCacheFullHit(String dimension, ChunkPos pos) {
         if (pos == null) {
@@ -1252,8 +1256,12 @@ public final class ShadowLightCompute {
         if (pos == null) {
             return;
         }
+        // 【口径 2026-09-20（用户拍板）】本地源交付**不再计全命中**：该计数只认
+        // {@code ShadowPullResponse.UNCHANGED}（服务端未下发整柱载荷的权威裁决，见
+        // {@code ShadowPullClient.handleResponse}）。交付出口的本地源交付只是统一交付的常规
+        // 一步，与「网络是否被省下」无关——实测 1.20.1 R1 每柱被交付 2~5 次、本地源占绝大多数，
+        // 按次计入会让命中与「流量节省」虚高。这里只做「非网络来源」短路，避免落到网络新增桶。
         if (origin == TraceOrigin.SHADOW_MEMORY_CACHE || origin == TraceOrigin.SHADOW_DISK_CACHE) {
-            accountCacheFullHit(dimension, pos);
             return;
         }
         // 本地生成已在 onChunkMaterialized / SeedGenExecutor 记 locallyGenerated；

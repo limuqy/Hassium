@@ -472,6 +472,24 @@ public final class ShadowPullClient {
                         .getInstance().get();
                 net.minecraft.world.level.chunk.LevelChunk baseline = shadow == null ? null
                         : shadow.injectedChunk(response.dimension(), pos.x, pos.z);
+                // 【2026-09-20 同柱重复交付闸（用户拍板）】客户端已持有该柱（落地凭据在）
+                // → 服务端已裁决内容未变，客户端手上的就是同一份数据：**只记命中，不回放重交付**。
+                // 此前「保鲜 compare」（ShadowTrackingSession.materialize 对权威注入柱再 compare）
+                // 每次都触发一次 publishCachedChunk 重交付（实测 1.20.1 R1 1139 柱重复、2080 次
+                // 额外注入，origin 全是 SHADOW_MEMORY_CACHE）。UNCHANGED 仍是真命中（服务端未发
+                // 整柱载荷），故命中照记；只跳过对客户端的重复注入。
+                if (baseline != null
+                        && ShadowLightCompute.hasClientApplyEpoch(response.dimension(), pos)) {
+                    ShadowLightCompute.accountCacheFullHit(response.dimension(), pos);
+                    if (pending != null) {
+                        io.github.limuqy.mc.hassium.metrics.NetworkStats
+                                .recordCacheFullHitNetworkReplaced(
+                                        io.github.limuqy.mc.hassium.metrics.NetworkStats
+                                                .ESTIMATED_CHUNK_BYTES);
+                    }
+                    releaseProviderInflight(response.dimension(), pos, true);
+                    continue;
+                }
                 boolean published;
                 if (baseline != null && !baseline.isLightCorrect()) {
                     // 本地生成/基线尚未算光：confirm 后进一轮光再 pack（不再二次 compare）
@@ -485,6 +503,18 @@ public final class ShadowPullClient {
                     published = ShadowLightCompute.publishCachedChunk(response.dimension(), pos);
                 }
                 releaseProviderInflight(response.dimension(), pos, published);
+                if (published) {
+                    // 【口径 2026-09-20（用户拍板）】全命中唯一锚点：UNCHANGED（服务端未下发
+                    // 整柱载荷）+ 客户端回放成功。pending != null ⇒ 网络整柱包已在手且被丢弃
+                    // = 额外记「网络被缓存替换」，流量节省公式据此扣除重叠。
+                    ShadowLightCompute.accountCacheFullHit(response.dimension(), pos);
+                    if (pending != null) {
+                        io.github.limuqy.mc.hassium.metrics.NetworkStats
+                                .recordCacheFullHitNetworkReplaced(
+                                        io.github.limuqy.mc.hassium.metrics.NetworkStats
+                                                .ESTIMATED_CHUNK_BYTES);
+                    }
+                }
                 if (!published) {
                     Constants.LOG.warn("[SHADOW_PULL] Cache baseline unavailable for ({}, {}), retrying FULL",
                             result.chunkX(), result.chunkZ());

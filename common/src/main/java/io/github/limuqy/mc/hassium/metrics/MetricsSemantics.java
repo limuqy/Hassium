@@ -19,12 +19,12 @@ package io.github.limuqy.mc.hassium.metrics;
  *       全命中 N/B，部分命中 N/B，增量 B，应用 B
  * </pre>
  * <ul>
- *   <li><b>全命中</b>：影子端读取区块，且服务端确认无变更（compare-pull UNCHANGED
- *       → {@code publishCachedChunk}；或服务端直推时影子内存已有 hash 一致柱）。
- *       <b>按交付次数计，不做会话内按柱去重</b>（用户 2026-09-19 决策）：原版 A→B→A 会把 A 的
- *       柱再推一次，MOD 侧第二次交付走本地缓存同样替掉了一次网络推送——往返重读本身就是流量
- *       节省的一部分。同一次交付仍只按一个来源记账（origin 唯一，不得双记）。
- *       计数器：{@code cacheHitFullChunkCount/Bytes}。</li>
+ *   <li><b>全命中</b>：服务端裁决 {@code ShadowPullResponse.UNCHANGED}（**未下发整柱载荷**）
+ *       且客户端回放成功（口径 2026-09-20 用户拍板，唯一锚点）。覆盖两条路径：冷读取盘缓存
+ *       建立的基线、圈外转权威（重入）。交付出口的本地源交付（内存/盘缓存）**不计**——它是
+ *       统一交付的常规一步，不构成网络节省（实测 1.20.1 R1 每柱被交付 2~5 次、本地源占绝大多数）。
+ *       计数器：{@code cacheHitFullChunkCount/Bytes}；其中「网络整柱包已在手且被丢弃」的子集
+ *       另记 {@code cacheHitNetworkReplacedCount/Bytes}，流量节省公式据此扣除重叠。</li>
  *   <li><b>部分命中/增量</b>：DELTA。本地基线柱 + 分段增量合并成功。
  *       计数器：{@code cacheDeltaCount/Bytes}；分片变更内容 {@code cacheShardBytes}
  *       从命中分子扣除。</li>
@@ -34,9 +34,9 @@ package io.github.limuqy.mc.hassium.metrics;
  * </ul>
  * 锚点：
  * <ul>
- *   <li>{@code recordCacheFullHit} ← {@code accountCacheFullHit} ← UNCHANGED /
- *       内存 hash 一致复用；权威边沿 hash-hit（含 OVD→权威 已持有零请求）。
- *       每次落地交付计一次（往返重读各计一次，见 §1 全命中口径）</li>
+ *   <li>{@code recordCacheFullHit} ← {@code accountCacheFullHit} ←
+ *       {@code ShadowPullResponse.UNCHANGED} + 回放成功（唯一锚点，见 §1）；
+ *       {@code recordCacheFullHitNetworkReplaced} ← 同锚点且为拦截模式（网络整柱包在手被丢弃）</li>
  *   <li>{@code recordCacheDeltaSaved} + {@code recordCacheShard} ← {@code applySectionDelta} 成功</li>
  *   <li>应用字节 = {@code getFullChunkRequestBytes + cacheHitFullChunkBytes
  *       + cacheDeltaSavedBytes + serverPush×ESTIMATED_CHUNK_BYTES}</li>
@@ -75,8 +75,8 @@ package io.github.limuqy.mc.hassium.metrics;
  * {@code enqueueInjectedForLight(SERVER_PUSH/REMOTE_PULL)} 与
  * {@code onPullInjected → publishCachedChunk} 禁止对同一柱双投递覆盖来源。
  * <p>
- * 该红线只约束「同一次交付」：柱被客户端卸载后往返重读是**另一次交付**，按次计入命中
- * （与 §1 一致）——两次都算，因为原版那两次都会走网络。
+ * 该红线只约束「同一次交付」：柱被客户端卸载后往返重读是**另一次交付**——它只有走
+ * compare-pull 得到 UNCHANGED 才计入命中（口径 2026-09-20，见 §1）；纯本地源重交付不计。
  *
  * <h2>3. 光照缓存（少算了哪些光）</h2>
  * <pre>

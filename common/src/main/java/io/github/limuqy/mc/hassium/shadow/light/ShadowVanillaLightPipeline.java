@@ -60,6 +60,19 @@ public final class ShadowVanillaLightPipeline {
         if (existing != null && existing.isLightCorrect()) {
             // 回归原版：有引擎光且可复用则直接 publish；不再等齐套 promote。
             if (ShadowLightCompute.isLightReusable(server, pos, existing)) {
+                // 【2026-09-20 同柱双路交付闸（用户拍板）】客户端已按影子端内容落地过该柱
+                // （{@code shadowApplyEpochs} 落地凭据在）→ 原版 tracking 再推同一柱时**不得重复注入**：
+                // 重复注入白吃 drainReady 主线程 apply 预算，且旧口径下被误记为缓存命中。
+                // 该闸此前只挂在 tracking 泵（ShadowTrackingSession），本快路径漏了——
+                // 实测 1.20.1 R1 每柱被交付 2~5 次（origin 序列 REMOTE_PULL + MEMORY_CACHE×N）。
+                // 记账/形状扫描在途照旧，只跳过交付。
+                if (ShadowLightCompute.hasClientApplyEpoch(resolvedDimension, pos)) {
+                    SmokeChunkTrace.recordShadowInjected(resolvedDimension, pos);
+                    if (source == ShadowChunkSource.REMOTE_FULL) {
+                        ShadowTrackingSession.getInstance().onNetworkChunkQueued(resolvedDimension, pos);
+                    }
+                    return;
+                }
                 if (ShadowLightCompute.publishCachedChunk(resolvedDimension, pos)) {
                     SmokeChunkTrace.recordShadowInjected(resolvedDimension, pos);
                     if (source == ShadowChunkSource.REMOTE_FULL) {
