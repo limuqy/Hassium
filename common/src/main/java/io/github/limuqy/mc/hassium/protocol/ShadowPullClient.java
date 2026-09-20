@@ -480,13 +480,7 @@ public final class ShadowPullClient {
                 // 整柱载荷），故命中照记；只跳过对客户端的重复注入。
                 if (baseline != null
                         && ShadowLightCompute.hasClientApplyEpoch(response.dimension(), pos)) {
-                    ShadowLightCompute.accountCacheFullHit(response.dimension(), pos);
-                    if (pending != null) {
-                        io.github.limuqy.mc.hassium.metrics.NetworkStats
-                                .recordCacheFullHitNetworkReplaced(
-                                        io.github.limuqy.mc.hassium.metrics.NetworkStats
-                                                .ESTIMATED_CHUNK_BYTES);
-                    }
+                    accountUnchangedHit(response.dimension(), pos, pending != null);
                     releaseProviderInflight(response.dimension(), pos, true);
                     continue;
                 }
@@ -504,16 +498,7 @@ public final class ShadowPullClient {
                 }
                 releaseProviderInflight(response.dimension(), pos, published);
                 if (published) {
-                    // 【口径 2026-09-20（用户拍板）】全命中唯一锚点：UNCHANGED（服务端未下发
-                    // 整柱载荷）+ 客户端回放成功。pending != null ⇒ 网络整柱包已在手且被丢弃
-                    // = 额外记「网络被缓存替换」，流量节省公式据此扣除重叠。
-                    ShadowLightCompute.accountCacheFullHit(response.dimension(), pos);
-                    if (pending != null) {
-                        io.github.limuqy.mc.hassium.metrics.NetworkStats
-                                .recordCacheFullHitNetworkReplaced(
-                                        io.github.limuqy.mc.hassium.metrics.NetworkStats
-                                                .ESTIMATED_CHUNK_BYTES);
-                    }
+                    accountUnchangedHit(response.dimension(), pos, pending != null);
                 }
                 if (!published) {
                     Constants.LOG.warn("[SHADOW_PULL] Cache baseline unavailable for ({}, {}), retrying FULL",
@@ -583,6 +568,25 @@ public final class ShadowPullClient {
                                 io.github.limuqy.mc.hassium.utils.DimensionKey.chunkZOf(entry.getKey())));
                 entry.getValue().fallback().run();
             }
+        }
+    }
+
+    /**
+     * UNCHANGED 命中记账（口径 2026-09-20 用户拍板）：服务端裁决 UNCHANGED（未下发整柱载荷）
+     * + 客户端回放成功 ⇒ 计命中。
+     * <p>
+     * {@code networkReplaced} ⇒ 拦截模式：网络整柱包已在手且被丢弃，额外记
+     * {@code cacheHitNetworkReplaced}（流量节省公式据此扣除重叠）。
+     * <p>
+     * 注意（用户口径）：**不做「少计」类的额外守卫**——本该出现的 compare（本会话网络已付过账的柱）
+     * 要在**源头**不发（见 {@code ShadowTrackingSession.onChunkMaterialized} / 泵的
+     * {@code authoritativeLocal} 分支），而不是在这里把命中扣掉。
+     */
+    private static void accountUnchangedHit(String dimension, ChunkPos pos, boolean networkReplaced) {
+        ShadowLightCompute.accountCacheFullHit(dimension, pos);
+        if (networkReplaced) {
+            io.github.limuqy.mc.hassium.metrics.NetworkStats.recordCacheFullHitNetworkReplaced(
+                    io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_CHUNK_BYTES);
         }
     }
 

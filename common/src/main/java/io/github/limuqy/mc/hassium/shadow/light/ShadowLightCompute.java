@@ -913,6 +913,21 @@ public final class ShadowLightCompute {
     }
 
     /**
+     * 该柱**本会话是否已由网络全量付过账**（{@code accountedIngress}）。
+     * <p>
+     * 命中记账判据（口径 2026-09-20）：本会话网络已付过的柱，随后再拿到 UNCHANGED
+     * 只是**保鲜复核**，服务端并没有因此少发载荷 → **不得计命中**（R1 双路径假命中红线）。
+     * 客户端 unload（{@link #onClientChunkUnloaded}）会摘掉该标记 → 往返重入后可再计命中，
+     * 这正是「原版会重发而 mod 省下」的语义。
+     */
+    public static boolean wasNetworkIngressAccounted(String dimension, ChunkPos pos) {
+        if (dimension == null || pos == null) {
+            return false;
+        }
+        return accountedIngress.contains(DimensionKey.key(dimension, pos.x, pos.z));
+    }
+
+    /**
      * 缓存全命中**唯一锚点**（口径 2026-09-20 用户拍板）：服务端裁决
      * {@code ShadowPullResponse.UNCHANGED}（未下发整柱载荷）且客户端回放成功。
      * <p>

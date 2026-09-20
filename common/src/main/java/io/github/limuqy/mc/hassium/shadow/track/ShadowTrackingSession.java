@@ -571,9 +571,14 @@ public final class ShadowTrackingSession {
             boolean material = injected != null;
             if (material) {
                 skippedMaterial++;
-                // 已 compare 成功：允许响应侧/补投交付；禁止再 mark（会把已在光管线的柱钉死）
-                if (io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
-                        .isConfirmed(currentDimension, pos)) {
+                // 已 compare 成功：允许响应侧/补投交付；禁止再 mark（会把已在光管线的柱钉死）。
+                // 【2026-09-20（用户拍板）】本会话网络已付过账（authoritative FULL/DELTA 落地）
+                // = 数据已权威，与 isConfirmed 同语义：直接交付，**不再发 compare**
+                // （compare 只用于已有基线判权威；R1 冷场实测 567 次多余 compare + 567 次 UNCHANGED）。
+                boolean authoritativeLocal = io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
+                        .isConfirmed(currentDimension, pos)
+                        || ShadowLightCompute.wasNetworkIngressAccounted(currentDimension, pos);
+                if (authoritativeLocal) {
                     if (!ShadowLightCompute.hasClientApplyEpoch(currentDimension, pos)
                             && isDeliverableToClient(pos.x, pos.z)) {
                         if (ShadowChunkDeliver.deliverLocal(currentDimension, pos, false, false)) {
@@ -1425,7 +1430,14 @@ public final class ShadowTrackingSession {
         // 交付门：mark 之后 publishCached / offerReady / 官方包桥一律被拒；
         // 响应侧 UNCHANGED / DELTA / FULL 落地成功才 clear() 放行。
         // 顺序必须"先 mark 再请求"：反过来会被「响应先到 → clear 空表 → 再 mark」钉死。
-        // 网络 FULL 响应侧 injectChunk 会 clear，本分支对已 clear 的权威注入再 compare 作保鲜。
+        // 网络 FULL 响应侧 injectChunk 会 clear，本分支对已 clear 的权威注入再 compare 作为保鲜。
+        // 【2026-09-20（用户拍板）】但**本会话网络已付过账**的柱例外：authoritative FULL/DELTA
+        // 落地的数据本身就是权威的 → compare 属于多余往返（R1 冷场实测 567 次）。
+        // compare 的语义只应是「已有基线（盘缓存 / 本地生成 / 外圈进内圈）判断是否权威」。
+        // 这类柱的交付由 tracking 泵的 authoritativeLocal 分支负责，此处直接返回。
+        if (ShadowLightCompute.wasNetworkIngressAccounted(dimension, pos)) {
+            return;
+        }
         {
             io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate.mark(dimension, pos);
             if (requestPullEligible(dimension, pos, false)
