@@ -63,6 +63,18 @@ public final class ShadowTrackingSession {
      * 不做 epoch 补扫、不交付）。真服 pull_mode 下无原版 trackChunk，必须有此驱动。
      */
     private static final long AUTHORITY_ACQUIRE_INTERVAL_MS = 200L;
+
+    /**
+     * 权威窗 acquire 时，对「盘上有柱但内存没柱」的柱先读盘物化，再发 compare。
+     * <p>
+     * 目的：只有物化柱才有**逐段/平面**基线，服务端才可能判 BLOCKS 增量；缺这一步
+     * 统一 Compare+Pull 只能带柱级 hash → 每个差异段判整段 FULL → 差异段多到 75% 整柱回退。
+     * 1.20.1 靠 {@code ChunkMap.scheduleChunkLoad}（每轮 810~1558 次）天然做到；1.21.1 上
+     * 该钩子每轮只触发 76~88 次，必须由本驱动补上。
+     * <p>
+     * 置 {@code false} 可退回「不物化直接 compare」（= 修复前行为）做 A/B 对照。
+     */
+    private static final boolean MATERIALIZE_BEFORE_COMPARE = true;
     /** 每拍最多向 Provider 提交 acquire 的格数（在途上限另见 Provider）。 */
     /**
      * 权威 acquire 每轮预算 = 客户端「缓存读取生产」配额 × 每轮客户端 tick 数。
@@ -533,9 +545,29 @@ public final class ShadowTrackingSession {
         //    只对「新 acquire」封顶。同组（3×3 域）要发完：组内超预算也把本组 acquire 完，
         //    避免半组分裂（半组会让该组各柱都缺几个邻柱 → 同样降级）。
         long lastAcquireDomain = Long.MIN_VALUE;
+        int materialized = 0;
         for (ChunkPos pos : enter) {
             net.minecraft.world.level.chunk.LevelChunk injected =
                     shadow.injectedChunk(currentDimension, pos.x, pos.z);
+            // 【先物化、再比较（2026-09-20）】——恢复方块级 BLOCKS 增量的关键一步。
+            // 1.20.1 上权威窗柱在 compare 前就被物化了（`ChunkMap.scheduleChunkLoad` 每轮
+            // 810~1558 次 → `accountLightAtScheduleLoad` 读盘 → injectLoadedChunk），于是
+            // `localPullEntry` 拿得到**逐段 hash + 平面 hash**，服务端才能判 BLOCKS 增量
+            //（历史报告 `classic-matrix-smoke-report-2026-08-29.md`：1.20.1 R2
+            // `fullChunkRequestCount=1` + 分段增量正常发送）。1.21.1 上 scheduleChunkLoad
+            // 每轮只触发 76~88 次，权威窗柱在 compare 时还没有活柱 ⇒ 只能带**柱级** hash ⇒
+            // `SectionDeltaPlanner.planSection` 在客户端无有效平面时把每个差异段判 `Kind.FULL`，
+            // 差异段占比到 75% 再整柱回退 ⇒ R2 退化成 257 个整柱 FULL。
+            // 这里把同一步补在 compare 之前（同一入口、幂等、按本轮预算节流）；物化后本柱走
+            // 下面的 material 分支：`SeedGenCompareGate.mark` → compare（带逐段/平面）→
+            // 响应落地后才允许交付，不存在「先投陈旧内容」的窗口。
+            if (MATERIALIZE_BEFORE_COMPARE && injected == null && materialized < budget) {
+                ShadowLightCompute.accountLightAtScheduleLoad(currentDimension, pos);
+                injected = shadow.injectedChunk(currentDimension, pos.x, pos.z);
+                if (injected != null) {
+                    materialized++;
+                }
+            }
             boolean material = injected != null;
             if (material) {
                 skippedMaterial++;
@@ -583,11 +615,11 @@ public final class ShadowTrackingSession {
                     currentDimension, pos, ShadowChunkProvider.AcquireReason.TRACKING);
             submitted++;
         }
-        if (submitted > 0 || published > 0) {
+        if (submitted > 0 || published > 0 || materialized > 0) {
             DebugLogger.info(DebugLogger.LogType.NETWORK,
-                    "[SHADOW_TRACK] authority-acquire center=({},{}) vd={} halo={} submitted={} published={} material={} (dimension={})",
+                    "[SHADOW_TRACK] authority-acquire center=({},{}) vd={} halo={} submitted={} published={} material={} materializedFromDisk={} (dimension={})",
                     center.x, center.z, serverViewDistance, lightHaloRadius(), submitted, published,
-                    skippedMaterial, currentDimension);
+                    skippedMaterial, materialized, currentDimension);
         }
     }
 
