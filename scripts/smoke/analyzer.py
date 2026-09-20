@@ -223,14 +223,32 @@ def _trace_analysis(probe: dict[str, Any]) -> dict[str, Any]:
             "gaps": {name: _position_report(value) for name, value in gaps.items()}}
 
 
+def _held_positions(probe: dict[str, Any]) -> set[tuple[int, int]]:
+    """门禁口径的「客户端已持有柱」——空间类门禁的输入人口。
+
+    `clientCache.actualPresent` 是**本轮投递候选**的抽样（`SmokeProbeWriter` 的候选优先序
+    `networkReceived` → `clientApplied` → `shadowReady`），其人口在「本轮新收柱」与「全部已应用柱」
+    之间随轮次跳变。把它当「客户端持有集合」做包围盒洪水填充，会把**上一轮已持有、本轮未再投递**
+    的柱整片误判成封闭空洞——1.21.1 R2 实测：`actualPresent=407`（= 本轮 `networkReceived`），
+    算出的 46 格「空洞」**全部**落在 `chunkTrace.clientApplied` 内（= `loadedChunks` = 1089）。
+    故改取 `clientApplied`（客户端已应用柱；R1/R2 各版本实测恒等于 `loadedChunks`），
+    仅在缺失时回退 `actualPresent`（旧客户端 probe 无 `clientApplied` 时保持既有口径）。
+    注意 `clientApplied` 是本会话**累计** apply，语义上「已持有 ⊇ 累计应用」；经典站桩场景无卸载
+    （实测两者恒等），移动会话的合法卸载另由既有 `_MOBILE_TRACE_DIAGNOSTIC_CODES` 口径判。
+    """
+    applied = _positions(_obj(probe.get("chunkTrace")).get("clientApplied"))
+    if applied:
+        return applied
+    return _positions(_obj(probe.get("clientCache")).get("actualPresent"))
+
+
 def _spatial_check(probe: dict[str, Any]) -> dict[str, Any]:
-    cache = _obj(probe.get("clientCache"))
     trace = _obj(probe.get("chunkTrace"))
-    observed = _positions(cache.get("actualPresent"))
+    observed = _held_positions(probe)
     expected = _positions(trace.get("networkReceived")) or _positions(trace.get("shadowReady"))
-    if "actualPresent" not in cache or not observed:
+    if not observed:
         return {"available": False, "cardinalHoles": [], "diagonalHoles": [],
-                "reason": "clientCache.actualPresent unavailable or empty"}
+                "reason": "no held-chunk set (chunkTrace.clientApplied / clientCache.actualPresent)"}
     cardinal: list[list[int]] = []
     diagonal: list[list[int]] = []
     candidates = {(x + dx, z + dz) for x, z in observed
@@ -302,13 +320,11 @@ def _enclosed_components(holes: set[tuple[int, int]]) -> list[int]:
 
 
 def _hole_check(probe: dict[str, Any]) -> dict[str, Any]:
-    """封闭空洞诊断：口径见 _enclosed_holes，门禁在 analyze_result 里按场景分级。"""
-    cache = _obj(probe.get("clientCache"))
-    if "actualPresent" not in cache:
-        return {"available": False, "reason": "clientCache.actualPresent unavailable"}
-    observed = _positions(cache.get("actualPresent"))
+    """封闭空洞诊断：口径见 _enclosed_holes（人口见 _held_positions），门禁在 analyze_result 里按场景分级。"""
+    observed = _held_positions(probe)
     if not observed:
-        return {"available": False, "reason": "clientCache.actualPresent empty"}
+        return {"available": False,
+                "reason": "no held-chunk set (chunkTrace.clientApplied / clientCache.actualPresent)"}
     holes = _enclosed_holes(observed)
     components = _enclosed_components(holes)
     return {"available": True, "observed": len(observed), "enclosedCount": len(holes),
