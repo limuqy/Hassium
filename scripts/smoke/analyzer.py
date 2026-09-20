@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 import re
 from typing import Any
@@ -37,12 +38,22 @@ def _obj(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _chunk_of(coord: Any) -> int:
+    """世界坐标 → 区块坐标：必须**向下取整**（Java 区块归属 = floor(coord / 16)）。
+
+    `int(coord) >> 4` 是截断（向零取整）——坐标在 (-16, 0) 区间的负小数（如 -0.5）会偏 1 格，
+    把设计上不交付的光环环判成形状内缺口 → 假 P0（`1.21.1_fabric_I_diag2` 实证：同一份 trace
+    只有玩家 z=-0.5 时 FAIL）。
+    """
+    return int(math.floor(float(coord) / 16.0))
+
+
 def _player_chunk(probe: dict[str, Any]) -> tuple[int, int] | None:
     pos = probe.get("playerPos")
     if not isinstance(pos, list) or len(pos) < 3:
         return None
     try:
-        return int(pos[0]) >> 4, int(pos[2]) >> 4
+        return _chunk_of(pos[0]), _chunk_of(pos[2])
     except (TypeError, ValueError):
         return None
 
@@ -64,14 +75,44 @@ def _all_outside_final_vd_window(probe: dict[str, Any], gap: dict[str, Any], ser
     return True
 
 
-def _in_authority_shape(cx: int, cz: int, vd: int, x: int, z: int) -> bool:
-    """原版视距形状（= 权威/交付域）判定。
+def _parse_mc_ver(ver: Any) -> tuple[int, ...] | None:
+    """把 "1.21.4" 解析成 (1, 21, 4)；解析失败返回 None（调用方按旧公式兜底）。"""
+    if not isinstance(ver, str):
+        return None
+    parts: list[int] = []
+    for token in ver.strip().split("."):
+        digits = "".join(ch for ch in token if ch.isdigit())
+        if not digits:
+            return None
+        parts.append(int(digits))
+    return tuple(parts) if len(parts) >= 2 else None
 
-    公式与 Java 侧 `compat/ChunkShapeCompat.contains` 逐字相同（1.20.1 `ChunkMap.isChunkInRange`
-    == 1.21.1 `ChunkTrackingView.isWithinDistance(..., includeBorder=true)`）。Java 单一真相源是
-    `ChunkShapeCompat`，不变量由 `ChunkShapeDilationTest` 钉死；此处是**测试门禁**需要的第二份实现
-    （analyzer 是 Python，无法调用 Java）。改动形状公式时两处必须同步。
+
+def _uses_modern_tracking_shape(ver: Any) -> bool:
+    """1.21.4 起原版 `ChunkTrackingView.isWithinDistance` 改为纯欧氏圆（反编译源码已核对
+    1.21.3 / 1.21.4 / 1.21.5 / 1.21.11），VD=20 形状 1529 → 1573 柱。"""
+    parsed = _parse_mc_ver(ver)
+    return parsed is not None and parsed >= (1, 21, 4)
+
+
+def _in_authority_shape(cx: int, cz: int, vd: int, x: int, z: int,
+                        mc_ver: Any = None) -> bool:
+    """原版视距形状（= 权威/交付域）判定，按 mc 版本分段。
+
+    1.20.1–1.21.3（`ChunkMap.isChunkInRange` == 1.21.1–1.21.3
+    `ChunkTrackingView.isWithinDistance(..., includeBorder=true)`，chebyshev 角区折算）：
+        i=max(0,|dx|-1), j=max(0,|dz|-1), k=max(0,max(i,j)-1), l=min(i,j), l²+k²<vd²。
+    1.21.4+（`ChunkTrackingView.isWithinDistance` 新公式，includeBorder 折算为 offset 2）：
+        纯欧氏 max(0,|dx|-2)² + max(0,|dz|-2)² < vd²。
+
+    Java 单一真相源是 `ChunkShapeCompat`（`contains` 委托原版；`containsDilated` 收缩坐标后
+    委托 `contains`），不变量由 `ChunkShapeDilationTest` 钉死；此处是**测试门禁**需要的第二份
+    实现（analyzer 是 Python，无法调用 Java）。原版公式再变时两处必须同步。
     """
+    if _uses_modern_tracking_shape(mc_ver):
+        i = max(0, abs(x - cx) - 2)
+        j = max(0, abs(z - cz) - 2)
+        return i * i + j * j < vd * vd
     i = max(0, abs(x - cx) - 1)
     j = max(0, abs(z - cz) - 1)
     k = max(0, max(i, j) - 1)
@@ -79,7 +120,8 @@ def _in_authority_shape(cx: int, cz: int, vd: int, x: int, z: int) -> bool:
     return l * l + k * k < vd * vd
 
 
-def _all_outside_authority_shape(probe: dict[str, Any], gap: dict[str, Any], server_vd: int) -> bool:
+def _all_outside_authority_shape(probe: dict[str, Any], gap: dict[str, Any], server_vd: int,
+                                 mc_ver: Any = None) -> bool:
     """缺口坐标是否**全部**落在权威形状（交付域）之外 ⇒ 只可能是光照光环柱。
 
     S3b（2026-09-19）起：计算域 = 权威形状 + 光环（`ChunkShapeCompat.containsDilated`），
@@ -96,19 +138,20 @@ def _all_outside_authority_shape(probe: dict[str, Any], gap: dict[str, Any], ser
     for item in positions:
         if not isinstance(item, (list, tuple)) or len(item) < 2:
             return False
-        if _in_authority_shape(px, pz, server_vd, int(item[0]), int(item[1])):
+        if _in_authority_shape(px, pz, server_vd, int(item[0]), int(item[1]), mc_ver):
             return False
     return True
 
 
-def _halo_only_gap(probe: dict[str, Any], gaps: dict[str, Any], server_vd: int) -> bool:
+def _halo_only_gap(probe: dict[str, Any], gaps: dict[str, Any], server_vd: int,
+                   mc_ver: Any = None) -> bool:
     """两个「收到/注入但未交付」缺口是否**都**（凡非空者）全在权威形状之外 ⇒ 判为光照光环。"""
     checked = False
     for key in ("injectedNotReady", "expectedNotPresent"):
         gap = _obj(gaps.get(key))
         if not gap.get("count"):
             continue
-        if not _all_outside_authority_shape(probe, gap, server_vd):
+        if not _all_outside_authority_shape(probe, gap, server_vd, mc_ver):
             return False
         checked = True
     return checked
@@ -483,8 +526,9 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
             # 光环柱「收到/注入但不交付」是设计（`chunk.lightHaloRadius`）——凡缺口**全部**在权威
             # 形状之外即判为光环；只要有一个在形状内，一律不放行（窗内缺口仍是 P0）。
             server_vd = _num(result.get(f"Vd{number}")) or 0
+            # 透传 mc 版本：原版 1.21.4 起改了视距形状公式（见 _in_authority_shape）。
             halo_only = (not mobile_session and server_vd > 0
-                         and _halo_only_gap(probe, gaps, int(server_vd)))
+                         and _halo_only_gap(probe, gaps, int(server_vd), result.get("Ver")))
             for key, code in (("expectedNotPresent", "TRACE_EXPECTED_NOT_PRESENT"),
                               ("readyNotApplied", "TRACE_READY_NOT_APPLIED")):
                 if not gaps[key]["count"]:

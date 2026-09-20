@@ -8,7 +8,9 @@ import net.minecraft.server.level.ChunkMap;
  * <p>
  * 1.20.1 无 {@code ChunkTrackingView}，直接用 {@link ChunkMap#isChunkInRange}
  * （玩家 tracking 同款，public static）；1.21.1+ 走 {@code ChunkTrackingView.of().contains()}。
- * 两者公式同族（圆角方形：内切欧氏 + 角区 chebyshev 折算），跨版本行为一致。
+ * 注意：1.21.4 起原版把 {@code isWithinDistance} 改成纯欧氏圆（旧版是「内切欧氏 + 角区
+ * chebyshev 折算」），两段形状不同——凡依赖形状**尺寸/边界**的逻辑必须经由本类（它委托原版），
+ * 不得自行抄公式（见 {@link #containsDilated} 的说明）。
  * <p>
  * 语义对齐原版玩家 tracking：range = 通告视距 + 1（{@code ChunkMap.setViewDistance}
  * 用 {@code viewDistance+1} 构造 tracking view），因此调用方传 range 前需自行 +1。
@@ -48,24 +50,34 @@ public final class ChunkShapeCompat {
      * 原版视距形状的**切比雪夫膨胀**判定：(x,z) 是否落在「{@code range} 形状外扩
      * {@code dilate} 环」内。
      * <p>
-     * 实现 = {@link #contains} 的同一原版公式，把 {@code |d|-1} 折成 {@code |d|-1-dilate}
-     * （形状对 |dx|/|dz| 单调 ⇒ 切比雪夫膨胀 = 先缩坐标再用原公式）。
-     * 跨版本一致：1.20.1 {@code ChunkMap.isChunkInRange} 与 1.21.1
-     * {@code ChunkTrackingView.isWithinDistance(..., includeBorder=true)} 是**逐字相同**的公式。
+     * 实现 = <b>坐标向中心收缩 {@code dilate} 后委托 {@link #contains}</b>。两代原版公式都对
+     * {@code |dx|}/{@code |dz|} 单调，故收缩后的判定恰为切比雪夫膨胀（数值验证：vd∈{10,16,20}×
+     * dilate∈{0,1,2} 与朴素「3×3 邻域存在性」定义逐点等价；≤1.21.3 上与旧的内联实现逐点相同）。
+     * <p>
+     * <b>为什么不把公式抄进本方法</b>：原版形状在 <b>1.21.4 改过</b>——旧公式（chebyshev 角区折算
+     * {@code k=max(0,max(i,j)-1)}，1.20.1–1.21.3）与 1.21.4+ 新公式（纯欧氏
+     * {@code max(0,|d| - 2)² 求和}，{@code ChunkTrackingView.isWithinDistance} 的 includeBorder
+     * 折算为 offset 2）不是同一公式，VD=20 形状从 1529 柱变为 1573 柱。抄公式就得按版本分段，而
+     * 1.21.4 不是编译锚点、白名单没有对应 token（写 {@code < MC_1_21_5} 会把 1.21.4 错分进旧段）；
+     * 委托则让膨胀自动跟随 {@link #contains} 的版本分支（含未来原版再变）。1.21.4 实证：硬编码
+     * 旧公式时计算域（旧形状膨胀，1705）≠ 新形状膨胀（1749），新权威形状 44 柱 3×3 缺邻 →
+     * 缺邻柱被按 Bedrock 挡天光（红线 failure mode）；委托后 {@code ChunkShapeDilationTest} 全绿。
      * <p>
      * <b>用途（S3 光照光环）</b>：权威柱的 3×3 必须全部落在计算域内，否则边界柱算光时缺邻被
      * 当基岩挡光。**不得用 {@code contains(range + R)} 近似**——那是「形状环」，在形状切角处
      * 每窗漏掉 8~20 个权威柱的邻柱（实测 VD=10/16/20 → 8/16/20 个；膨胀形式为 0 个）。
-     * 膨胀形式的最大切比雪夫半径 = {@code range + dilate + 1}，{@code dilate=1} 时恰好
-     * 贴满服务端签发上限 {@code range + ShadowPullRadii.AUTHORITY_MARGIN}。
+     * 膨胀形式的最大切比雪夫半径 = {@code range + dilate + 1}（两代公式同界），
+     * {@code dilate=1} 时恰好贴满服务端签发上限 {@code range + ShadowPullRadii.AUTHORITY_MARGIN}。
      */
     public static boolean containsDilated(int cx, int cz, int range, int dilate, int x, int z) {
         int d = Math.max(0, dilate);
-        int i = Math.max(0, Math.abs(x - cx) - 1 - d);
-        int j = Math.max(0, Math.abs(z - cz) - 1 - d);
-        long k = Math.max(0, Math.max(i, j) - 1);
-        long l = Math.min(i, j);
-        return l * l + k * k < (long) range * range;
+        int dx = x - cx;
+        int dz = z - cz;
+        int ax = Math.max(0, Math.abs(dx) - d);
+        int az = Math.max(0, Math.abs(dz) - d);
+        return contains(cx, cz, range,
+                cx + (dx >= 0 ? ax : -ax),
+                cz + (dz >= 0 ? az : -az));
     }
 
     /**

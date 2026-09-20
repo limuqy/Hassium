@@ -375,5 +375,110 @@ class MobileSessionTraceTest(unittest.TestCase):
         self.assertEqual(failures[0]["largestComponent"], 9)
 
 
+class HaloAnchorTest(unittest.TestCase):
+    """光环判定的两个锚点陷阱：玩家区块必须 floor 取整；形状公式必须随 mc 版本分段。
+
+    背景（2026-09-20 `1.21.4_fabric_I_m1` 假 P0 实证）：
+    1. `_player_chunk` 曾用 `int(coord) >> 4`（截断）——玩家 z=-0.5 时锚点偏 1 格，
+       设计上不交付的光环环被判成形状内缺口 → 假 P0（本场 P0 的直接原因：
+       同一份 trace 按正确锚点 0 个缺口在形状内，按截断锚点 21 个）。
+    2. `_in_authority_shape` 曾把 1.21.3 及更早的 chebyshev 折算公式写死——原版 1.21.4
+       改为纯欧氏圆（VD=20 形状 1529 → 1573 柱，旧形状是新形状的真子集，差 44 柱）。
+       旧公式会把「新形状外环漏交」误判成光环（假 PASS 门洞），必须随版本分段。
+    """
+
+    def test_player_chunk_floors_negative_fraction(self):
+        from scripts.smoke.analyzer import _player_chunk
+        # z=-0.5 属于区块 -1（floor），不是 0（截断）。
+        self.assertEqual((-2, -1), _player_chunk({"playerPos": [-29.5, 64.0, -0.5]}))
+        self.assertEqual((-3, 0), _player_chunk({"playerPos": [-40.5, 64.0, 8.5]}))
+        self.assertIsNone(_player_chunk({"playerPos": [-29.5]}))
+
+    def test_authority_shape_is_version_segmented(self):
+        from scripts.smoke.analyzer import _in_authority_shape
+        # (cx+21, cz+8)：1.21.3 公式在形状外，1.21.4 纯欧氏圆在形状内——两代形状的判别点。
+        self.assertFalse(_in_authority_shape(0, 0, 20, 21, 8, "1.21.3"))
+        self.assertTrue(_in_authority_shape(0, 0, 20, 21, 8, "1.21.4"))
+        self.assertTrue(_in_authority_shape(0, 0, 20, 21, 8, "1.21.11"))
+        # 1.20.1 与 1.21.1–1.21.3 走旧公式。
+        self.assertFalse(_in_authority_shape(0, 0, 20, 21, 8, "1.20.1"))
+        self.assertFalse(_in_authority_shape(0, 0, 20, 21, 8, "1.21.1"))
+        # 未知版本按旧公式兜底（保守：不放宽缺口判定）。
+        self.assertFalse(_in_authority_shape(0, 0, 20, 21, 8, None))
+
+    def test_shape_size_matches_vanilla_per_version(self):
+        from scripts.smoke.analyzer import _in_authority_shape
+
+        def size(ver):
+            return sum(1 for x in range(-30, 31) for z in range(-30, 31)
+                       if _in_authority_shape(0, 0, 20, x, z, ver))
+
+        self.assertEqual(1529, size("1.21.3"))
+        self.assertEqual(1573, size("1.21.4"))
+
+    def test_modern_halo_gap_is_not_p0(self):
+        """修复后的产品（计算域 = 1.21.4 新形状膨胀）+ 负小数玩家坐标：
+        整环缺口必须判成光环（INFO）——锚点 floor 与版本公式两个修复同时生效。"""
+        from scripts.smoke.analyzer import _halo_only_gap, _in_authority_shape
+        # 玩家 [0.5,·,-0.5] → 真实区块 (0,-1)；交付/计算域都围绕真实区块（与实跑一致）。
+        cx, cz = 0, -1
+        authority = {(x, z) for x in range(-30, 31) for z in range(-30, 31)
+                     if _in_authority_shape(cx, cz, 20, x, z, "1.21.4")}
+        # 计算域 = 1.21.4 形状的切比雪夫膨胀（Java 侧 = 收缩 1 后委托新公式 ⇒ offset 3）。
+        compute = {(x, z) for x in range(-30, 31) for z in range(-30, 31)
+                   if max(0, abs(x - cx) - 3) ** 2 + max(0, abs(z - cz) - 3) ** 2 < 400}
+        halo = sorted(compute - authority)
+        self.assertEqual(176, len(halo))
+        probe = probe_for(authority, compute, (cx, cz))
+        gaps = {"injectedNotReady": {"count": len(halo), "positions": [list(p) for p in halo]},
+                "expectedNotPresent": {"count": len(halo), "positions": [list(p) for p in halo]}}
+        self.assertTrue(_halo_only_gap(probe, gaps, 20, "1.21.4"))
+
+    def test_stale_compute_domain_is_judged_halo_under_correct_formula(self):
+        """1.21.4_m1 实况复现：产品计算域还是旧形状膨胀（1705）、交付已是新形状（1573），
+        132 缺口在正确公式下全部是光环；旧公式（小形状）也会全部放行——因为它把
+        新形状外环当成「形状外」。真正把这场判成 P0 的是锚点截断（见
+        test_player_chunk_floors_negative_fraction）。"""
+        from scripts.smoke.analyzer import _halo_only_gap, _in_authority_shape
+        new_shape = {(x, z) for x in range(-30, 31) for z in range(-30, 31)
+                     if _in_authority_shape(0, 0, 20, x, z, "1.21.4")}
+        old_shape = {(x, z) for x in range(-30, 31) for z in range(-30, 31)
+                     if _in_authority_shape(0, 0, 20, x, z, "1.21.3")}
+        # 旧公式形状是新形状的真子集（差 44 柱）——写死旧公式会把这 44 柱的漏交误判成光环。
+        self.assertEqual(44, len(new_shape - old_shape))
+        self.assertFalse(old_shape - new_shape)
+        stale_compute = {(x, z) for x in range(-30, 31) for z in range(-30, 31)
+                         if _old_dilated(x, z, 20)}
+        gap = sorted(stale_compute - new_shape)
+        self.assertEqual(132, len(gap))
+        probe = probe_for(new_shape, stale_compute, (0, 0))
+        gaps = {"injectedNotReady": {"count": len(gap), "positions": [list(p) for p in gap]},
+                "expectedNotPresent": {"count": len(gap), "positions": [list(p) for p in gap]}}
+        self.assertTrue(_halo_only_gap(probe, gaps, 20, "1.21.4"))
+        self.assertTrue(_halo_only_gap(probe, gaps, 20, "1.21.3"))
+
+
+def _old_dilated(x: int, z: int, vd: int) -> bool:
+    """旧公式（≤1.21.3）的切比雪夫膨胀 d=1：i=max(0,|dx|-2) + chebyshev 折算（改前实现）。"""
+    i = max(0, abs(x) - 2)
+    j = max(0, abs(z) - 2)
+    k = max(0, max(i, j) - 1)
+    l = min(i, j)
+    return l * l + k * k < vd * vd
+
+
+def probe_for(authority: set[tuple[int, int]], compute: set[tuple[int, int]],
+              center: tuple[int, int]) -> dict:
+    positions_authority = [list(p) for p in sorted(authority)]
+    positions_compute = [list(p) for p in sorted(compute)]
+    return {"playerPos": [center[0] * 16 + 0.5, 64.0, center[1] * 16 + 0.5],
+            "chunkTrace": {"networkReceived": {"positions": positions_compute},
+                           "shadowInjected": {"positions": positions_compute},
+                           "shadowReady": {"positions": positions_authority},
+                           "clientApplied": {"positions": positions_authority},
+                           "meshCompiled": {"positions": positions_authority}},
+            "clientCache": {"actualPresent": {"positions": positions_authority}}}
+
+
 if __name__ == "__main__":
     unittest.main()
