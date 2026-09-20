@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil;
 import io.netty.buffer.Unpooled;
 import java.util.ArrayList;
 import java.util.List;
@@ -85,27 +86,42 @@ class ChunkAuthorityS2CPacketTest {
     }
 
     @Test
-    @DisplayName("权威 hash 缓存：put/get 命中、未命中返回 null、方块变更失效")
+    @DisplayName("权威 hash 缓存：逐段 put/get 命中、未命中返回 null、方块变更失效、null 不入表")
     void hashCacheHitMissAndInvalidate() {
         ChunkAuthorityHashes.clear();
         ChunkAuthorityHashes.resetStats();
         ChunkPos pos = new ChunkPos(11, -7);
-        assertNull(ChunkAuthorityHashes.get("minecraft:overworld", pos), "未写入应为未命中");
+        assertNull(ChunkAuthorityHashes.getSections("minecraft:overworld", pos), "未写入应为未命中");
 
-        ChunkAuthorityHashes.put("minecraft:overworld", pos, 0xABCDL);
-        assertEquals(0xABCDL, ChunkAuthorityHashes.get("minecraft:overworld", pos));
-        assertEquals(0xABCDL, ChunkAuthorityHashes.peek("minecraft:overworld", 11, -7));
+        long[] sections = {0x11L, 0L, 0x22L};
+        long expected = ChunkContentHashUtil.combineSectionHashesFromArray(sections);
+        ChunkAuthorityHashes.putSections("minecraft:overworld", pos, sections);
+        long[] read = ChunkAuthorityHashes.getSections("minecraft:overworld", pos);
+        assertEquals(3, read.length);
+        assertEquals(0x11L, read[0]);
+        assertEquals(0L, read[1]);
+        assertEquals(0x22L, read[2]);
+        assertEquals(expected, ChunkAuthorityHashes.get("minecraft:overworld", pos));
+        assertEquals(expected, ChunkAuthorityHashes.peek("minecraft:overworld", 11, -7));
+
+        // 防御性拷贝：外部改动源数组不得污染缓存
+        sections[0] = 0x33L;
+        assertEquals(0x11L, ChunkAuthorityHashes.getSections("minecraft:overworld", pos)[0]);
 
         // 跨维同坐标互不覆盖
-        assertNull(ChunkAuthorityHashes.get("minecraft:the_nether", pos));
+        assertNull(ChunkAuthorityHashes.getSections("minecraft:the_nether", pos));
 
         ChunkAuthorityHashes.invalidate("minecraft:overworld", pos);
-        assertNull(ChunkAuthorityHashes.get("minecraft:overworld", pos), "失效后必须未命中");
+        assertNull(ChunkAuthorityHashes.getSections("minecraft:overworld", pos), "失效后必须未命中");
         assertEquals(1L, ChunkAuthorityHashes.invalidationCount());
 
-        // hash=0 视为未知，不入表
-        ChunkAuthorityHashes.put("minecraft:overworld", pos, 0L);
-        assertNull(ChunkAuthorityHashes.get("minecraft:overworld", pos));
+        // null 视为未知，不入表
+        ChunkAuthorityHashes.putSections("minecraft:overworld", pos, null);
+        assertNull(ChunkAuthorityHashes.getSections("minecraft:overworld", pos));
+
+        // 长度 0（全空气柱）是合法条目：柱级 hash 由 combineSectionHashesFromArray 给 1
+        ChunkAuthorityHashes.putSections("minecraft:overworld", pos, new long[0]);
+        assertEquals(1L, ChunkAuthorityHashes.get("minecraft:overworld", pos));
 
         ChunkAuthorityHashes.clear();
         assertEquals(0, ChunkAuthorityHashes.size());

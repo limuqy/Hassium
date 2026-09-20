@@ -123,6 +123,11 @@ public class MixinMinecraftServer {
         Constants.LOG.info("Hassium: PlayerCompressionTracker cleared");
         // 清理实体降帧引擎状态（密度索引 / 每连接实体包计数）
         io.github.limuqy.mc.hassium.server.entity.EntityUpdatePacing.clear();
+        // 权威逐段 hash 缓存：键是 (维度, x, z)，**不得跨世界复用**（同维度同坐标换世界会撞）。
+        // 关停前打一行统计：这是「缓存是否真被用起来」的唯一现成证据来源。
+        Constants.LOG.info("Hassium: ChunkAuthorityHashes {}",
+                io.github.limuqy.mc.hassium.server.ChunkAuthorityHashes.statsLine());
+        io.github.limuqy.mc.hassium.server.ChunkAuthorityHashes.clear();
         RuntimeServerContext.setActiveServer(null);
     }
 }

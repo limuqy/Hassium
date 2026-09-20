@@ -472,9 +472,20 @@ public class ServerChunkPushManager {
     /** 主线程：hash + 比较 + FULL 包快照 / DELTA 列快照。encode/zstd 在 pushPool。 */
     private ClassifiedPull classifyPull(ShadowPullRequestC2SPacket.Entry entry,
                                         LevelChunk chunk, ServerLevel level) {
-        Map<Integer, Long> hashes = ChunkContentHashUtil.computeSectionHashes(chunk);
-        long chunkHash = ChunkContentHashUtil.combineSectionHashes(hashes);
-        long[] sectionHashArray = ChunkContentHashUtil.sectionHashesToArray(hashes);
+        // 逐段 hash：先查服务端**共享**缓存（跨玩家复用），未命中再现算并落缓存。
+        // 贵的是 computeSectionHashes 的逐位置扫描（24 段 × 16³ = 98_304 次
+        // getBlockState+Block.getId），而 UNCHANGED/DELTA/FULL 三种响应都要回带
+        // sectionHashList，所以缓存必须存**逐段数组**——只缓存柱级 hash 省不掉这一步。
+        // 失效点见 ChunkAuthorityHashes 类注释（LevelChunk#setBlockState RETURN 钩子）。
+        String dimension = LevelCompat.getDimensionId(level);
+        ChunkPos pos = chunk.getPos();
+        long[] sectionHashArray = ChunkAuthorityHashes.getSections(dimension, pos);
+        if (sectionHashArray == null) {
+            sectionHashArray = ChunkContentHashUtil.sectionHashesToArray(
+                    ChunkContentHashUtil.computeSectionHashes(chunk));
+            ChunkAuthorityHashes.putSections(dimension, pos, sectionHashArray);
+        }
+        long chunkHash = ChunkContentHashUtil.combineSectionHashesFromArray(sectionHashArray);
         List<Long> sectionHashList = new ArrayList<>(sectionHashArray.length);
         for (long hash : sectionHashArray) {
             sectionHashList.add(hash);

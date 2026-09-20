@@ -300,22 +300,21 @@ public final class ChunkAuthorityNotifier {
             return 0L;
         }
         ChunkPos pos = new ChunkPos(chunkX, chunkZ);
-        Long cached = ChunkAuthorityHashes.get(dimension, pos);
-        if (cached != null) {
-            return cached;
+        long[] sections = ChunkAuthorityHashes.getSections(dimension, pos);
+        if (sections == null) {
+            if (hashBudget[0] <= 0) {
+                return 0L; // 预算耗尽：本柱不附带 hash，客户端按未知处理
+            }
+            LevelChunk chunk = LevelCompat.loadedFullChunk(level, chunkX, chunkZ);
+            if (chunk == null) {
+                return 0L;
+            }
+            hashBudget[0]--;
+            sections = ChunkContentHashUtil.sectionHashesToArray(
+                    ChunkContentHashUtil.computeSectionHashes(chunk));
+            ChunkAuthorityHashes.putSections(dimension, pos, sections);
         }
-        if (hashBudget[0] <= 0) {
-            return 0L; // 预算耗尽：本柱不附带 hash，客户端按未知处理
-        }
-        LevelChunk chunk = LevelCompat.loadedFullChunk(level, chunkX, chunkZ);
-        if (chunk == null) {
-            return 0L;
-        }
-        hashBudget[0]--;
-        long hash = ChunkContentHashUtil.combineSectionHashes(
-                ChunkContentHashUtil.computeSectionHashes(chunk));
-        ChunkAuthorityHashes.put(dimension, pos, hash);
-        return hash;
+        return ChunkContentHashUtil.combineSectionHashesFromArray(sections);
     }
 
     /** 权威声明整族降级（S0）：恒 false，服务端不再发 chunk_authority_s2c。 */
