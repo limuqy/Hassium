@@ -1460,8 +1460,46 @@ public final class ShadowLightCompute {
      * {@code ShadowStorageManager.localHashIfPresent}）；映像按 region 常驻，稳态是一次
      * map 查表 + 空槽判断。
      */
-    public static boolean hasLocalPullBaseline(String dimension, ChunkPos pos) {
+    /**
+     * 「盘上有柱、内存没柱」时先读盘物化，供统一 Compare+Pull 取到**逐段/平面**基线。
+     * <p>
+     * 为什么必须有这一步：{@link #localPullEntry} 在 {@code chunk == null} 时只能带**柱级** hash，
+     * 而服务端 {@code SectionDeltaPlanner.planSection} 在客户端无有效平面时把每个差异段判
+     * {@code Kind.FULL}（整段），差异段占比到 75% 再整柱回退 ⇒ 该柱只能整柱下发。
+     * 1.20.1 靠 {@code ChunkMap.scheduleChunkLoad}（每轮 810~1558 次）天然做到；1.21.1 上该钩子
+     * 每轮只触发 76~88 次，必须在 compare 之前显式补一次。
+     * <p>
+     * 幂等；柱不在盘上返回 {@code false}（保持「只有柱级 hash」的退化路径）。
+     * <b>不得在渲染线程调用</b>（内部会解压整柱）；调用方见
+     * {@code ShadowPullClient.materializeForCompare} 与 {@code ShadowTrackingSession.drainAuthorityAcquires}。
+     */
+    public static boolean materializeFromDiskForCompare(String dimension, ChunkPos pos) {
         if (dimension == null || pos == null) {
+            return false;
+        }
+        ShadowSeedServer server = ShadowServerRegistry.getInstance().get();
+        if (server == null) {
+            return false;
+        }
+        if (server.injectedChunk(dimension, pos.x, pos.z) != null) {
+            return true;
+        }
+        try {
+            LevelChunk disk = server.loadFromDisk(dimension, pos);
+            if (disk == null) {
+                return false;
+            }
+            server.injectLoadedChunk(dimension, pos, disk, false);
+            return true;
+        } catch (Throwable t) {
+            DebugLogger.warn(DebugLogger.LogType.ASYNC,
+                    "[SHADOW_TRACK] materialize-from-disk for compare failed ({}, {})",
+                    pos.x, pos.z, t);
+            return false;
+        }
+    }
+
+    public static boolean hasLocalPullBaseline(String dimension, ChunkPos pos) {        if (dimension == null || pos == null) {
             return false;
         }
         if (io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes.get(dimension, pos) != null) {

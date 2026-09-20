@@ -36,10 +36,24 @@ import net.minecraft.world.level.ChunkPos;
 public final class ShadowPullClient {
 
     private static final AtomicLong NEXT_REQUEST_ID = new AtomicLong();
-    /** 请求模式仅覆盖在途响应；断连时 reset，达到上限时宁可放弃分类也不积压。 */
-    private static final java.util.concurrent.ConcurrentHashMap<Long, Boolean> REQUEST_MODES =
-            new java.util.concurrent.ConcurrentHashMap<>();
-    private static final int MAX_TRACKED_REQUESTS = 1_024;
+    /**
+     * 请求模式（requestId → 是否带本地基线），仅覆盖在途响应；断连时清空。
+     * <p>
+     * 【为什么是有界 LRU，而不是「满了整体 clear」】旧实现一旦达到上限就 {@code clear()}
+     * 整表：进服一批就上千请求（VD20 = 1705 柱），响应回来时回查**恒 miss**
+     * ⇒ {@code comparedBaseline} 恒 {@code null} ⇒ {@code cacheMiss}/{@code cacheStale}
+     * **结构性恒 0**（2026-09-20 实测 1750 次 FULL 全部 withBaseline=0，逼得排查只能换口径）。
+     * 改成逐出最旧：容量内**必命中**，代价只是极旧的在途请求退化为「模式未知」。
+     */
+    private static final java.util.Map<Long, Boolean> REQUEST_MODES =
+            java.util.Collections.synchronizedMap(
+                    new java.util.LinkedHashMap<>(256, 0.75f, true) {
+                        @Override
+                        protected boolean removeEldestEntry(java.util.Map.Entry<Long, Boolean> eldest) {
+                            return size() > MAX_TRACKED_REQUESTS;
+                        }
+                    });
+    private static final int MAX_TRACKED_REQUESTS = 8_192;
     /**
      * C2S 载荷预算余量：vanilla 的 32767 限的是**载荷本身**，而各加载器封装
      * （forge `ShadowPullRequestWrapper` / neoforge `ByteArrayPayload`）可能再包一层。
@@ -124,6 +138,7 @@ public final class ShadowPullClient {
         }
         if (includeLocalBaseline) {
             compareRequests.addAndGet(chunks.size());
+            materializeForCompare(dimension, chunks);
         } else {
             authoritativeRequests.addAndGet(chunks.size());
         }
@@ -136,9 +151,6 @@ public final class ShadowPullClient {
         for (List<ShadowPullRequestC2SPacket.Entry> batch
                 : ShadowPullRequestC2SPacket.batchesByEncodedSize(dimension, entries, budget)) {
             long requestId = NEXT_REQUEST_ID.incrementAndGet();
-            if (REQUEST_MODES.size() >= MAX_TRACKED_REQUESTS) {
-                REQUEST_MODES.clear();
-            }
             REQUEST_MODES.put(requestId, includeLocalBaseline);
             FriendlyByteBuf buffer = new FriendlyByteBuf(Unpooled.buffer());
             new ShadowPullRequestC2SPacket(dimension, 0L, requestId, batch).encode(buffer);
@@ -146,10 +158,43 @@ public final class ShadowPullClient {
         }
     }
 
+    /**
+     * compare 前把「盘上有柱、内存没柱」的目标先读盘物化。
+     * <p>
+     * 必要性：{@code localPullEntry} 只有在内存里有活柱时才能带上**逐段/平面**基线；
+     * 只带柱级 hash 时服务端 {@code SectionDeltaPlanner} 会把每个非空段判成
+     * {@code clientAir != serverAir} → 全段 FULL → 占比 100% ≥75% → 整柱回退。
+     * 收口点选在这里：所有 compare 路径（tracking 泵 / 权威提示 / 原生拦截）都经
+     * {@link #request}，改一处即全覆盖。
+     * <p>
+     * <b>渲染线程直接跳过</b>：{@code ChunkAuthority→requestFull} 会从渲染线程进来，
+     * 而这里要解压整柱（es3 冻结的老路）。跳过后该柱退化为「只有柱级 hash」（= 修复前行为），
+     * 绝不阻塞渲染。
+     */
+    private static void materializeForCompare(String dimension, List<ChunkPos> chunks) {
+        net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
+        if (mc == null || mc.isSameThread()) {
+            return;
+        }
+        for (ChunkPos pos : chunks) {
+            if (pos == null) {
+                continue;
+            }
+            io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer shadow =
+                    io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry.getInstance().get();
+            if (shadow == null) {
+                return;
+            }
+            if (shadow.injectedChunk(dimension, pos.x, pos.z) != null) {
+                continue;
+            }
+            ShadowLightCompute.materializeFromDiskForCompare(dimension, pos);
+        }
+    }
+
     static ShadowPullRequestC2SPacket fullRequest(String dimension, long requestId, List<ChunkPos> chunks) {
         return fullRequest(dimension, requestId, chunks, true);
     }
-
     static ShadowPullRequestC2SPacket fullRequest(String dimension, long requestId, List<ChunkPos> chunks,
                                                    boolean includeLocalBaseline) {
         List<ShadowPullRequestC2SPacket.Entry> entries = new ArrayList<>(chunks.size());
