@@ -316,6 +316,36 @@ public final class SmokeProbeWriter {
         field(sb, "hashLeftoverDuplicates", io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.hashLeftoverDuplicatesCount());
         field(sb, "sectionDeltaRequestsSent", m.getSectionDeltaRequestsSent());
         field(sb, "sectionDeltaApplied", m.getSectionDeltaChunksReceived());
+        // 缓存裁决分类（Compare+Pull，ShadowPullClient.recordFullResult）：
+        //   cacheMiss  = 无本地基线 → 发空基线请求 → 服务端必答 FULL；
+        //   cacheStale = 有本地基线但服务端判 FULL（内容已变）。
+        // 这两项是 R2 缓存复用率的直接解释项。注意与上面 hash* 那组区分：那组当前**无自增点**、恒 0。
+        field(sb, "cacheMiss", m.getCacheMissCount());
+        field(sb, "cacheStale", m.getCacheStaleCount());
+        // 原生整柱包分流（ShadowPullClient.handleNativeChunk）：intercepted = 进了 Compare+Pull；
+        // 其余三项 = 旁路原因（旁路即直接落地，绕过缓存）。
+        field(sb, "nativeIntercepted",
+                io.github.limuqy.mc.hassium.protocol.ShadowPullClient.nativeInterceptedCount());
+        field(sb, "nativeBypassPendingPull",
+                io.github.limuqy.mc.hassium.protocol.ShadowPullClient.nativeBypassPendingPullCount());
+        field(sb, "nativeBypassApplyInProgress",
+                io.github.limuqy.mc.hassium.protocol.ShadowPullClient.nativeBypassApplyInProgressCount());
+        field(sb, "nativeBypassEngineOff",
+                io.github.limuqy.mc.hassium.protocol.ShadowPullClient.nativeBypassEngineOffCount());
+        // 统一 Compare+Pull 结局分解（请求侧按入口计数，不依赖 REQUEST_MODES 回查）：
+        //   compareRequests   —— 带本地基线的 compare 请求（服务端可判 UNCHANGED）；
+        //   authoritativeRequests —— 无基线权威 FULL（修好「盘基线」后 R2 应趋零）；
+        //   responseFull      —— 真正的整柱重下量（= 缓存没帮上的部分）。
+        field(sb, "compareRequests",
+                io.github.limuqy.mc.hassium.protocol.ShadowPullClient.compareRequestCount());
+        field(sb, "authoritativeRequests",
+                io.github.limuqy.mc.hassium.protocol.ShadowPullClient.authoritativeRequestCount());
+        field(sb, "responseUnchanged",
+                io.github.limuqy.mc.hassium.protocol.ShadowPullClient.responseUnchangedCount());
+        field(sb, "responseFull",
+                io.github.limuqy.mc.hassium.protocol.ShadowPullClient.responseFullCount());
+        field(sb, "responseDelta",
+                io.github.limuqy.mc.hassium.protocol.ShadowPullClient.responseDeltaCount());
         field(sb, "lightSegRecalc", m.getLightCacheMissCount());
         field(sb, "ovdLoaded", m.getOvdLoadedCount());
         field(sb, "ovdMiss", m.getOvdMissCount());

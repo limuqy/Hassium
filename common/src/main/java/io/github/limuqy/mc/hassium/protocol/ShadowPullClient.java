@@ -122,6 +122,11 @@ public final class ShadowPullClient {
         if (dimension == null || dimension.isEmpty() || chunks == null || chunks.isEmpty()) {
             return;
         }
+        if (includeLocalBaseline) {
+            compareRequests.addAndGet(chunks.size());
+        } else {
+            authoritativeRequests.addAndGet(chunks.size());
+        }
         List<ShadowPullRequestC2SPacket.Entry> entries =
                 fullRequest(dimension, 0L, chunks, includeLocalBaseline).entries();
         // 按**编码后字节数**分批，而不是只按条数：单柱最多带 64 段 × PLANE_COUNT(48) 个 int 分量，
@@ -204,28 +209,104 @@ public final class ShadowPullClient {
      *  否则会把刚收到的权威包当成原版首包再打一次空基线 Pull，落地被标成 SERVER_PUSH。 */
     public static boolean handleNativeChunk(net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket packet) {
         if (packet != null && ClientChunkHandler.isPendingPullApply(packet.getX(), packet.getZ())) {
+            nativeBypassPendingPull.incrementAndGet();
             return false;
         }
         if (ClientChunkPipeline.getInstance().isApplyInProgress()) {
+            nativeBypassApplyInProgress.incrementAndGet();
             return false;
         }
         if (packet == null || !io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance().isClientCacheEnabled()
                 || !ShadowLightCompute.isEnabled()) {
+            nativeBypassEngineOff.incrementAndGet();
             return false;
         }
         Minecraft minecraft = Minecraft.getInstance();
         if (minecraft == null || minecraft.level == null) {
+            nativeBypassEngineOff.incrementAndGet();
             return false;
         }
         String dimension = LevelCompat.getDimensionId(minecraft.level);
         ChunkPos pos = new ChunkPos(packet.getX(), packet.getZ());
         if (dimension == null) {
+            nativeBypassEngineOff.incrementAndGet();
             return false;
         }
-        return tryInterceptForCompare(dimension, pos,
+        boolean intercepted = tryInterceptForCompare(dimension, pos,
                 () -> io.github.limuqy.mc.hassium.shadow.light.ShadowVanillaLightPipeline.submitVisible(
                         dimension, pos, packet,
                         io.github.limuqy.mc.hassium.platform.client.TraceOrigin.SERVER_PUSH));
+        if (intercepted) {
+            nativeIntercepted.incrementAndGet();
+        } else {
+            nativeBypassEngineOff.incrementAndGet();
+        }
+        return intercepted;
+    }
+
+    /**
+     * 原生整柱包（vanilla chunk packet）在 {@link #handleNativeChunk} 的分流计数。
+     * <p>
+     * 用途：这些包一旦旁路，就绕过 Compare+Pull **直接落地** → 表现为「区块加载上升、缓存命中下降」，
+     * 且 {@code cacheMiss}/{@code cacheStale} 保持 0（因为它们压根没进比较）。2026-09-20 实测：
+     * 1.21.1 R2 有 408 柱未命中缓存，而 cacheMiss/cacheStale 全 0 ⇒ 必须用这组计数确认旁路占比。
+     */
+    private static final java.util.concurrent.atomic.AtomicLong nativeBypassPendingPull =
+            new java.util.concurrent.atomic.AtomicLong();
+    private static final java.util.concurrent.atomic.AtomicLong nativeBypassApplyInProgress =
+            new java.util.concurrent.atomic.AtomicLong();
+    private static final java.util.concurrent.atomic.AtomicLong nativeBypassEngineOff =
+            new java.util.concurrent.atomic.AtomicLong();
+    private static final java.util.concurrent.atomic.AtomicLong nativeIntercepted =
+            new java.util.concurrent.atomic.AtomicLong();
+
+    public static long nativeBypassPendingPullCount() {
+        return nativeBypassPendingPull.get();
+    }
+
+    public static long nativeBypassApplyInProgressCount() {
+        return nativeBypassApplyInProgress.get();
+    }
+
+    public static long nativeBypassEngineOffCount() {
+        return nativeBypassEngineOff.get();
+    }
+
+    public static long nativeInterceptedCount() {
+        return nativeIntercepted.get();
+    }
+
+    /**
+     * 统一 Compare+Pull 结局分解（R2 缓存复用归因）。
+     * <p>
+     * 为什么需要：{@code cacheMiss}/{@code cacheStale} 依赖 {@code REQUEST_MODES} 回查，
+     * 而该表在 {@code MAX_TRACKED_REQUESTS} 处被整体 clear → 请求量上千时回查恒 miss
+     * → 那两个计数结构性恒 0，不能用作判据。这里在**请求侧**按入口计数（不依赖回查）。
+     */
+    private static final AtomicLong compareRequests = new AtomicLong();
+    private static final AtomicLong authoritativeRequests = new AtomicLong();
+    private static final AtomicLong responseUnchanged = new AtomicLong();
+    private static final AtomicLong responseFull = new AtomicLong();
+    private static final AtomicLong responseDelta = new AtomicLong();
+
+    public static long compareRequestCount() {
+        return compareRequests.get();
+    }
+
+    public static long authoritativeRequestCount() {
+        return authoritativeRequests.get();
+    }
+
+    public static long responseUnchangedCount() {
+        return responseUnchanged.get();
+    }
+
+    public static long responseFullCount() {
+        return responseFull.get();
+    }
+
+    public static long responseDeltaCount() {
+        return responseDelta.get();
     }
 
     /**
@@ -284,6 +365,13 @@ public final class ShadowPullClient {
         }
         Boolean comparedBaseline = REQUEST_MODES.remove(response.requestId());
         for (ShadowPullResponseS2CPacket.Result result : response.results()) {
+            switch (result.kind()) {
+                case UNCHANGED -> responseUnchanged.incrementAndGet();
+                case FULL -> responseFull.incrementAndGet();
+                case DELTA -> responseDelta.incrementAndGet();
+                default -> {
+                }
+            }
             ChunkPos pos = new ChunkPos(result.chunkX(), result.chunkZ());
             long key = io.github.limuqy.mc.hassium.utils.DimensionKey.key(response.dimension(), pos.x, pos.z);
             PendingCompare pending = PENDING_COMPARE.remove(key);
@@ -440,6 +528,15 @@ public final class ShadowPullClient {
         REQUEST_MODES.clear();
         PENDING_COMPARE.clear();
         lastFailAtMs.clear();
+        nativeBypassPendingPull.set(0);
+        nativeBypassApplyInProgress.set(0);
+        nativeBypassEngineOff.set(0);
+        nativeIntercepted.set(0);
+        compareRequests.set(0);
+        authoritativeRequests.set(0);
+        responseUnchanged.set(0);
+        responseFull.set(0);
+        responseDelta.set(0);
         io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate.clearAll();
     }
 

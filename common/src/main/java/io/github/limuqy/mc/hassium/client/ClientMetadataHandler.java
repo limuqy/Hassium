@@ -47,6 +47,7 @@ public class ClientMetadataHandler {
             return; // 未握手/创建失败（断连或降级）：静默跳过，hash 比对 miss 兜底
         }
         try {
+            io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.noteBlockUpdateForwarded();
             server.applyBlockUpdate(currentDimension(mc), packet);
         } catch (Throwable ignored) {
             // 纯转发：转发异常不得影响 vanilla 包处理（防恶意包）

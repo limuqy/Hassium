@@ -966,6 +966,7 @@ public class ShadowSeedServer extends MinecraftServer {
      * {@code RejectedExecutionException} 兜底丢弃，无残留。
      */
     public void applyBlockUpdate(String dimension, Packet<?> packet) {
+        io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.noteBlockUpdateApplied();
         if (packet == null) {
             return;
         }

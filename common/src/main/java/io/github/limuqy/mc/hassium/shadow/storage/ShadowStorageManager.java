@@ -194,6 +194,52 @@ public final class ShadowStorageManager implements AutoCloseable {
     }
 
     /**
+     * 读盘基线探活：只读压缩映像里**嵌入的 8B 内容 hash**，<b>不解压整柱</b>。
+     * <p>
+     * 用途：统一 Compare+Pull 的「有本地基线？」判据。盘上柱即使尚未注入内存，
+     * 其嵌入 hash 也足以发 compare 请求——服务端判 UNCHANGED 即本地回放，
+     * 不必全量下发。缺了这条，「权威窗柱还没物化」会退化成无基线权威 FULL。
+     * <p>
+     * 命中（{@link Kind#OK}）时顺带回填 {@link ShadowStorageHashes}，供
+     * {@code localPullEntry} 组装 hash-only compare 请求。
+     * <p>
+     * {@link Kind#ZERO} 与 {@link Kind#NO_HEADER} 必须与 {@link Kind#EMPTY_SLOT} 同样
+     * 当作「无基线」：内容 hash 由 {@code ChunkContentHashUtil.combineSectionHashes}
+     * 保证**永不为 0**，服务端 {@code ServerChunkPushManager.classifyPull} 也要求
+     * {@code entry.chunkHash() != 0}——拿 0 去 compare 是结构性必败，只会白换一次整柱 FULL。
+     *
+     * @return 结局（{@link Kind}）；仅 {@code OK} 视为可用基线
+     */
+    public Kind probeLocalHash(String readDimension, ChunkPos pos) {
+        RegionCache.Image image = imageFor(pos, false);
+        if (image == null) {
+            return Kind.NO_IMAGE;
+        }
+        int index = RegionCache.localIndex(pos.x, pos.z);
+        if (image.isEmptySlot(index)) {
+            return Kind.EMPTY_SLOT;
+        }
+        Long stored = image.probeHash(index);
+        if (stored == null) {
+            return Kind.NO_HEADER;
+        }
+        if (stored == 0L) {
+            return Kind.ZERO;
+        }
+        ShadowStorageHashes.put(readDimension, pos, stored);
+        return Kind.OK;
+    }
+
+    /** {@link #probeLocalHash} 的结局（诊断用）。 */
+    public enum Kind {
+        OK,
+        ZERO,
+        NO_HEADER,
+        EMPTY_SLOT,
+        NO_IMAGE
+    }
+
+    /**
      * 未注入柱（Compare+Pull 对齐路径）：解压该槽。管理器不保留 NBT。
      */
     public byte[] readChunk(ChunkPos pos) {

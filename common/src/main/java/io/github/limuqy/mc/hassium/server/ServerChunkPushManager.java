@@ -443,6 +443,32 @@ public class ServerChunkPushManager {
                                   long chunkHash, List<Long> sectionHashList) {
     }
 
+    /**
+     * 客户端 section hash 列表与服务端数组的**规范比较**（形状无关）。
+     * <p>
+     * 两侧形状本来就不同：客户端 `Entry.sectionHashes` 来自
+     * {@code SectionDeltaSnapshot.sectionHashes()}，是**定长**（= 柱的 section 总数，
+     * 空段填 0）；服务端 {@code sectionHashesToArray} 给的是 {@code max(非空段索引)+1}。
+     * 直接 {@code List.equals} 会因长度不同**恒假** ⇒ {@code sectionsMatch} 永不成立，
+     * compare 只剩柱级 hash 一条腿（任一 hash 口径漂移都会退化成整柱 FULL）。
+     * <p>
+     * 规范化 = 按位对齐、缺失侧视为 0（0 = 空段）。注意**两侧全 0 视为相等**（都是空柱）。
+     */
+    private static boolean sectionHashesEqual(List<Long> client, long[] server) {
+        if (client.isEmpty()) {
+            return false; // 客户端没带 section 基线：不能据此判 UNCHANGED
+        }
+        int len = Math.max(server.length, client.size());
+        for (int i = 0; i < len; i++) {
+            long c = i < client.size() ? client.get(i) : 0L;
+            long s = i < server.length ? server[i] : 0L;
+            if (c != s) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     /** 主线程：hash + 比较 + FULL 包快照 / DELTA 列快照。encode/zstd 在 pushPool。 */
     private ClassifiedPull classifyPull(ShadowPullRequestC2SPacket.Entry entry,
                                         LevelChunk chunk, ServerLevel level) {
@@ -454,7 +480,7 @@ public class ServerChunkPushManager {
             sectionHashList.add(hash);
         }
         boolean hashMatch = entry.chunkHash() != 0L && entry.chunkHash() == chunkHash;
-        boolean sectionsMatch = !entry.sectionHashes().isEmpty() && entry.sectionHashes().equals(sectionHashList);
+        boolean sectionsMatch = sectionHashesEqual(entry.sectionHashes(), sectionHashArray);
         if (hashMatch || sectionsMatch) {
             return new ClassifiedPull(true, ShadowPullResponseS2CPacket.Result.unchanged(
                     entry.chunkX(), entry.chunkZ(), chunkHash, sectionHashList),

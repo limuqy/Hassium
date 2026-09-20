@@ -219,6 +219,44 @@ public final class ShadowLightCompute {
     private static final AtomicLong probePendingAuthRegistered = new AtomicLong();
     private static final AtomicLong probePendingAuthRelight = new AtomicLong();
 
+    /**
+     * R2 缓存复用归因：{@link #accountLightAtScheduleLoad} 的调用与结局分解。
+     * <p>
+     * 用途：判定「权威窗柱在 {@code drainAuthorityAcquires} 前没被物化」是
+     * (a) {@code scheduleChunkLoad} 压根没触发、(b) 影子端未就绪、(c) 读盘失败，
+     * 还是 (d) 物化了但没进 hash 表。四者对应不同修法，必须先一刀切开。
+     */
+    private static final AtomicLong probeSchedLoadCalls = new AtomicLong();
+    private static final AtomicLong probeSchedLoadNoServer = new AtomicLong();
+    private static final AtomicLong probeSchedLoadInjected = new AtomicLong();
+    private static final AtomicLong probeSchedLoadDiskOk = new AtomicLong();
+    private static final AtomicLong probeSchedLoadDiskNull = new AtomicLong();
+    private static final AtomicLong probeSchedLoadLightOk = new AtomicLong();
+
+    /** R2 缓存复用归因：{@link #hasLocalPullBaseline} 的「盘基线」档结局分解。 */
+    private static final AtomicLong probeDiskBaselineOk = new AtomicLong();
+    private static final AtomicLong probeDiskBaselineZero = new AtomicLong();
+    private static final AtomicLong probeDiskBaselineNoHeader = new AtomicLong();
+    private static final AtomicLong probeDiskBaselineEmptySlot = new AtomicLong();
+    private static final AtomicLong probeDiskBaselineNoImage = new AtomicLong();
+
+    /**
+     * 真服方块更新 → 影子端 的转发计数（R2 缓存复用归因）。
+     * <p>
+     * 若转发为 0 而服务端 hash 又在变，说明影子端内容永远追不上真服：
+     * 缓存复用率会被「合法陈旧」吃掉，重下不是缓存逻辑的错。
+     */
+    private static final AtomicLong probeBlockUpdateForwarded = new AtomicLong();
+    private static final AtomicLong probeBlockUpdateApplied = new AtomicLong();
+
+    public static void noteBlockUpdateForwarded() {
+        probeBlockUpdateForwarded.incrementAndGet();
+    }
+
+    public static void noteBlockUpdateApplied() {
+        probeBlockUpdateApplied.incrementAndGet();
+    }
+
     /** 轮次边界清零（{@code ScenarioEngine.resetNetworkStatsForRound2}）。 */
     public static void resetLightProbeCounters() {
         probeInitPhase1.set(0);
@@ -234,6 +272,19 @@ public final class ShadowLightCompute {
         probeGatePromoted.set(0);
         probePendingAuthRegistered.set(0);
         probePendingAuthRelight.set(0);
+        probeSchedLoadCalls.set(0);
+        probeSchedLoadNoServer.set(0);
+        probeSchedLoadInjected.set(0);
+        probeSchedLoadDiskOk.set(0);
+        probeSchedLoadDiskNull.set(0);
+        probeSchedLoadLightOk.set(0);
+        probeDiskBaselineOk.set(0);
+        probeDiskBaselineZero.set(0);
+        probeDiskBaselineNoHeader.set(0);
+        probeDiskBaselineEmptySlot.set(0);
+        probeDiskBaselineNoImage.set(0);
+        probeBlockUpdateForwarded.set(0);
+        probeBlockUpdateApplied.set(0);
     }
 
     /** 追加顶层 {@code "lightProbe": {...},} 块（冒烟 JSON 顶层键只增不改名）。 */
@@ -255,7 +306,20 @@ public final class ShadowLightCompute {
         probeField(sb, "gateTryPromoteCalls", probeGateTryPromoteCalls.get());
         probeField(sb, "gatePromoted", probeGatePromoted.get());
         probeField(sb, "pendingAuthRegistered", probePendingAuthRegistered.get());
-        probeLastField(sb, "pendingAuthRelight", probePendingAuthRelight.get());
+        probeField(sb, "pendingAuthRelight", probePendingAuthRelight.get());
+        probeField(sb, "schedLoadCalls", probeSchedLoadCalls.get());
+        probeField(sb, "schedLoadNoServer", probeSchedLoadNoServer.get());
+        probeField(sb, "schedLoadInjected", probeSchedLoadInjected.get());
+        probeField(sb, "schedLoadDiskOk", probeSchedLoadDiskOk.get());
+        probeField(sb, "schedLoadDiskNull", probeSchedLoadDiskNull.get());
+        probeField(sb, "schedLoadLightOk", probeSchedLoadLightOk.get());
+        probeField(sb, "diskBaselineOk", probeDiskBaselineOk.get());
+        probeField(sb, "diskBaselineZero", probeDiskBaselineZero.get());
+        probeField(sb, "diskBaselineNoHeader", probeDiskBaselineNoHeader.get());
+        probeField(sb, "diskBaselineEmptySlot", probeDiskBaselineEmptySlot.get());
+        probeField(sb, "diskBaselineNoImage", probeDiskBaselineNoImage.get());
+        probeField(sb, "blockUpdateForwarded", probeBlockUpdateForwarded.get());
+        probeLastField(sb, "blockUpdateApplied", probeBlockUpdateApplied.get());
         sb.append("  },\n");
     }
 
@@ -1383,7 +1447,19 @@ public final class ShadowLightCompute {
                         pos.x, pos.z, hashForEntry, List.of(), 0));
     }
 
-    /** 已登记 hash 或驻留影子柱均可作为统一比较拉取的本地基线。 */
+    /**
+     * 已登记 hash、驻留影子柱、或**盘上嵌入 hash** 均可作为统一比较拉取的本地基线。
+     * <p>
+     * 【盘基线（2026-09-20）】第三档是必须的：权威窗 acquire 与物化是两条独立时序，
+     * R2 里 `drainAuthorityAcquires` 可能先于任何物化路径跑（`scheduleChunkLoad` 实测
+     * 每轮只触发 76~88 次，根本盖不住 549 柱的域）。缺了这一档，盘上明明有柱也会被判
+     * 「无基线」→ {@code requestAuthoritativeFull}（空基线，服务端必答 FULL，无 compare）
+     * → 整柱全量下发。1.21.1 R2 因此多下 410 柱（1.20.1 同盘只下 10）。
+     * <p>
+     * 成本：只读压缩映像里嵌入的 8B hash，**不解压整柱**（见
+     * {@code ShadowStorageManager.localHashIfPresent}）；映像按 region 常驻，稳态是一次
+     * map 查表 + 空槽判断。
+     */
     public static boolean hasLocalPullBaseline(String dimension, ChunkPos pos) {
         if (dimension == null || pos == null) {
             return false;
@@ -1392,7 +1468,28 @@ public final class ShadowLightCompute {
             return true;
         }
         ShadowSeedServer shadow = ShadowServerRegistry.getInstance().get();
-        return shadow != null && shadow.injectedChunk(dimension, pos.x, pos.z) != null;
+        if (shadow == null) {
+            return false;
+        }
+        if (shadow.injectedChunk(dimension, pos.x, pos.z) != null) {
+            return true;
+        }
+        io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager storage = shadow.storage(dimension);
+        if (storage == null) {
+            probeDiskBaselineNoImage.incrementAndGet();
+            return false;
+        }
+        switch (storage.probeLocalHash(dimension, pos)) {
+            case OK -> {
+                probeDiskBaselineOk.incrementAndGet();
+                return true;
+            }
+            case ZERO -> probeDiskBaselineZero.incrementAndGet();
+            case NO_HEADER -> probeDiskBaselineNoHeader.incrementAndGet();
+            case EMPTY_SLOT -> probeDiskBaselineEmptySlot.incrementAndGet();
+            case NO_IMAGE -> probeDiskBaselineNoImage.incrementAndGet();
+        }
+        return false;
     }
 
     /**
@@ -1631,8 +1728,10 @@ public final class ShadowLightCompute {
         if (pos == null) {
             return;
         }
+        probeSchedLoadCalls.incrementAndGet();
         ShadowSeedServer server = ShadowServerRegistry.getInstance().get();
         if (server == null) {
+            probeSchedLoadNoServer.incrementAndGet();
             return;
         }
         String dim = dimension == null ? currentDimension() : dimension;
@@ -1640,12 +1739,20 @@ public final class ShadowLightCompute {
             return;
         }
         LevelChunk chunk = server.injectedChunk(dim, pos.x, pos.z);
-        if (chunk == null) {
+        if (chunk != null) {
+            probeSchedLoadInjected.incrementAndGet();
+        } else {
             LevelChunk disk = server.loadFromDisk(dim, pos);
             if (disk != null) {
                 server.injectLoadedChunk(dim, pos, disk, false);
                 chunk = disk;
+                probeSchedLoadDiskOk.incrementAndGet();
+            } else {
+                probeSchedLoadDiskNull.incrementAndGet();
             }
+        }
+        if (chunk != null && chunk.isLightCorrect()) {
+            probeSchedLoadLightOk.incrementAndGet();
         }
         accountLightFromChunk(dim, pos, chunk);
     }
