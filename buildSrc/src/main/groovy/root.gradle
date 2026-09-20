@@ -1,3 +1,5 @@
+import hassium.publish.PublishState
+
 plugins {
     id 'common'
 }
@@ -58,29 +60,40 @@ tasks.register('scanVersionBoundaries') {
 // 当前 mc_ver 下已 include 的加载器 → 一并上传 CurseForge
 tasks.register('publishCurseForge') {
     group = 'publishing'
-    description = 'Upload current mc_ver loader JARs to CurseForge (see scripts/publish-curseforge.ps1 for all versions)'
+    description = 'Upload current mc_ver loader JARs to CurseForge (see scripts/publish-mods.ps1 for all versions)'
 }
+
+// 当前 mc_ver 下已 include 的加载器 → 一并上传 Modrinth
+tasks.register('publishModrinth') {
+    group = 'publishing'
+    description = 'Upload current mc_ver loader JARs to Modrinth (see scripts/publish-mods.ps1 for all versions)'
+}
+
 afterEvaluate {
-    def publishTasks = []
-    ['fabric', 'forge', 'neoforge'].each { name ->
-        def p = findProject(":${name}")
-        if (p != null) {
-            publishTasks << "${name}:publishCurseForge"
-        }
-    }
+    def includedLoaders = ['fabric', 'forge', 'neoforge'].findAll { findProject(":${it}") != null }
     tasks.named('publishCurseForge').configure {
-        dependsOn publishTasks
+        dependsOn includedLoaders.collect { "${it}:publishCurseForge" }
+    }
+    tasks.named('publishModrinth').configure {
+        dependsOn includedLoaders.collect { "${it}:modrinth" }
     }
 }
 
-tasks.register('publishCurseForgeAll') {
+// 当前 mc_ver 构建一次，两个平台各自上传（避免 build 跑两遍）
+tasks.register('publishAll') {
     group = 'publishing'
-    description = 'Build & publish all versionProperties × builds_for to CurseForge (invokes scripts/publish-curseforge.*)'
+    description = 'Build current mc_ver once and publish to both CurseForge and Modrinth'
+    dependsOn 'publishCurseForge', 'publishModrinth'
+}
+
+tasks.register('publishAllVersions') {
+    group = 'publishing'
+    description = 'Build & publish all versionProperties × builds_for to CurseForge + Modrinth (invokes scripts/publish-mods.*)'
     doLast {
         def isWindows = System.getProperty('os.name').toLowerCase().contains('windows')
         def script = isWindows
-                ? file('scripts/publish-curseforge.ps1')
-                : file('scripts/publish-curseforge.sh')
+                ? file('scripts/publish-mods.ps1')
+                : file('scripts/publish-mods.sh')
         if (!script.exists()) {
             throw new GradleException("Missing ${script}")
         }
@@ -91,7 +104,41 @@ tasks.register('publishCurseForgeAll') {
         pb.inheritIO()
         def code = pb.start().waitFor()
         if (code != 0) {
-            throw new GradleException("publishCurseForgeAll failed with exit code ${code}")
+            throw new GradleException("publishAllVersions failed with exit code ${code}")
+        }
+    }
+}
+
+/**
+ * 打印当前 mc_ver 各 loader 在两个平台上的发布状态，供 scripts/publish-mods.* 做幂等预检：
+ *   PUBLISH_STATE <mc_ver> <loader> cf=yes|no|no-token|unknown(...) mr=... jar=<产物名> mrver=<版本号>
+ * 只读 GET，不触发任何构建。
+ *
+ * 产物名直接取自各 loader 子项目 remapJar 的 archiveFile（与上传用的是同一个真值来源），
+ * 因此自动跟随 settings.gradle 的按版本 buildDirectory（<loader>/build/<mc_ver>/libs/...），
+ * 不会因为这里另写一套命名公式而与实际产物漂移。
+ */
+tasks.register('publishState') {
+    group = 'publishing'
+    description = 'Print per-loader publish state on CurseForge + Modrinth (PUBLISH_STATE lines)'
+    doLast {
+        def mcVer = gradle.ext.minecraft_version as String
+        def loaders = ((String) gradle.ext.builds_for).split(',').collect { it.trim() }.findAll { it }
+        def cfProject = (findProperty('curseforge_project_id') ?: '').toString().trim()
+        def mrProject = (findProperty('modrinth_project_id') ?: '').toString().trim()
+        def cfToken = (System.getenv('CURSEFORGE_TOKEN') ?: (findProperty('curseforge_token') ?: '')).toString()
+        def mrToken = (System.getenv('MODRINTH_TOKEN') ?: (findProperty('modrinth_token') ?: '')).toString()
+        loaders.each { loader ->
+            def loaderProject = findProject(":${loader}")
+            if (loaderProject == null) {
+                println "PUBLISH_STATE ${mcVer} ${loader} cf=unknown(no-project) mr=unknown(no-project) jar=? mrver=?"
+                return
+            }
+            def jarName = loaderProject.tasks.named('remapJar').get().archiveFile.get().asFile.name
+            def mrVersionNumber = "${mod_version}+${mcVer}-${loader}"
+            def cfState = PublishState.curseforgeFileState(cfToken, cfProject, jarName)
+            def mrState = PublishState.modrinthVersionState(mrToken, mrProject, mrVersionNumber)
+            println "PUBLISH_STATE ${mcVer} ${loader} cf=${cfState} mr=${mrState} jar=${jarName} mrver=${mrVersionNumber}"
         }
     }
 }

@@ -1,0 +1,123 @@
+# 一条流水线跑完所有版本，同时发布到 CurseForge + Modrinth。
+#
+# 为什么不拆矩阵：原 publish-curseforge.yml 用 12 个 matrix job（max-parallel 3），
+# 每个 job 都要重新 checkout + 装 JDK + 恢复 Gradle 缓存 + 冷构建；GitHub 共享 runner
+# 排队时 12 个 job 的墙钟时间会被放大。改成单 job 串行：
+#   - 只付一次 setup / 缓存恢复 / buildSrc 编译
+#   - Gradle 依赖缓存与 loom 的 MC 重映射缓存全程复用，第 N 个版本明显快于冷启动
+#   - 排队只占 1 个 runner 名额
+# 代价是单点失败与 6h job 上限；脚本内部对每个版本记录失败并继续，最后统一退出码。
+# 若单 job 超时，用 versions 输入分两次手动跑（如 1.20.1,1.21.1,1.21.2,1.21.3,1.21.4,1.21.5）。
+#
+# 幂等：scripts/publish-mods.sh 会先查两个平台是否已有对应产物，已存在则不构建、不上传。
+#
+# 手动触发，绝不挂在 push/tag 上——发布是对外动作。
+#
+# 用法：仓库 Actions → Publish (CurseForge + Modrinth) → Run workflow →
+#   - versions：逗号分隔，如 1.20.1,1.21.1；留空=全 12 个
+#   - release_type：release / beta / alpha（默认 release）
+#   - dry_run：勾上则只 DryRun（-Pcurseforge_debug/-Pmodrinth_debug，只打印不真传）
+#   - force：勾上则忽略「已存在」检查（Modrinth 会因版本号重复而失败，谨慎）
+#
+# 一次性仓库配置：
+#   Settings → Secrets → Actions → New secret：
+#     CURSEFORGE_TOKEN   （https://www.curseforge.com/account/api-tokens）
+#     MODRINTH_TOKEN     （https://modrinth.com/settings/personal-access-tokens，scope 需含创建版本）
+name: Publish (CurseForge + Modrinth)
+
+on:
+  workflow_dispatch:
+    inputs:
+      versions:
+        description: '逗号分隔的 MC 版本，如 1.20.1,1.21.1；留空=全 12 个'
+        required: false
+        default: ''
+      release_type:
+        description: 'release / beta / alpha'
+        required: false
+        default: 'release'
+      dry_run:
+        description: '只 DryRun（不真传，验证链路用）'
+        required: false
+        type: boolean
+        default: false
+      force:
+        description: '忽略「已存在」检查（Modrinth 会因版本号重复失败，谨慎）'
+        required: false
+        type: boolean
+        default: false
+
+# 显式最小权限：只需读仓库（checkout）+ 用 secret 上传到外部平台。
+permissions:
+  contents: read
+
+# 同一时间只允许一条发布流水线；并发跑只会重复上传。
+concurrency:
+  group: publish-mods
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    # 6h 是 GitHub 的硬上限；提前 10min 失败，避免整条 job 被硬杀而看不到日志。
+    timeout-minutes: 350
+    env:
+      CURSEFORGE_TOKEN: ${{ secrets.CURSEFORGE_TOKEN }}
+      MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Ensure gradlew is executable
+        # checkout 不保证 gradlew 的可执行位（Windows 上提交时丢了），Linux CI 必须显式补上。
+        shell: bash
+        run: chmod +x gradlew
+
+      - name: Point wrapper distributionUrl at official source (海外 CI 不走阿里云镜像)
+        shell: bash
+        run: |
+          # 阿里云路径是 /gradle/distributions/v8.14.5/gradle-8.14.5-bin.zip（带 v 版本子目录）。
+          # 官方源目录结构不同：/distributions/gradle-8.14.5-bin.zip 直接在根下，没有 v<ver>/ 子目录。
+          # 故 sed 须把整段「/gradle/distributions/v8.14.5/」换成「/distributions/」，只换 host 会 404。
+          # 须在 setup-gradle 之前改，否则它会按阿里云源拉 Gradle。工作区临时改动，不污染 git。
+          sed -i 's#mirrors\.aliyun\.com/gradle/distributions/v[0-9.]*#services.gradle.org/distributions#' \
+            gradle/wrapper/gradle-wrapper.properties
+          grep '^distributionUrl' gradle/wrapper/gradle-wrapper.properties
+
+      - name: Set up JDK 21
+        # 全部版本统一 JDK 21：buildSrc 加载 architectury-loom 需 JVM 21（其依赖 unpick 要求 >= 21），
+        # 与源码 release 级别无关——1.20.1 的 java_version=17 由 options.release=17 在 JDK 21 内完成。
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          cache-disabled: false
+
+      - name: Publish all versions (CurseForge + Modrinth)
+        env:
+          VERSIONS: ${{ github.event.inputs.versions }}
+          REL_TYPE: ${{ github.event.inputs.release_type }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+          FORCE: ${{ github.event.inputs.force }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=()
+          if [[ -n "$VERSIONS" && "$VERSIONS" != "null" ]]; then
+            args+=(--versions "$VERSIONS")
+          fi
+          if [[ -n "$REL_TYPE" && "$REL_TYPE" != "null" ]]; then
+            args+=(--release-type "$REL_TYPE")
+          fi
+          if [[ "$DRY_RUN" == "true" ]]; then args+=(--dry-run); fi
+          if [[ "$FORCE" == "true" ]]; then args+=(--force); fi
+          echo "publish-mods.sh ${args[*]-}"
+          bash scripts/publish-mods.sh "${args[@]+"${args[@]}"}"
+
+      - name: DryRun-only notice
+        if: ${{ github.event.inputs.dry_run == 'true' }}
+        run: echo "::notice::dry_run=true，已跳过真传。验证链路通过后，重跑时取消勾选 dry_run 即真传。"

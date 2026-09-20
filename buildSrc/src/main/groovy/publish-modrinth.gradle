@@ -1,0 +1,100 @@
+import hassium.publish.PublishState
+
+/**
+ * 为 fabric / forge / neoforge 子项目注册 modrinth（Minotaur 任务）。
+ * Token：环境变量 MODRINTH_TOKEN（Minotaur 默认读取），或本机 gradle 属性 modrinth_token（勿提交）。
+ * 项目 ID：根 gradle.properties 的 modrinth_project_id。
+ *
+ * 与 publish-curseforge.gradle 的三处结构性差异：
+ *  1) Modrinth 要求同一 project 内 version_number 唯一（CF 允许同名文件并存）→ 必须带 loader 后缀；
+ *  2) Architectury Loom 不是 Fabric Loom / ForgeGradle，Minotaur 的 loader / gameVersion
+ *     自动探测不可用 → detectLoaders=false + 显式声明（等价于 CF 侧的 disableVersionDetection）；
+ *  3) loader 用 slug 小写（fabric / forge / neoforge）。
+ *
+ * 幂等：上传前查一次「该 version_number 是否已存在」，已存在则 StopExecutionException 跳过。
+ * 关掉：-Ppublish_skip_existing=false
+ */
+plugins {
+    id 'com.modrinth.minotaur'
+}
+
+def mrLoaderByProject = [
+        fabric  : 'fabric',
+        forge   : 'forge',
+        neoforge: 'neoforge'
+]
+def mrLoader = mrLoaderByProject[project.name]
+if (!mrLoader) {
+    throw new GradleException("publish-modrinth 仅适用于 fabric/forge/neoforge，当前: ${project.name}")
+}
+
+afterEvaluate {
+    def mcVer = gradle.ext.minecraft_version as String
+    def projectIdValue = (findProperty('modrinth_project_id') ?: '').toString().trim()
+    def releaseTypeValue = (findProperty('modrinth_release_type') ?: 'release').toString().trim()
+    def debugModeValue = (findProperty('modrinth_debug') ?: 'false').toString().equalsIgnoreCase('true')
+    def skipExisting = findProperty('publish_skip_existing')?.toString() != 'false'
+    def tokenValue = System.getenv('MODRINTH_TOKEN') ?: (findProperty('modrinth_token') ?: '').toString()
+
+    // 同 MC 版本的 fabric / forge 若都用默认 version（"${mod_version}-${build_version_suffix}"）会撞车
+    def mrVersionNumber = "${mod_version}+${mcVer}-${project.name}"
+    // 1.20.1：forge 产物 = Forge 二进制，NeoForge 47.x 原生加载 Forge mod → 同文件双标
+    def mrLoaders = (project.name == 'forge' && mcVer == '1.20.1') ? ['forge', 'neoforge'] : [mrLoader]
+
+    def changelogText = findProperty('modrinth_changelog')?.toString()
+    if (!changelogText) {
+        def changelogFile = rootProject.file('CHANGELOG.md')
+        changelogText = changelogFile.exists()
+                ? changelogFile.getText('UTF-8')
+                : "Hassium ${mod_version} for Minecraft ${mcVer} (${project.name})."
+    }
+
+    modrinth {
+        projectId = projectIdValue
+        versionType = releaseTypeValue
+        debugMode = debugModeValue
+
+        versionNumber = mrVersionNumber
+        versionName = "Hassium ${mod_version} — ${mcVer} ${project.name}"
+        changelog = changelogText
+
+        // Loom 项目必须传 remapJar，不是 jar
+        uploadFile = tasks.named('remapJar')
+
+        detectLoaders = false
+        gameVersions = [mcVer]
+        loaders = mrLoaders
+
+        dependencies {
+            if (project.name == 'fabric') {
+                required.project 'fabric-api'
+            }
+            optional.project 'modmenu'
+            optional.project 'cloth-config'
+        }
+    }
+
+    // 守卫放在任务上而不是 modrinth{} 里：modrinth{} 的 delegate 是扩展，doFirst 归属不明确。
+    tasks.named('modrinth').configure { t ->
+        t.doFirst {
+            if (!projectIdValue) {
+                throw new GradleException(
+                        "未设置 modrinth_project_id。请在根 gradle.properties 填写 Modrinth 项目 ID 或 slug。")
+            }
+            if (!tokenValue && !debugModeValue) {
+                throw new GradleException(
+                        "未设置 Modrinth Token。请设置环境变量 MODRINTH_TOKEN，或在本机 ~/.gradle/gradle.properties 写 modrinth_token=...（勿提交仓库）。")
+            }
+            if (skipExisting && !debugModeValue) {
+                def state = PublishState.modrinthVersionState(tokenValue, projectIdValue, mrVersionNumber)
+                if (state == PublishState.YES) {
+                    throw new StopExecutionException(
+                            "Modrinth 已存在 ${mrVersionNumber}（${mcVer} ${project.name}），跳过上传")
+                }
+                if (state != PublishState.NO) {
+                    logger.warn("Modrinth 幂等检查未得出结论（${mrVersionNumber}: ${state}），照常上传")
+                }
+            }
+        }
+    }
+}

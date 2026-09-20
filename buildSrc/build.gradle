@@ -22,4 +22,8 @@ dependencies {
     implementation "xyz.wagyourtail:manifold-gradle:1.0.0-SNAPSHOT"
     // 本地 / CI 推送 CurseForge（1.2+ 需 JVM 25；本仓库构建用 21 → 钉 1.1.28）
     implementation "net.darkhax.curseforgegradle:CurseForgeGradle:1.1.28"
+    // 本地 / CI 推送 Modrinth。注意 artifactId 是大写 Minotaur；
+    // 插件门户 marker com.modrinth.minotaur:com.modrinth.minotaur.gradle.plugin 指向它。
+    // jvm.version=8，本仓库构建用 21 可用。
+    implementation "com.modrinth.minotaur:Minotaur:2.10.0"
 }

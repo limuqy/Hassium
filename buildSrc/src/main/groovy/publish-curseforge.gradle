@@ -1,3 +1,4 @@
+import hassium.publish.PublishState
 import net.darkhax.curseforgegradle.TaskPublishCurseForge
 
 /**
@@ -8,6 +9,9 @@ import net.darkhax.curseforgegradle.TaskPublishCurseForge
  * 各版本严格按 builds_for 各自 loader 单标上传。1.20.1 不构建 neoforge（NeoForge 47.x
  * 原生兼容 Forge mod，NeoForge 用户直接使用 forge 子项目的 Forge 文件）；
  * 因此 1.20.1 的 forge 产物上传时双标 Forge + NeoForge，保证 CF 按 NeoForge 筛也能命中。
+ *
+ * 幂等：上传前查一次「该项目下是否已有同名 jar」，已有则 StopExecutionException 跳过。
+ * 关掉：-Ppublish_skip_existing=false
  */
 
 def cfLoaderByProject = [
@@ -43,6 +47,9 @@ afterEvaluate {
         if (!releaseTypeProp) {
             releaseTypeProp = 'release'
         }
+
+        // 幂等开关（默认开）：上传前查项目下是否已有同名 jar
+        def skipExisting = findProperty('publish_skip_existing')?.toString() != 'false'
 
         def changelogText = findProperty('curseforge_changelog')?.toString()
         if (!changelogText) {
@@ -85,6 +92,19 @@ afterEvaluate {
             if (!apiToken) {
                 throw new GradleException(
                         "未设置 CurseForge Token。请设置环境变量 CURSEFORGE_TOKEN，或在本机 ~/.gradle/gradle.properties 写 curseforge_token=...（勿提交仓库）。")
+            }
+            // 幂等：同名 jar 已在该项目下 → 跳过（否则会重复上传同一文件）。
+            // 只有明确 yes 才跳过；查询失败（本机常被 Cloudflare 403）照常上传并告警。
+            if (skipExisting && !debugMode) {
+                def jarName = tasks.named('remapJar').get().archiveFile.get().asFile.name
+                def state = PublishState.curseforgeFileState(apiToken, projectId, jarName)
+                if (state == PublishState.YES) {
+                    throw new StopExecutionException(
+                            "CurseForge 已存在 ${jarName}（${mcVer} ${cfLoader}），跳过上传")
+                }
+                if (state != PublishState.NO) {
+                    logger.warn("CurseForge 幂等检查未得出结论（${jarName}: ${state}），照常上传")
+                }
             }
         }
     }
