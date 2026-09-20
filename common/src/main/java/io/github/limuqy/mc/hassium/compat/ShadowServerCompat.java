@@ -35,7 +35,7 @@ import net.minecraft.world.level.chunk.status.ChunkStatus;
 #if MC_VER >= MC_1_21_1
 import net.minecraft.ReportType;
 #endif
-#if MC_VER >= MC_1_21_1 && MC_VER < MC_1_21_2
+#if MC_VER >= MC_1_21_1
 import net.minecraft.world.level.chunk.storage.RegionStorageInfo;
 #endif
 #if MC_VER < MC_1_21_2
@@ -187,7 +187,8 @@ public final class ShadowServerCompat {
      * 从 NBT 解析 {@link ChunkAccess}。
      * {@code < 1.21.1}：{@code ChunkSerializer.read(level, poi, pos, tag)}；
      * {@code 1.21.1}：增加 {@code RegionStorageInfo}；
-     * {@code ≥ 1.21.2}：尚未接线（调用方回落 vanilla {@code scheduleChunkLoad}）。
+     * {@code ≥ 1.21.2}：{@code ChunkSerializer} 退役，官方读链
+     * {@code SerializableChunkData.parse(...).read(...)}（ChunkMap.scheduleChunkLoad 同构）。
      */
     public static ChunkAccess parseChunkNbt(
             ServerLevel level, String levelId, ChunkPos pos, CompoundTag tag) {
@@ -200,11 +201,25 @@ public final class ShadowServerCompat {
 #elif MC_VER < MC_1_21_2
         return ChunkSerializer.read(
                 level, level.getPoiManager(),
-                new RegionStorageInfo(levelId, level.dimension(), "chunk"),
-                pos, tag);
+                new RegionStorageInfo(levelId, level.dimension(), "chunk"), pos, tag);
 #else
-        Constants.LOG.debug("Hassium: parseNbtBytes 1.21.2+ not wired; falling back to vanilla load");
-        return null;
+        // 官方读链两步：parse(NBT→record) → read(record→ChunkAccess；FULL 柱 =
+        // ImposterProtoChunk 包 LevelChunk，与 <1.21.2 ChunkSerializer.read 同语义，
+        // ShadowSeedServer.toLevelChunk 两条分支都吃得下）。
+        // 1.21.9 起 parse 的 RegistryAccess 参换成 PalettedContainerFactory（H 段锚点；
+        // 官方调用 ChunkMap 用 level.palettedContainerFactory()）。
+        // 2026-09-20 修复：此前此分支是「not wired」stub 恒 return null，客户端影子
+        // 缓存读盘（ShadowSeedServer.parseNbtBytes → loadFromDisk）随之全 null
+        // （1.21.3 classic R2 实测 schedLoadDiskNull=10074、diskBaselineOk=0）→
+        // 本地缓存基线/回放全废 → R2 整柱重拉（fullReq=549、cacheRate 6.2%）。
+#if MC_VER < MC_1_21_9
+        SerializableChunkData data = SerializableChunkData.parse(level, level.registryAccess(), tag);
+#else
+        SerializableChunkData data = SerializableChunkData.parse(level, level.palettedContainerFactory(), tag);
+#endif
+        return data == null ? null
+                : data.read(level, level.getPoiManager(),
+                        new RegionStorageInfo(levelId, level.dimension(), "chunk"), pos);
 #endif
     }
 
