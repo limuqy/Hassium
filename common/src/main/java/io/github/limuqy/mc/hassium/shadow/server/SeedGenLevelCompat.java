@@ -682,13 +682,24 @@ public final class SeedGenLevelCompat {
         // 会 shutdown 构造时传入的 executor。隔离前那是进程级 Util.backgroundExecutor()
         // （R2 重建后 light mailbox 全拒）；隔离后是影子 FJP，仍由
         // {@link ShadowWorldgenExecutor#shutdown} 在 halt 之后单独关，不走 chunkSource.close。
+        //
+        // 2026-09-20 修正：此处曾对 1.21.2+ 走 `level.close()`，与上面这条意图相反，且会**自旋不返回**——
+        // `ServerLevel.close()` → `ServerChunkCache.close()` → `save(true)` → `ChunkMap.saveAllChunks(true)`
+        // → `mainThreadExecutor.managedBlock(holder::isReadyForSaving)`，而 `managedBlock` 在非服务端线程上
+        // 靠 `BlockableEventLoop.waitForTasks()`（parkNanos 100µs 轮询）等柱状态推进；本方法在步骤 4 已
+        // `stopMainLoop()` + `halt(false)`，**没有线程再推进那些柱** ⇒ 永久自旋。
+        // 实证（1.21.2 fabric classic 断连现场 jcmd Thread.print，hang2_hang1.txt）：
+        //   hassium-shadow-shutdown → ChunkMap.saveAllChunks(:436) → ServerChunkCache.close(:309)
+        //   → Level.close(:662) → ServerLevel.close(:1676) → SeedGenLevelCompat.shutdown(:690)
+        // 后果：`ShadowServerRegistry.shutdown()` 的 future 永不完成 → 客户端主线程在
+        // `awaitShutdownComplete(10s)` 上卡满两轮共 20s → R2 重连错过 20s 入服窗口 → 强制拆除重连
+        // → 握手态被迟到清理清掉 / 上一次关停 future 悬空 → R2 内容门禁 FAIL + 客户端 native 0xC0000409。
+        // 各版本统一只关 region 文件层（= 1.20.1/1.21.1 的既有且已验证路径）；ServerChunkCache /
+        // light engine 由 `halt(false)` → `stopServer()` 在服务端线程上自行排空关闭（服务端线程上
+        // `managedBlock` 走 `pollTask()` 自排空，不会自旋）。
         for (ServerLevel level : server.getAllLevels()) {
             try {
-#if MC_VER < MC_1_21_2
                 ((net.minecraft.server.level.ServerChunkCache) level.getChunkSource()).chunkMap.close();
-#else
-                level.close();
-#endif
             } catch (Exception e) {
                 Constants.LOG.warn("Hassium: Shadow level close failed for {}", level.dimension(), e);
             }

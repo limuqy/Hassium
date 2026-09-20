@@ -902,6 +902,20 @@ public final class ScenarioEngine {
         scheduleExit(exitCode, Long.MIN_VALUE);
     }
 
+    /**
+     * 优雅退出宽限：把 {@code Minecraft.stop()} 投到主线程后等这么久，仍未退出才强退。
+     * <p>
+     * 原值 2s 会与**进行中的**拆除并发：断连路径上 `ClientLifecycleHelper.finalizeDisconnect()`
+     * （`awaitShutdownComplete(10s)` + `HassiumTaskExecutor.shutdownClient(5s)`）占着主线程时，
+     * 排队的 `stop()` 还没轮到执行，2s 后 `System.exit(0)` 就在半拆状态下落下 → JVM 以 native
+     * `0xC0000409` 收场（无 hs_err / 无 crash-report）。
+     * 实证（2026-09-20，1.21.1 fabric classic ×7）：走强退的场次全部 `native=0xC0000409` 且日志
+     * **没有** `Stopping!`；走完优雅退出的场次全部 `native` 为空且有 `Stopping!`——7/7 一致。
+     * 加大宽限只影响「本来就走不完优雅退出」的场次：正常场次在 sleep 期间就自行退出，不会走到强退。
+     */
+    private static final long GRACEFUL_STOP_GRACE_MS = 10_000L;
+
+
     private static void scheduleExit(int exitCode, long saveSeqBeforeDisconnect) {
         Thread shutdown = new Thread(() -> {
             try {
@@ -932,7 +946,7 @@ public final class ScenarioEngine {
                         forceExit(exitCode);
                     }
                 });
-                Thread.sleep(2_000L);
+                Thread.sleep(GRACEFUL_STOP_GRACE_MS);
                 LOGGER.warn("HassiumSmokeTest: force System.exit({}) after stop()", exitCode);
                 forceExit(exitCode);
             } catch (Throwable t) {
