@@ -33,10 +33,38 @@ class ShadowStorageManagerTest {
     private ShadowStorageManager manager;
     private final Set<Long> injected = ConcurrentHashMap.newKeySet();
     private final AtomicInteger serializeCalls = new AtomicInteger();
-    private byte[] nbtPayload = new byte[]{1, 2, 3, 4, 5, 6, 7, 8, 9, 10};
+    private byte[] nbtPayload = contentfulNbt();
+
+    /**
+     * 真实列 NBT 字节：{@code {Status: "minecraft:full"}}。
+     * <p>
+     * 不能再用任意字节当桩：T1 不变量要求「只有方块状态已定型的列才携带内容 hash」，
+     * 而 {@code Status} 只能从真实 NBT 里读出来——拿假字节喂进去会（正确地）被判成无内容，
+     * 于是这些用例测的就不再是 hash 落盘管线，而成了恒假的断言。
+     */
+    private static byte[] contentfulNbt() {
+        String status = "minecraft:full";
+        byte[] name = status.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+        out.write(0x0A); // TAG_Compound
+        out.write(0x00);
+        out.write(0x00); // 根名长度 0
+        out.write(0x08); // TAG_String
+        out.write(0x00);
+        out.write(0x06); // 键名 "Status"
+        out.writeBytes("Status".getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        out.write((name.length >>> 8) & 0xFF);
+        out.write(name.length & 0xFF);
+        out.writeBytes(name);
+        out.write(0x00); // TAG_End
+        return out.toByteArray();
+    }
 
     @BeforeAll
     static void initCompression() {
+        // Status 判定要经 ChunkStatus.byName → BuiltInRegistries（见 ChunkShapeDilationTest）。
+        net.minecraft.SharedConstants.setVersion(net.minecraft.DetectedVersion.BUILT_IN);
+        net.minecraft.server.Bootstrap.bootStrap();
         HassiumCompression.reset();
         HassiumCompression.initialize();
     }

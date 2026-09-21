@@ -338,7 +338,13 @@ public final class ShadowStorageManager implements AutoCloseable {
         // 超槽位载荷（>1MiB 压缩柱）照收：本会话仍由映像服务，落盘时
         // {@link RegionCache.Image#save} 整槽跳过而不覆写邻槽（该柱退化为下次会话 cache miss）。
         // 不在此拒绝——拒绝只能回落原版写盘，反而把双写者撕裂放回来。
+        // T1 不变量（也在此收口，防漏网）：hash == null 的列不得携带 0x48 头。
+        // 上游若已按 Status 判定为半成品并传 null，这里剥掉可能残留的头，落盘为旧 126 无 hash 形态。
         byte[] payload = normalizeEmbeddedHash(payloadAfterType, hash);
+        if (hash == null && HassiumType126Codec.probeHash(payload) != null) {
+            payload = java.util.Arrays.copyOfRange(
+                    payload, 1 + HassiumType126Codec.HASH_LENGTH, payload.length);
+        }
         long regionKey = RegionCache.regionKey(pos.x, pos.z);
         RegionCache.Image image = imageFor(pos, true);
         image.writePayload(RegionCache.localIndex(pos.x, pos.z), payload, hash);
@@ -923,6 +929,8 @@ public final class ShadowStorageManager implements AutoCloseable {
                 if (hash == null) {
                     hash = ShadowStorageHashes.get(dimension, write.pos);
                 }
+                // T1 不变量：半成品列（Status < FEATURES）不得携带内容 hash。
+                hash = ShadowColumnContent.effectiveHash(nbt, hash);
                 byte[] sector = HassiumType126Codec.encodeSector(nbt, hash, zstdLevel);
                 byte[] payload = HassiumType126Codec.payloadAfterType(sector);
                 // review-fix: image 仅同 region 复用。encodeDirtyOnThisThread 的批次来自脏表、

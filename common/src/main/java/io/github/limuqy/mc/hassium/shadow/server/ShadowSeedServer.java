@@ -1791,6 +1791,14 @@ public class ShadowSeedServer extends MinecraftServer {
             if (tag == null) {
                 return null;
             }
+            // T2 读盘守卫：Status < FEATURES 的半成品列（structure_starts / biomes / carvers…）
+            // 不得注入为「内容柱」——它的方块层还是空的，当基线柱会走成 compare 空基线 → 整柱 FULL。
+            // 列本体仍在盘上，原版续跑读路径（MixinRegionFile.tryReadHassiumChunk → ChunkSerializer.read）
+            // 不经过这里，worldgen 续跑不受影响。
+            // 旧会话遗留的污染列（带 hash 的半成品）在此被末道拦下（REQ 决策 5：不迁移旧缓存）。
+            if (!io.github.limuqy.mc.hassium.shadow.storage.ShadowColumnContent.isContentBearing(tag)) {
+                return null;
+            }
             ServerLevel dimLevel = level(dimension);
             if (dimLevel == null) {
                 return null;

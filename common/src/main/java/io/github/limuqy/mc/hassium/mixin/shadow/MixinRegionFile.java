@@ -292,8 +292,13 @@ public abstract class MixinRegionFile {
             throws IOException {
         try {
             int level = HassiumConfigService.getInstance().getStorageCompressionLevel();
-            Long storedHash = io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes
-                    .get(mgr.dimension(), pos);
+            // T1 不变量：只有「方块状态已定型」（Status >= FEATURES）的列才准携带内容 hash。
+            // 原版 worldgen 会把半成品列（structure_starts / biomes / carvers…）写盘，
+            // 而坐标 hash 表里可能残留早先注入的权威 hash —— 直接落盘会让读盘探活
+            // （probeLocalHash -> OK）把它当成 compare 基线柱（见 ShadowColumnContent）。
+            Long storedHash = io.github.limuqy.mc.hassium.shadow.storage.ShadowColumnContent
+                    .effectiveHash(rawNbtData, io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes
+                            .get(mgr.dimension(), pos));
             byte[] sector = HassiumType126Codec.encodeSector(rawNbtData, storedHash, level);
             if (!mgr.adoptEncodedColumn(pos, HassiumType126Codec.payloadAfterType(sector), storedHash)) {
                 // 空载荷（编码产出异常）：回落原版写盘，不丢柱。
@@ -326,15 +331,28 @@ public abstract class MixinRegionFile {
             }
             if (buffer.limit() >= 5 + 1 + HassiumType126Codec.HASH_LENGTH
                     && buffer.get(5) == HassiumType126Codec.HASH_MAGIC) {
-                return hassium$adoptEncodedPayload(mgr, pos, hassium$copyPayload(buffer));
+                // 外部 IO（C2ME）自拼的 0x48 载荷：嵌入 hash 只是占位（全零），真正落盘的是
+                // 坐标表 hash（由 type 补丁回填，与 adopt 无先后约束）。半成品列不携带内容
+                // hash —— 本分支必须解压看一次 Status（仅此分支付这个代价，落在 modcompat 路径）。
+                // 半成品则连 0x48 头一起剥掉，退化为旧 126 无 hash 形态（{@code decode} 兼容无头）。
+                byte[] payload = hassium$copyPayload(buffer);
+                Long resolved = hassium$resolveContentHash(mgr, pos, payload);
+                if (!hassium$isContentBearingPayload(payload)) {
+                    return hassium$adoptEncodedPayload(mgr, pos, hassium$withoutHashHeader(payload), null);
+                }
+                return hassium$adoptEncodedPayload(mgr, pos, payload, resolved);
             }
             byte compressionType = buffer.get(4);
-            byte[] payload = hassium$copyPayload(buffer);
-            Long hash = io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes
-                    .get(mgr.dimension(), pos);
+            byte[] vanillaPayload = hassium$copyPayload(buffer);
             int level = HassiumConfigService.getInstance().getStorageCompressionLevel();
-            byte[] sector = HassiumType126Codec.reencodeVanillaToHassium(compressionType, payload, hash, level);
-            return hassium$adoptEncodedPayload(mgr, pos, HassiumType126Codec.payloadAfterType(sector));
+            // 先解压拿到列 NBT，才能按 Status 判定是否准带 hash（T1 不变量）。
+            byte[] rawNbt = HassiumType126Codec.decodeVanillaPayload(compressionType, vanillaPayload);
+            Long hash = io.github.limuqy.mc.hassium.shadow.storage.ShadowColumnContent.effectiveHash(
+                    rawNbt,
+                    io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes
+                            .get(mgr.dimension(), pos));
+            byte[] sector = HassiumType126Codec.encodeSector(rawNbt, hash, level);
+            return hassium$adoptEncodedPayload(mgr, pos, HassiumType126Codec.payloadAfterType(sector), hash);
         } catch (Throwable t) {
             // 重编码失败：放弃该柱（下次 cache miss 重拉），禁止回落 RegionFile 落盘。
             hassium$LOGGER.error(
@@ -342,6 +360,42 @@ public abstract class MixinRegionFile {
                     pos, buffer == null ? -1 : (buffer.get(4) & 0xFF), t);
             return false;
         }
+    }
+
+    /**
+     * 0x48 载荷里的「有效内容 hash」：嵌入值为占位（0）或陈旧时，回落到坐标表。
+     * 语义等价原 {@code normalizeEmbeddedHash} 的归一化，但这里只取值不写头。
+     */
+    @Unique
+    private static Long hassium$resolveContentHash(
+            io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager mgr, ChunkPos pos, byte[] payload) {
+        Long embedded = HassiumType126Codec.probeHash(payload);
+        if (embedded != null && embedded != 0L) {
+            return embedded;
+        }
+        return io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes.get(mgr.dimension(), pos);
+    }
+
+    /** 0x48 载荷解压一次看 {@code Status}：仅「方块状态已定型」的列可携带内容 hash。 */
+    @Unique
+    private static boolean hassium$isContentBearingPayload(byte[] payload) {
+        try {
+            return io.github.limuqy.mc.hassium.shadow.storage.ShadowColumnContent
+                    .isContentBearing(HassiumType126Codec.decode(payload).nbt());
+        } catch (Exception e) {
+            // 解不开：不认作有内容（与 ChunkStatusCompat 的失败语义一致，降级到无基线）。
+            return false;
+        }
+    }
+
+    /** 剥掉 0x48 + 8B hash 头，退化为旧 126 无 hash 载荷形态。 */
+    @Unique
+    private static byte[] hassium$withoutHashHeader(byte[] payload) {
+        if (HassiumType126Codec.probeHash(payload) == null) {
+            return payload;
+        }
+        return java.util.Arrays.copyOfRange(
+                payload, 1 + HassiumType126Codec.HASH_LENGTH, payload.length);
     }
 
     /** 槽 type 之后的载荷拷贝（按 header length，越界时取剩余）。 */
@@ -367,12 +421,13 @@ public abstract class MixinRegionFile {
 
     @Unique
     private boolean hassium$adoptEncodedPayload(
-            io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager mgr, ChunkPos pos, byte[] payload) {
+            io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager mgr,
+            ChunkPos pos,
+            byte[] payload,
+            Long hash) {
         if (payload == null || payload.length == 0) {
             return false;
         }
-        Long hash = io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes
-                .get(mgr.dimension(), pos);
         boolean adopted = mgr.adoptEncodedColumn(pos, payload, hash);
         if (adopted) {
             hassium$LOGGER.debug("Hassium: adopted shadow sector {} ({} bytes) into region image",
