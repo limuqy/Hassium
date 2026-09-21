@@ -58,6 +58,12 @@ param(
     # seedgen/dimension 场景强制 -CleanWorld 语义；存在 scripts/smoke/profiles/<name>.profile.properties
     # 时按键值对 patch 双端 hassium toml（见 Invoke-SmokeProfilePatch）。
     [string]$Scenario = "classic",
+    # FULL compare 取证：非空时经 -PhassiumCompareFullDumpDir → buildSrc 三端映射为客户端
+    # JVM 属性 hassium.compareFullDumpDir。CompareFullDump 对每个 FULL 落盘
+    # server-full.bin（服务端解压后的原版区块包）+ local-baseline.bin（影子端本地生成柱，
+    # 同一 vanilla codec 编码）+ metadata.txt，供 scripts/analyze-compare-full.py 解析。
+    # 默认空 = 不落盘、无目录创建/编码/哈希/I/O。
+    [string]$CompareFullDumpDir = "",
     # -ManualLogout：ROUND1 断开改走真实手动登出路径（Minecraft.disconnect(Screen[,Z])/
     # clearLevel，MixinMinecraft HEAD 注入 dump 同步执行），验证「手动登出光照/方块落盘」。
     [switch]$ManualLogout,
@@ -706,6 +712,9 @@ $clientArgs = @(
 if ($PSBoundParameters.ContainsKey('Scenario')) {
     # T8：显式 -Scenario 时经 loom 属性透传链注入 -Dhassium.smokeScenario=<name>
     $clientArgs += "-PhassiumSmokeScenario=$Scenario"
+}
+if ($CompareFullDumpDir -and $CompareFullDumpDir -ne "") {
+    $clientArgs += "-PhassiumCompareFullDumpDir=$CompareFullDumpDir"
 }
 if ($ManualLogout) {
     $clientArgs += "-PhassiumSmokeManualLogout=true"

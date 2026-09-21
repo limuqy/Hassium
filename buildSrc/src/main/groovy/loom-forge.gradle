@@ -56,6 +56,13 @@ loom {
                 if (smokeScenario != null && !smokeScenario.toString().isBlank()) {
                     jvmArguments.add("-Dhassium.smokeScenario=${smokeScenario}")
                 }
+                // FULL compare 取证：harness 传 -PhassiumCompareFullDumpDir 时映射为客户端
+                // JVM 属性 hassium.compareFullDumpDir（CompareFullDump 对每个 FULL 落盘
+                // 服务端解压包 + 影子端本地基线，同 vanilla codec 编码）
+                def compareFullDumpDir = project.findProperty('hassiumCompareFullDumpDir')
+                if (compareFullDumpDir != null && !compareFullDumpDir.toString().isBlank()) {
+                    jvmArguments.add("-Dhassium.compareFullDumpDir=${compareFullDumpDir}")
+                }
                 if (manualLogout != null && manualLogout.toString() == 'true') {
                     jvmArguments.add("-Dhassium.smokeTest.manualLogout=true")
                 }
