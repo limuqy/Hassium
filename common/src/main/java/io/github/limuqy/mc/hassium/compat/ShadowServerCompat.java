@@ -192,6 +192,16 @@ public final class ShadowServerCompat {
      */
     public static ChunkAccess parseChunkNbt(
             ServerLevel level, String levelId, ChunkPos pos, CompoundTag tag) {
+        // 【2026-09-21】解码全程持 POI 互斥闸：ChunkSerializer.read 会经
+        // PoiManager.checkConsistencyWithBlocks 写 SectionStorage 的非并发结构
+        // （裸 Long2ObjectOpenHashMap / LongLinkedOpenHashSet / Long2ByteOpenHashMap）。
+        // 原版靠「单线程 mainThreadExecutor 解码」串行，影子端解码在池线程上
+        // ⇒ 必须把这份串行化补回来。见 ShadowPoiGate。
+        return ShadowPoiGate.callExclusive(() -> parseChunkNbtUnlocked(level, levelId, pos, tag));
+    }
+
+    private static ChunkAccess parseChunkNbtUnlocked(
+            ServerLevel level, String levelId, ChunkPos pos, CompoundTag tag) {
 #if MC_VER < MC_1_21_1
         // 读盘解码同样查该 BiMap（byNameCodec 解码方向）；撞上重建窗口会把未知
         // 调色板项静默替换成 air（promotePartial 只记日志）。ShadowRegistryGate 读锁
@@ -229,6 +239,12 @@ public final class ShadowServerCompat {
      * {@code ≥ 1.21.2}：{@code SerializableChunkData.copyOf(...).write()}。
      */
     public static CompoundTag serializeChunk(ServerLevel level, LevelChunk chunk) {
+        // 【2026-09-21】同 parseChunkNbt：序列化侧也持同一把闸（影子 flush / saveAll 与解码
+        // 并发时会经同一份 POI 状态）。
+        return ShadowPoiGate.callExclusive(() -> serializeChunkUnlocked(level, chunk));
+    }
+
+    private static CompoundTag serializeChunkUnlocked(ServerLevel level, LevelChunk chunk) {
 #if MC_VER < MC_1_21_1
         // handleClientLevelClosing 会同步执行 GameData.revertToFrozen，清空重灌
         // ForgeRegistry 的 ids/names/keys BiMap（NamespacedWrapper.getResourceKey 直接

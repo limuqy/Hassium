@@ -516,6 +516,12 @@ drainAuthorityAcquires(seedgen 分支)
 seedgen/dimension/modcompat 场景的强制 `-CleanWorld`（状态只需清一次：首场默认口径建基线，
 后续热复用）。默认行为不变。
 
+**随之调整的 seedgen 场景断言**（2026-09-21）：`seedgen.scenario` 原第 3 条断言
+`counters.locallyGenerated > 0` 是**冷场专属**读数——热复用场缓存已满，该计数必然为 0 ⇒ 误报 FAIL
+（实测 `poigate_warm1`）。换成 `counters.authoritativeRequests == 0`：这是该场景首行声明的**核心不变量**
+（门控开时无基线柱不得被抢成空基线权威 FULL；seedGen 关时该计数 ~2000），**冷/热两态都成立**
+（实测 5 场 seedgen 全为 0）。「本地生成是否真的发生」改由冷场回归 + 脚本打印的 counters 覆盖。
+
 **`1.21.11_fabric_I_seedgen_warm` vs 冷启动 `..._fixhole`**（同为 1.21.11 fabric seedgen）：
 
 | | 冷启动 | 热复用 |
@@ -606,6 +612,77 @@ java.lang.ArrayIndexOutOfBoundsException: Index -1 out of bounds for length 4097
 ⇒ 与「影子端并发读盘」同族（`PoiManager` 的 `SectionStorage` 用非并发 map，而影子端 chunk 读盘跑在
 `ShadowWorldgenExecutor` 池上）；触发与**热复用次数**相关，冷启动场从未复现。
 **未查根因、未修**（独立于 §11.8 的重复 compare）。
+
+#### 根因（2026-09-21 定位，仍未修）
+
+**原版把反序列化放在单线程主线程上跑，影子端把它挪到了池线程。**
+
+- 1.21.1 mojmap `ChunkMap.scheduleChunkLoad`（`:519-527`）：
+  `readChunk(pos).thenApply(...).thenApplyAsync(tag -> ChunkSerializer.read(level, poiManager, ...), this.mainThreadExecutor)`
+  —— `mainThreadExecutor` 是**单线程**，故 `ChunkSerializer.read`（含 POI 更新）天然串行。
+- 而这条链上的结构**全都没有同步**：`SectionStorage.storage` 是裸 `Long2ObjectOpenHashMap`（`:41`）、
+  `DistanceTracker.levels` 是裸 `Long2ByteOpenHashMap`；`SectionStorage.get/getOrLoad/getOrCreate/readColumn`
+  与 `PoiManager.checkConsistencyWithBlocks` 都不是 `synchronized`。
+- 影子端：`ShadowSeedServer.DISK_READ_PERMITS = max(2, min(8, 核数/4))`，其 javadoc **自己就写明**
+  「`loadFromDisk` 走完整 `ChunkSerializer.read`（含逐 section 的 `PoiManager.checkConsistencyWithBlocks`）」
+  ⇒ **2~8 个池线程同时 `storage.put`** ⇒ `rehash` 里 AIOOBE。
+
+**为什么只在热复用复现**：冷启动读盘基本 miss（`loadFromDisk` 早退，不碰 POI）；热复用一次要并发读上千柱
+⇒ 竞态窗口打开。
+
+**为什么不能只「把读串行化」**：`ChunkMap.tick` → `poiManager.tick`（`ChunkMap:414`）跑在**影子主循环**上，
+`ChunkMap.save` → `poiManager.flush`（`:707`）同理 ⇒ 竞态还有「**池线程读 vs 主循环 tick**」这一半。
+只把 `DISK_READ_PERMITS` 降到 1 挡不住它，反而把「卡死只烧 N 核」的保护变成「卡死 = 全停」。
+
+**候选修法（未选，待拍板）**：
+1. **把 `parseChunkNbt` 路由回影子主循环**（等价原版 `mainThreadExecutor`）：正确性最强、与 vanilla 同构；
+   代价：要处理「已在主循环上」的自等待（inline 分支），且与 `DISK_READ_PERMITS` 的卡死保护相冲
+   （主循环卡 = 读盘全停）。
+2. **给 `PoiManager` 的变更点补锁**（mixin `synchronized`）：手术式、保留并行度；但要覆盖
+   `checkConsistencyWithBlocks` + `tick`/`flush` + `add`/`remove` 多个入口，属于「给原版结构补锁」。
+3. 降并发到 1：**不足以修**（见上）。
+
+#### 修复（2026-09-21，**已闭环**）
+
+**思路**：只把「我们自己」的入口串行化，**不给原版结构打补丁**（换并发容器不够——见下）。
+
+- 新增 `compat/ShadowPoiGate`：一把 `ReentrantLock`，两种取法——
+  - **阻塞** `callExclusive` / `runExclusive`：解码、序列化、`saveAll`；
+  - **非阻塞** `runIfIdle`：影子主循环的 chunk tick —— 拿不到闸就**跳过本拍**。
+    这个不对称是关键：保证「tick 拿到闸时没有解码在跑」，同时保证
+    **主循环永不被解码阻塞**（不把 §8.5「读盘卡死」的爆炸半径放大成主循环停摆）；
+    tick 本就有 `CHUNK_TICK_INTERVAL_MS` 节拍，跳一拍无害。
+- `ShadowServerCompat.parseChunkNbt` / `serializeChunk`：公开入口过闸，方法体拆 `*Unlocked`。
+  这两个是**唯一**的解码/编码漏斗（`ShadowServerCompat:176` + `ShadowSeedServer:1765`；`ShadowSeedServer:1647`）。
+- `ShadowTrackingSession.consumeOnShadowLoop`：包住 `ServerChunkCache.tick(...)`，
+  即 `ChunkMap.tick → poiManager.tick` 的入口。
+- `ShadowSeedServer.loadFromDisk`：**「读+解码」按柱在途单飞**（新 `inFlightDiskDecodes`），
+  与存储管理器的 `inFlightReads`（只管**字节**段）互补——解码段原先每个调用方各跑一遍。
+
+**为什么「换线程安全 map」不够**（用户提案，已评估）：① 这条链上不止一个非并发结构
+（`SectionStorage.storage` / `dirty` / `PoiManager.DistanceTracker.levels` / `PoiSection.records`）；
+② 换容器只保「不崩」，保不住 vanilla 的**协议**（`getOrLoad` 的 get→readColumn→get、
+`PoiSection.refresh` 读改写、`SectionTracker.update` 迁移）⇒ 会变成**静默的逻辑错误**；
+③ 也覆盖不到 `poiManager.tick`。
+
+**验证**（`1.21.11_fabric_I_poigate_*`，连做两次热复用——正是复现 340 条的序列）：
+
+| 场 | `Failed to load chunk` | POI AIOOBE | `loaded` | 封闭空洞 | `compareRequests` |
+|---|---|---|---|---|---|
+| `..._seedgen_warm_diag`（修复前，热 ×2） | **340** | 2505 | 1551 | — | 2714 |
+| `..._poigate_cold` | 0 | 0 | 1573 | 0 | 1573 |
+| `..._poigate_warm1` | **0** | **0** | 1573 | 0 | 1648 |
+| `..._poigate_warm2`（热 ×2） | **0** | **0** | 1573 | 0 | 1625 |
+
+`poigate_warm1` 的 `RESULT: FAIL` **不是回归**：门禁只抓到 2 条 —— 一条是 vanilla 的
+`Failed to retrieve profile key pair`（离线开发环境噪音），另一条是 seedgen 场景自带的
+`assertProbe counters.locallyGenerated gt 0`（**全热复用下 `localGen=0`**，该断言对「缓存已满」的场
+本就无意义）。交付量 / 空洞 / 去重倍数（1.00–1.05×）三场均无回归。
+
+**仍未覆盖**：`SeedGenLevelCompat:645 server.saveAll()`（其 `ChunkMap.save → poiManager.flush`
+也写同一份状态）。未包闸的原因：`saveAll` 可能跑数秒，而它的注释明确要求「saveAll 期间主循环仍在驱动
+光照任务」；包住会让主循环 tick 在整段保存期间全跳过（tick 用的是 `runIfIdle`）。
+本次崩在**会话中**（非关停期），故先不动；需要时再定粒度。
 
 **仍未解释**：修复前 `localWorldgen=true` 的柱有 1197 个，按上述链条应全部中招，实测空洞只有 99 格
 ⇒ 其余 ~1100 柱被别的路径救回（最可能是同柱的原版包后来被拦截 → `tryInterceptForCompare` 有基线分支

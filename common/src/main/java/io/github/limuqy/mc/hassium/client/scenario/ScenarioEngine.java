@@ -758,6 +758,11 @@ public final class ScenarioEngine {
             case "counters.ovdLoaded" -> m.getOvdLoadedCount();
             case "counters.ovdMiss" -> m.getOvdMissCount();
             case "counters.locallyGenerated" -> m.getLocallyGeneratedChunkCount();
+            // 【2026-09-21】seedgen 场景的核心不变量（门控开时无基线柱不得被抢成空基线权威 FULL）。
+            // 冷启动与热复用两态都成立（seedGen 关时该计数 ~2000）；取代原先的
+            // counters.locallyGenerated > 0（后者是冷场专属读数，热复用场必然 0）。
+            case "counters.authoritativeRequests" ->
+                    io.github.limuqy.mc.hassium.protocol.ShadowPullClient.authoritativeRequestCount();
             // 往返飞行黑块专项（flyroundtrip 门禁锚；判定值取落地后下一帧复检的 post-apply 采样）：
             //   clientDarkRegressionChunks —— 仍黑且曾亮（「已缓存区块被打黑」，门禁主锚）
             //   clientDarkLightProbeChunks —— 诊断时刻仍黑的柱数（观测）

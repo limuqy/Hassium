@@ -6,12 +6,16 @@
 # 门禁键与 SmokeProbeWriter PROBE JSON 同源：
 #   1) stats.clientAppliedChunkCount > 0 —— 原版客户端成功应用至少一柱。
 #   2) stats.clientLandedChunkCount > 0 —— 实际 ClientChunkCache 中存在落地柱。
-#   3) counters.locallyGenerated > 0 —— SeedGen 本地生成至少一柱（非网络 FULL）。
+#   3) counters.authoritativeRequests == 0 —— **本场景的核心不变量**（见文件首行）：
+#      门控开时无基线柱不得被抢成空基线权威 FULL（seedGen 关时该计数 ~2000）。
+#      2026-09-21 由 `counters.locallyGenerated > 0` 换成本条：后者是**冷场专属**读数
+#      （热复用场缓存已满，locallyGenerated 必然为 0 ⇒ 误报 FAIL，见 handoff §11.9）。
+#      「本地生成是否真的发生」改由**冷场回归** + 脚本打印的 counters 覆盖。
 join label=WAIT_JOIN_1 since=start timeoutMs=${joinTimeoutMs}
 fly seconds=${moveSeconds} tag=MOVE_
 wait ms=${round1WaitMs}
 dump label=ROUND1 round=1
 assertProbe key=stats.clientAppliedChunkCount op=gt value=0
 assertProbe key=stats.clientLandedChunkCount op=gt value=0
-assertProbe key=counters.locallyGenerated op=gt value=0
+assertProbe key=counters.authoritativeRequests op=eq value=0
 exit rounds=1

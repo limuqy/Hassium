@@ -364,6 +364,15 @@ public class ShadowSeedServer extends MinecraftServer {
             new java.util.concurrent.atomic.AtomicInteger();
 
     /**
+     * 「读盘 + 解码」在途单飞表（键 = {@code DimensionKey}，值 = 解码结果 future）。
+     * <p>
+     * 与 {@code ShadowStorageManager.inFlightReads}（只管**字节**段）互补：解码段原先每调用方各跑一遍。
+     * 见 {@link #loadFromDisk(String, ChunkPos)}。
+     */
+    private final java.util.concurrent.ConcurrentHashMap<Long, java.util.concurrent.CompletableFuture<LevelChunk>>
+            inFlightDiskDecodes = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
      * 本地生成在途上限（常量，语义照抄 C2ME {@code SchedulingManager.maxScheduled = 并行度 × 2}）。
      * <p>
      * 为什么必须有：每次生成本地都要钉一张 FORCED 票（radius 0）并占一个 localGen 线程；
@@ -1102,17 +1111,42 @@ public class ShadowSeedServer extends MinecraftServer {
     }
 
     /** 从指定维度存档（磁盘 region，type 126）加载区块。只走 {@link ShadowStorageManager}，
-     * 禁止回落到原版 IOWorker：同一 .mca 被映像整文件重写后，原版扇区表会读出垃圾柱。 */
+     * 禁止回落到原版 IOWorker：同一 .mca 被映像整文件重写后，原版扇区表会读出垃圾柱。
+     * <p>
+     * 【2026-09-21】「读 + 解码」按柱在途单飞：并发调用共享一次结果。存储管理器的
+     * {@code readChunk} 只对**字节段**单飞（同槽只解压一次），而解码段
+     * （{@code parseNbtBytes → ChunkSerializer.read}）原先每个调用方各跑一遍 ——
+     * 同一柱会被多调用方重复解码。此处把复用延伸到解码段。
+     */
     public LevelChunk loadFromDisk(String dimension, ChunkPos pos) {
-        io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager mgr = storage(dimension);
-        if (mgr == null) {
+        if (dimension == null || pos == null) {
             return null;
         }
-        byte[] nbt = mgr.readChunk(pos);
-        if (nbt == null) {
-            return null;
+        long decodeKey = io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z);
+        java.util.concurrent.CompletableFuture<LevelChunk> mine = new java.util.concurrent.CompletableFuture<>();
+        java.util.concurrent.CompletableFuture<LevelChunk> running =
+                inFlightDiskDecodes.putIfAbsent(decodeKey, mine);
+        if (running != null) {
+            try {
+                return running.join();
+            } catch (java.util.concurrent.CompletionException
+                     | java.util.concurrent.CancellationException e) {
+                LOGGER.debug("Hassium: shared loadFromDisk failed for ({}, {})", pos.x, pos.z, e);
+                return null;
+            }
         }
-        return parseNbtBytes(dimension, pos, nbt);
+        try {
+            io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager mgr = storage(dimension);
+            byte[] nbt = mgr == null ? null : mgr.readChunk(pos);
+            LevelChunk chunk = nbt == null ? null : parseNbtBytes(dimension, pos, nbt);
+            mine.complete(chunk);
+            return chunk;
+        } catch (RuntimeException | Error e) {
+            mine.completeExceptionally(e);
+            throw e;
+        } finally {
+            inFlightDiskDecodes.remove(decodeKey, mine);
+        }
     }
 
     /**
