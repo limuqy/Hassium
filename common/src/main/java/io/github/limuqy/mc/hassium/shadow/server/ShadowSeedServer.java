@@ -1743,12 +1743,23 @@ public class ShadowSeedServer extends MinecraftServer {
     }
     /** 指定维度注入柱序列化（flush 回调；hash 缺失时回填带维度）。
      * PalettedContainer 须与预览打包 / hash 比对持同一把 {@code chunkLock}，
-     * 否则 1.20.1 ThreadingDetector 会刷 ERROR 并把 SeedGen 打包打爆。 */
+     * 否则 1.20.1 ThreadingDetector 会刷 ERROR 并把 SeedGen 打包打爆。
+     * <p>
+     * <b>锁序必须是 GATE → chunkLock</b>。主循环路径
+     * （{@code ShadowTrackingSession.consumeOnShadowLoop} → {@code ShadowPoiGate.runIfIdle} 持 GATE
+     * → {@code ServerChunkCache.tick} → {@code ChunkMap.processUnloads → save}
+     * → {@code hassium$lockShadowSave} → {@code lockChunk}）先 GATE 后 chunkLock。
+     * 本方法原先反过来（{@code withChunkLock} 先、{@code serializeChunk} 内 {@code callExclusive} 后），
+     * 与 flush 线程构成 ABBA 死锁：2026-09-22 neoforge seedgen 实测
+     * seedgen-main 持 GATE 等 chunkLock、shadow-flush 持 chunkLock 等 GATE，
+     * 影子端停摆 → 区块不填充（landed 525/1529）→ 断连清理再卡 10s 出 hang dump。
+     * 把 GATE 提到最外层即与主循环同序；GATE 可重入，内层 {@code callExclusive} 自锁无害。 */
     private byte[] serializeInjectedColumn(String dimension, ChunkPos pos) {
         if (io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager.isEncodingPaused()) {
             return null;
         }
-        return ShadowLightCompute.withChunkLock(pos, () -> serializeInjectedColumnLocked(dimension, pos));
+        return io.github.limuqy.mc.hassium.compat.ShadowPoiGate.callExclusive(() ->
+                ShadowLightCompute.withChunkLock(pos, () -> serializeInjectedColumnLocked(dimension, pos)));
     }
 
     private byte[] serializeInjectedColumnLocked(String dimension, ChunkPos pos) {
