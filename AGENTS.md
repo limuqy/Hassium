@@ -89,6 +89,8 @@ Minecraft 1.20.1 / 1.21.1–1.21.11 多加载器模组（Fabric / Forge / NeoFor
 `-Pmc_ver`：pwsh 必须 `"-Pmc_ver=1.20.1"`（引号）；Git Bash 写 `-Pmc_ver=1.20.1` 即可。
 子工程构建产物按版本分目录（`<module>/build/<mc_ver 下划线化>/`，如 `common/build/1_21_11/`）：`settings.gradle` 的 `gradle.beforeProject` 给**全部非根项目**设 `layout.buildDirectory`，切 `-Pmc_ver` 时各版本 classes/jar/任务状态互不覆盖、切回即 up-to-date，无需 clean 防宏污染。**loader 子项目（fabric/forge/neoforge）同样如此**——buildSrc 内没有任何硬编码的 `build/` 输出路径（核对：`gradlew -q :fabric:properties "-Pmc_ver=1.20.1"` → `buildDir: …/fabric/build/1_20_1`）。**跨版本残留旧变体类的来源是 IDE 输出目录（见下段），不是 `build/`**；loader 起不来时先按下段删 `<module>/bin`、`<module>/out`，再考虑删 `<loader>/build`。根项目 `build/`（jdt-cp、smoke-test 日志）不分版本。
 
+**但分版本目录内仍会有陈旧类残留（2026-09-22 实证）**：`common/build/<mc_ver>/classes/java/test/` 会留下**测试包重构前**的旧类（如 `cache/client/ClientLifecycleHelperTest.class` 与 `client/ClientLifecycleHelperTest.class` 并存），旧类引用已不存在的类型 → `common:test` 报 `TestEngine with ID 'junit-jupiter' failed to discover tests`（**不是**断言失败，也不是源码问题）。判定手法：`git worktree add --detach` 出 HEAD 干净树跑同段 `common:test -Pmc_ver=<ver>` 若 PASS，即坐实为残留。处置：`rm -rf common/build/*/classes/java/test common/build/*/test-results` 后复跑。**注意 `common:test` 全矩阵（`scripts/full-version-compile.ps1`）只有 1.20.1 / 1.21.1 / 1.21.11 三段常跑**，其余段久未执行，残留最易在此暴露。
+
 **IDE 编译输出目录（`<module>/bin/main`、`<module>/out/production`）同样会进运行时 classpath**：loom 组装 MOD_CLASSES 时会把存在的 Eclipse（`.classpath`→`bin/main`）与 IntelliJ（`out/production`）输出目录一并列为 mod 坐标（debug.log 可见 5 个坐标）。VS Code JDT / Eclipse 增量编译留下的**陈旧副本**会让 FML 加载到旧类——2026-08-23 实证：`neoforge/bin/main` 里 01:58 的旧 `HassiumNeoForge.class`（双构造器版）压过 04:54 新构建导致 runServer 必崩，且删 `build/` 无效。loader 起不来且 `build/` 已清时，删全部 `<module>/bin`、`<module>/out` 再跑。
 
 ## Minecraft 源码查询
