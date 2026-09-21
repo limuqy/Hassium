@@ -673,7 +673,12 @@ public final class ShadowTrackingSession {
         // 客户端已切维、tracking 未 reseat：禁止把旧维 OVD 柱推进新 ClientLevel（脚下闪主世界）。
         try {
             net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
-            if (mc != null && mc.level != null) {
+            if (mc != null && mc.level == null) {
+                // 加载屏 / 切维窗口：无客户端世界 → 下方 `clientHasChunk` 恒假，会把整圈环带
+                // 误判成「客户端已丢柱」而摘除落地凭据。此刻交付也无处可落，直接跳过本拍。
+                return;
+            }
+            if (mc != null) {
                 String clientDim = io.github.limuqy.mc.hassium.compat.LevelCompat
                         .getDimensionId(mc.level);
                 if (clientDim != null && !clientDim.equals(currentDimension)) {
@@ -721,19 +726,42 @@ public final class ShadowTrackingSession {
                     windowCells++;
                     long key = io.github.limuqy.mc.hassium.utils.DimensionKey
                             .key(currentDimension, x, z);
-                    if (ovdCounted.contains(key)) {
-                        continue;
-                    }
                     Long missAt = ovdMissRetryAt.get(key);
                     if (missAt != null && nowMs < missAt) {
                         continue;
                     }
                     ChunkPos pos = new ChunkPos(x, z);
-                    var injected = shadow.injectedChunk(currentDimension, x, z);
                     boolean clientHas = ShadowLightCompute.clientHasChunk(x, z);
+                    // 【2026-09-22 修复：改渲染距离 → OVD 环带永久虚空】
+                    // `ovdCounted` 是**指标去重集**（`recordOvdLoadedOnce` 的守卫），**不得**单独当控制流门：
+                    // 客户端改视距时 vanilla `ClientChunkCache.updateViewRadius` 重建 Storage，
+                    // 范围外的柱被**静默丢弃且不触发 `ClientLevel.unload`**（1.20.1 反编译已核）
+                    // → 坐标已不在客户端，落地凭据却残留。旧口径 `if (ovdCounted.contains(key)) continue;`
+                    // 会让同一坐标「离开再回来」后**本会话永不补**；滑块来回一次 = 整圈环带同时进入该状态
+                    // （1.21.1+ 更宽：服务端 tracking 随滑块收缩，`serverVD` 变小后环带整体换位）。
+                    // 现改为**活判据**：客户端确实持有、或该柱已在影子光管线里（generated / inflight /
+                    // 齐套门等待中）才跳过——两者都是自清除的活状态，不再有「本会话永不补」。
+                    if (ovdCounted.contains(key)
+                            && (clientHas
+                                || ShadowLightCompute.isLocalRequeueInFlight(currentDimension, pos))) {
+                        continue;
+                    }
+                    var injected = shadow.injectedChunk(currentDimension, x, z);
                     boolean epoch = ShadowLightCompute.hasClientApplyEpoch(currentDimension, pos);
                     // OVD_PATH：逐跳诊断（inject/epoch/clientHas/publish）——缺柱归因用
                     boolean watch = isOvdWatchCoord(x, z);
+                    // 凭据残留（epoch 真但客户端已无柱）：先摘除，否则下游
+                    // （权威 material 分支 / `ShadowVanillaLightPipeline` 的「已落地则跳过」）会继续挡同一柱。
+                    if (epoch && !clientHas) {
+                        ShadowLightCompute.invalidateClientApplyEpoch(currentDimension, pos);
+                        epoch = false;
+                        if (watch) {
+                            DebugLogger.info(DebugLogger.LogType.NETWORK,
+                                    "[OVD_PATH] sweep stale-epoch invalidated ({}, {}) "
+                                            + "— client lost the column (render-distance change), re-serving",
+                                    x, z);
+                        }
+                    }
                     if (injected != null) {
                         if (published >= OVD_PUBLISH_BUDGET) {
                             if (watch) {
@@ -745,11 +773,6 @@ public final class ShadowTrackingSession {
                         }
                         if (epoch) {
                             recordOvdLoadedOnce(currentDimension, pos);
-                            if (watch && !clientHas) {
-                                DebugLogger.info(DebugLogger.LogType.NETWORK,
-                                        "[OVD_PATH] sweep epoch-but-clientMissing ({}, {}) — stale ovdCounted",
-                                        x, z);
-                            }
                             continue;
                         }
                         boolean pub = ShadowLightCompute.publishOvdCachedChunk(currentDimension, pos);

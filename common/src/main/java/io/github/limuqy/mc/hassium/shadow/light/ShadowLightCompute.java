@@ -3252,6 +3252,37 @@ public final class ShadowLightCompute {
         }
     }
 
+    /**
+     * 【2026-09-22 视距滑块修复】客户端缓存已不含该柱 → 作废其落地凭据
+     * （{@code shadowApplyEpochs}），允许重新交付。
+     * <p>
+     * <b>为什么需要它</b>：客户端改渲染距离时，vanilla
+     * {@code ClientChunkCache.updateViewRadius} 会**重建 Storage 并只搬运仍在范围内的柱**——
+     * 范围外的柱被静默丢弃，**不调用 {@code ClientLevel.unload}**（1.20.1 反编译已核）。
+     * 于是 {@link #onClientChunkUnloaded} 从不被触发，凭据残留成「客户端仍持有」。
+     * 残留凭据会让权威 material 分支（{@code drainAuthorityAcquires} 要求
+     * {@code !hasClientApplyEpoch} 才交付）与 {@code ShadowVanillaLightPipeline} 的
+     * 「已落地则跳过」继续挡同一柱 → 该柱**永久不补**。
+     * <p>
+     * <b>与 {@link #onClientChunkUnloaded} 的差别</b>：本方法**不取消在途光/回传工作**
+     * （柱数据仍在影子表，马上要重投，取消会白丢一次屏障），也**不动**
+     * {@code accountedIngress} / {@code networkInFlight}——那是「本会话网络已付过账」的**事实**，
+     * 仍然成立；保留它才能让重投走本地直投而不是多余的一次 compare 往返。
+     *
+     * @return true = 确有残留凭据被摘除
+     */
+    public static boolean invalidateClientApplyEpoch(String dimension, ChunkPos pos) {
+        if (dimension == null || pos == null) {
+            return false;
+        }
+        long key = DimensionKey.key(dimension, pos.x, pos.z);
+        boolean had = shadowApplyEpochs.remove(key) != null;
+        // 与 unload 同口径：客户端已不持有 → 允许再次 compare / 重发 hash-miss 回退
+        requestedMisses.remove(key);
+        io.github.limuqy.mc.hassium.protocol.ShadowPullClient.clearCompareRequested(dimension, pos);
+        return had;
+    }
+
     /** 断连清理：清空投递/生成/回传（影子服务端由 registry 统一关停保存）。 */
     public static void onDisconnect() {
         pending.clear();
