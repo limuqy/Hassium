@@ -96,7 +96,8 @@ public final class ShadowStorageManager implements AutoCloseable {
     private volatile boolean closed;
     /**
      * 仅 1.20.1 Forge {@code revertToFrozen} 窗口：挡住新的 {@code ChunkSerializer}
-     * 以免饿死注册表写锁。窗口 TAIL 即 {@link #resumeEncoding()}，退出落盘在恢复之后。
+     * （与 {@code ShadowRegistryWindow} 的「窗口内直接跳过」互为双保险；不再有注册表写锁）。
+     * 窗口 TAIL 即 {@link #resumeEncoding()}，退出落盘在恢复之后。
      */
     private static final java.util.concurrent.atomic.AtomicBoolean ENCODING_PAUSED =
             new java.util.concurrent.atomic.AtomicBoolean();

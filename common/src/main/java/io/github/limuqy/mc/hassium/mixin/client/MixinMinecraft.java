@@ -54,13 +54,13 @@ public abstract class MixinMinecraft {
      * （Netty 线程 execute 排队先于 vanilla handleDisconnection，无此竞态）。
      */
 #if MC_VER < MC_1_21_1
-    /** 与 {@link #hassium$registryGateAcquire} 成对：仅当 HEAD 真正取到写锁时 TAIL 才释放。 */
+    /** 与 {@link #hassium$registryWindowOpen} 成对：仅当 HEAD 真正开窗时 TAIL 才关窗。 */
     @Unique
-    private boolean hassium$registryWriteHeld;
+    private boolean hassium$registryWindowHeld;
 
     @Inject(method = "clearLevel(Lnet/minecraft/client/gui/screens/Screen;)V", at = @At("HEAD"))
     private void hassium$pauseShadowEncode(CallbackInfo ci) {
-        // 仅挡住 revert 窗口内的新 ChunkSerializer，避免饿死注册表写锁。
+        // 仅挡住 revert 窗口内的新 ChunkSerializer，避免开窗排空时仍有新编码涌入。
         // ConnectScreen 空 clearLevel 不是会话拆除：pause 会卡住 drainReady。
         if (!ClientLifecycleHelper.hasActiveClientSession()) {
             return;
@@ -69,38 +69,43 @@ public abstract class MixinMinecraft {
     }
 
     /**
-     * 影子注册表门（写侧）：{@code clearLevel(Screen)} 是 1.20.1 forge/neoforge 所有客户端
+     * 影子注册表重建窗口（{@code clearLevel(Screen)} 是 1.20.1 forge/neoforge 所有客户端
      * 断连路径的汇聚点，forge patch 在其中注入 {@code ForgeHooksClient.handleClientLevelClosing}
-     * → 同步执行 {@code GameData.revertToFrozen()}（清空重灌 ACTIVE 注册表的 BiMap）。
-     * 写锁覆盖本方法全程（含 revert），与影子端序列化路径的读锁
-     * （{@link io.github.limuqy.mc.hassium.compat.ShadowRegistryGate#withReadAccess}）
-     * 结构性互斥——write/read 永不落在重建窗口内，vanilla
-     * {@code Unknown registry element} ERROR 行不再出现。
-     * fabric 无重建机制：写锁无竞争方，零开销。
-     * 须在 {@link #hassium$pauseShadowEncode} 之后取写锁，避免新编码再抢读锁。
-     * 无会话的 connect 空 clearLevel 不取写锁（无 revert），以免堵住投机 WorldLoader。
+     * → 同步执行 {@code GameData.revertToFrozen()}，清空重灌 ACTIVE 注册表 ids/names/keys BiMap）。
+     * <p>
+     * <b>开窗而非加锁</b>：置位 + 有界等在途注册表访问退出（见 {@code ShadowRegistryWindow}）。
+     * 窗口内的新序列化/解码**直接跳过**、不阻塞 ⇒ 与 {@code flushLock}/{@code chunkLock}
+     * 无锁序关系，结构上不可能 ABBA（原读写锁在断连时让 Render 线程卡满 10s 等待超时）。
+     * fabric 无重建机制：不开窗，零开销。
+     * 无会话的 connect 空 clearLevel 不开窗（无 revert），以免堵住投机 WorldLoader。
      */
     @Inject(method = "clearLevel(Lnet/minecraft/client/gui/screens/Screen;)V", at = @At("HEAD"))
-    private void hassium$registryGateAcquire(CallbackInfo ci) {
-        hassium$registryWriteHeld = false;
-        if (!io.github.limuqy.mc.hassium.compat.ShadowRegistryGate.shouldHoldWriteLockDuringClearLevel()) {
+    private void hassium$registryWindowOpen(CallbackInfo ci) {
+        hassium$registryWindowHeld = false;
+        if (!io.github.limuqy.mc.hassium.compat.ShadowRegistryWindow.shouldGuard()) {
             return;
         }
         if (!ClientLifecycleHelper.hasActiveClientSession()) {
             return;
         }
-        io.github.limuqy.mc.hassium.compat.ShadowRegistryGate.acquireWrite();
-        hassium$registryWriteHeld = true;
+        boolean drained = io.github.limuqy.mc.hassium.compat.ShadowRegistryWindow.open(
+                io.github.limuqy.mc.hassium.compat.ShadowRegistryWindow.DRAIN_TIMEOUT_MS);
+        if (!drained) {
+            io.github.limuqy.mc.hassium.Constants.LOG.warn(
+                    "Hassium: shadow registry window opened with in-flight access not drained in {}ms",
+                    io.github.limuqy.mc.hassium.compat.ShadowRegistryWindow.DRAIN_TIMEOUT_MS);
+        }
+        hassium$registryWindowHeld = true;
     }
 
-    /** 与 {@link #hassium$registryGateAcquire} 成对：世界拆除 + revert 完成后放行影子序列化。 */
+    /** 与 {@link #hassium$registryWindowOpen} 成对：世界拆除 + revert 完成后关窗并放行编码。 */
     @Inject(method = "clearLevel(Lnet/minecraft/client/gui/screens/Screen;)V", at = @At("TAIL"))
-    private void hassium$registryGateRelease(CallbackInfo ci) {
-        if (hassium$registryWriteHeld) {
-            hassium$registryWriteHeld = false;
-            io.github.limuqy.mc.hassium.compat.ShadowRegistryGate.releaseWrite();
+    private void hassium$registryWindowClose(CallbackInfo ci) {
+        if (hassium$registryWindowHeld) {
+            hassium$registryWindowHeld = false;
+            io.github.limuqy.mc.hassium.compat.ShadowRegistryWindow.close();
         }
-        // revert 窗口已过：放行从还活着的影子 ChunkMap 刷脏（park 在 finalize TAIL）。
+        // revert 窗口已过：放行从还活着的影子 ChunkMap 刷脏（保存由 TAIL 主线程同步执行）。
         io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager.resumeEncoding();
     }
 #endif
@@ -145,17 +150,23 @@ public abstract class MixinMinecraft {
     @Inject(method = "clearLevel", at = @At("TAIL"))
     private void hassium$onClearLevel(CallbackInfo ci) {
         ClientLifecycleHelper.finalizeDisconnectIfTerminal();
+        // 窗口已由 hassium$registryWindowClose（声明在前，先于本注入执行）关闭。
+        // 保存必须在关窗之后、主线程同步执行：窗口内编码会被跳过，此前的写法
+        // （Render 持写锁等 saver）会与在途 flush 任务 ABBA，退出卡满 10s。
+        ClientLifecycleHelper.saveShadowOnDisconnect();
     }
 #elif MC_VER < MC_1_21_11
     @Inject(method = "disconnect(Lnet/minecraft/client/gui/screens/Screen;Z)V", at = @At("TAIL"))
     private void hassium$onDisconnect(net.minecraft.client.gui.screens.Screen screen, boolean keepResourcePacks,
                                       CallbackInfo ci) {
         ClientLifecycleHelper.finalizeDisconnectIfTerminal();
+        ClientLifecycleHelper.saveShadowOnDisconnect();
     }
 
     @Inject(method = "clearLevel", at = @At("TAIL"), require = 0)
     private void hassium$onClearLevelCompat(CallbackInfo ci) {
         ClientLifecycleHelper.finalizeDisconnectIfTerminal();
+        ClientLifecycleHelper.saveShadowOnDisconnect();
     }
 #else
     // review-fix: T13-FixT7Mixin-2：1.21.11+ 3 参 disconnect TAIL——世界拆除后最终清理
@@ -163,11 +174,13 @@ public abstract class MixinMinecraft {
     private void hassium$onDisconnect(net.minecraft.client.gui.screens.Screen screen, boolean keepResourcePacks,
                                       boolean bl, CallbackInfo ci) {
         ClientLifecycleHelper.finalizeDisconnectIfTerminal();
+        ClientLifecycleHelper.saveShadowOnDisconnect();
     }
 
     @Inject(method = "clearLevel", at = @At("TAIL"), require = 0)
     private void hassium$onClearLevelCompat(CallbackInfo ci) {
         ClientLifecycleHelper.finalizeDisconnectIfTerminal();
+        ClientLifecycleHelper.saveShadowOnDisconnect();
     }
 #endif
 }

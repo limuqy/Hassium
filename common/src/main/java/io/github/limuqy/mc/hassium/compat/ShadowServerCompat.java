@@ -204,9 +204,10 @@ public final class ShadowServerCompat {
             ServerLevel level, String levelId, ChunkPos pos, CompoundTag tag) {
 #if MC_VER < MC_1_21_1
         // 读盘解码同样查该 BiMap（byNameCodec 解码方向）；撞上重建窗口会把未知
-        // 调色板项静默替换成 air（promotePartial 只记日志）。ShadowRegistryGate 读锁
-        // 保证解码全程不落在 revertToFrozen 重建窗口内（同 serializeChunk）。
-        return ShadowRegistryGate.withReadAccess(() -> ChunkSerializer.read(
+        // 调色板项静默替换成 air（promotePartial 只记日志）。ShadowRegistryWindow 在窗口内
+        // **直接跳过**（返回 null ⇒ 本次 cache miss，走调用方既有 null 兜底）——
+        // 非阻塞，不与 flushLock/chunkLock 构成锁序（原读写锁曾致退出卡满 10s）。
+        return ShadowRegistryWindow.withAccess(() -> ChunkSerializer.read(
                 level, level.getPoiManager(), pos, tag));
 #elif MC_VER < MC_1_21_2
         return ChunkSerializer.read(
@@ -248,13 +249,25 @@ public final class ShadowServerCompat {
 #if MC_VER < MC_1_21_1
         // handleClientLevelClosing 会同步执行 GameData.revertToFrozen，清空重灌
         // ForgeRegistry 的 ids/names/keys BiMap（NamespacedWrapper.getResourceKey 直接
-        // 委托该 BiMap）。ShadowRegistryGate 以读写门保证 write 全程不落在重建窗口内
-        // （MixinMinecraft 在 clearLevel HEAD→TAIL 持写锁；结构性互斥，非概率探测）。
-        return ShadowRegistryGate.withReadAccess(() -> ChunkSerializer.write(level, chunk));
+        // 委托该 BiMap）。ShadowRegistryWindow 在窗口内**直接跳过**（返回 null ⇒
+        // writeBatch 还原脏位、柱保持待编，TAIL 主线程保存时补编）。
+        return ShadowRegistryWindow.withAccess(() -> ChunkSerializer.write(level, chunk));
 #elif MC_VER < MC_1_21_2
         return ChunkSerializer.write(level, chunk);
 #else
         return SerializableChunkData.copyOf(level, chunk).write();
+#endif
+    }
+
+    /**
+     * 关闭 1.20.1 forge/neoforge 的「影子注册表重建窗口」（{@code clearLevel} TAIL 后调用）。
+     * <p>
+     * 版本中立面：{@code >= 1.21.1} 无该窗口（注册表不重建），空实现——调用方
+     * （断连保存路径）无需散落 {@code #if}。
+     */
+    public static void closeRegistryWindow() {
+#if MC_VER < MC_1_21_1
+        ShadowRegistryWindow.close();
 #endif
     }
 

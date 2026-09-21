@@ -154,23 +154,29 @@ fabric/ | forge/ | neoforge/
 - **`drainAuthorityAcquires` 的预算只约束「本轮新 acquire」，且不得 `break`**（2026-09-19 用户拍板；实测教训）：判据必须是 `submitted >= budget`，**不得**写成 `submitted + published >= budget`——`published` 是**交付**计数，会让近处已 material 柱的交付吃光预算，把远处非 material 柱的 acquire 饿死（实测 `submitted=0` 占 181/206 轮、1341 柱一轮没 acquire → 邻柱永不到齐 → 齐套门降级）。**不得**用 `break` 提前退出列表（预算用尽后仍要走完，material 分支的交付/compare 照常）。预算值 = `chunk.maxChunksPerFrame × 4`（用户口径，取消原固定 64）；**同组（3×3 域）要发完**：组内超预算也把本组 acquire 完。修好后 R1 交付逐字回到基线 1529、降级 promote 174→60。锚点：`ShadowTrackingSession.authorityAcquireBudget` / `drainAuthorityAcquires`。
 - 锚点：`shadow/light/LightNeighborhoodGate.java`、`ShadowLightCompute.startLightBarrier` / `submitLightReuseOrGate` / `enqueueInjectedForLight`、`ShadowTrackingSession.isInComputeDomain` / `isDeliverableToClient`、`compat/ChunkShapeCompat.containsDilated`。详见 `docs/client-chunk-light-flow.md` §4 / §8.1。
 
-## 并发锁序（钉死）
+## 并发串行化（钉死）
 
-**影子端两把锁的获取顺序必须是 `ShadowPoiGate` → `chunkLock`。** 主循环路径天然如此：
-`ShadowTrackingSession.consumeOnShadowLoop` → `ShadowPoiGate.runIfIdle` 持 GATE → `ServerChunkCache.tick`
-→ `ChunkMap.processUnloads`/`save` → `MixinChunkMap.hassium$lockShadowSave` → `ShadowLightCompute.lockChunk`。
-任何「先 chunkLock、后进 GATE」的路径都是 ABBA 死锁：flush 的 `serializeInjectedColumn` 原先正是
-（`withChunkLock` 先 → `serializeChunk` 内 `ShadowPoiGate.callExclusive` 后），与主循环互锁。
+**影子端碰原版 POI / SectionStorage / 注册表状态的访问一律「转影子主循环」执行，不再用锁。**
+`ShadowPoiGate.callExclusive` 现在是调度器（`ShadowSeedServer.runOnMainLoopAndWait`）：影子端上下文内把
+解码/序列化提交到 `hassium-seedgen-main` 主循环线程执行并同步等待，与主循环 tick
+（`consumeOnShadowLoop` → `ServerChunkCache.tick` → `ChunkMap.tick` → `poiManager.tick`）**天然同线程** ⇒ 结构性串行。
+非影子端上下文（专用服/未装配影子端/单测）直接执行，零行为变化。
 
-- **症状指纹**（2026-09-22 neoforge seedgen 实证）：`[SHADOW_LIGHT] Light timeout (10000ms)` 刷屏、
-  `[STALL-DIAG] gen=64 delta=514 ready=0` 永不下降、区块不填充（landed 525/1529）、断连时
-  `shadow save wait timed out (seq still 0)` 再卡 10s 出 hang dump。判读：转储里
-  `hassium-seedgen-main` 停在 `ShadowLightCompute.lockChunk`（栈含 `runIfIdle`）、
-  `hassium-shadow-flush-*` 停在 `ShadowPoiGate.callExclusive`（栈含 `withChunkLock`）。
-- **新增任何碰原版 POI / SectionStorage 状态的路径，GATE 必须放最外层**（`callExclusive` 包住 `withChunkLock`）。
-  GATE 与 chunkLock 都是可重入锁，内层重复获取无害。
-- 锚点：`compat/ShadowPoiGate`、`ShadowSeedServer.serializeInjectedColumn`、
-  `MixinChunkMap.hassium$lockShadowSave`、`ShadowLightCompute.lockChunk`/`withChunkLock`/`tryWithChunkLock`。
+- **为什么不再用锁**（2026-09-22 用户口径）：锁一旦与 `chunkLock`、`flushLock` 共存就产生锁序，实测两次 ABBA——
+  ①`ShadowPoiGate`/`chunkLock`（flush 持 chunkLock 等闸、主循环持闸等 chunkLock，影子端停摆、landed 525/1529）；
+  ②断连时 Render 持注册表写锁等 saver、saver 等 `flushLock`、在途 flush 持 `flushLock` 等读锁（**退出卡满 10s 等待超时**）。
+- **症状指纹**（历史，供判读旧转储）：`[SHADOW_LIGHT] Light timeout (10000ms)` 刷屏、
+  `[STALL-DIAG] gen=64 delta=514 ready=0` 永不下降、区块不填充、断连时
+  `shadow save shutdown still running after 10000ms` 再出 hang dump；转储里
+  `hassium-seedgen-main` 停在 `ShadowLightCompute.lockChunk`、`hassium-shadow-flush-*` 停在 `ShadowPoiGate.callExclusive`。
+- **新增任何碰原版 POI / SectionStorage 状态的路径，必须走 `ShadowPoiGate.callExclusive`（调度）**，
+  且 `withChunkLock` 放在**调度之内**（主循环线程上取 chunkLock，同线程重入无害）。
+- **1.20.1 注册表重建窗口用「窗口」不用锁**：`ShadowRegistryWindow`（开窗=置位+有界等在途访问退出；
+  窗口内新访问**直接跳过**返回 null，不阻塞）替代原 `ShadowRegistryGate` 读写锁。
+  断连保存 `ClientLifecycleHelper.saveShadowOnDisconnect()` 在 `clearLevel` TAIL 关窗后**主线程同步**执行。
+- 锚点：`compat/ShadowPoiGate`、`compat/ShadowRegistryWindow`、`ShadowSeedServer.runOnMainLoopAndWait` /
+  `serializeInjectedColumn`、`ClientLifecycleHelper.finalizeDisconnect` / `saveShadowOnDisconnect`、
+  `MixinMinecraft.hassium$registryWindowOpen`/`Close`、`ShadowLightCompute.withChunkLock`。
 
 ## 配置红线
 

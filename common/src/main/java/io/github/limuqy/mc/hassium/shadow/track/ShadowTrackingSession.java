@@ -428,11 +428,9 @@ public final class ShadowTrackingSession {
                     && !io.github.limuqy.mc.hassium.compat.ShadowServerCompat.isSharedIoPoolShutdown()) {
                 long deadlineNanos = System.nanoTime() + CHUNK_TICK_BUDGET_NANOS;
                 try {
-                    // 【2026-09-21】tick 会经 ChunkMap.tick → poiManager.tick 写 POI 的非并发结构
-                    // （见 ShadowPoiGate 类注释）。用**非阻塞**取闸：解码在跑就跳过本拍——
-                    // 既保证「拿到闸时没有解码在跑」，又保证「主循环永不被解码阻塞」
-                    // （不把 §8.5「读盘卡死」的爆炸半径放大成主循环停摆）。tick 本就有
-                    // CHUNK_TICK_INTERVAL_MS 节拍，跳一拍无害。
+                    // 【2026-09-22】tick 会经 ChunkMap.tick → poiManager.tick 写 POI 的非并发结构
+                    // （见 ShadowPoiGate 类注释）。解码/序列化现已**调度到本主循环线程**执行，
+                    // 与本 tick 天然同线程 ⇒ 结构性串行，不再需要「拿不到闸就跳过本拍」。
                     io.github.limuqy.mc.hassium.compat.ShadowPoiGate.runIfIdle(() ->
                             ((net.minecraft.server.level.ServerChunkCache) level.getChunkSource()).tick(
                                     () -> System.nanoTime() < deadlineNanos, false));

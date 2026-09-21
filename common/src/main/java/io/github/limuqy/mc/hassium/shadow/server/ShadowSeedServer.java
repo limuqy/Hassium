@@ -1745,15 +1745,17 @@ public class ShadowSeedServer extends MinecraftServer {
      * PalettedContainer 须与预览打包 / hash 比对持同一把 {@code chunkLock}，
      * 否则 1.20.1 ThreadingDetector 会刷 ERROR 并把 SeedGen 打包打爆。
      * <p>
-     * <b>锁序必须是 GATE → chunkLock</b>。主循环路径
-     * （{@code ShadowTrackingSession.consumeOnShadowLoop} → {@code ShadowPoiGate.runIfIdle} 持 GATE
-     * → {@code ServerChunkCache.tick} → {@code ChunkMap.processUnloads → save}
-     * → {@code hassium$lockShadowSave} → {@code lockChunk}）先 GATE 后 chunkLock。
-     * 本方法原先反过来（{@code withChunkLock} 先、{@code serializeChunk} 内 {@code callExclusive} 后），
-     * 与 flush 线程构成 ABBA 死锁：2026-09-22 neoforge seedgen 实测
-     * seedgen-main 持 GATE 等 chunkLock、shadow-flush 持 chunkLock 等 GATE，
-     * 影子端停摆 → 区块不填充（landed 525/1529）→ 断连清理再卡 10s 出 hang dump。
-     * 把 GATE 提到最外层即与主循环同序；GATE 可重入，内层 {@code callExclusive} 自锁无害。 */
+     * <b>闸在最外层、且已改为「转主循环」而非锁</b>：{@code callExclusive} 把整个
+     * {@code withChunkLock + 序列化} 调度到影子主循环线程执行（原版 mainThreadExecutor 语义，
+     * 见 {@link io.github.limuqy.mc.hassium.compat.ShadowPoiGate}）。因此：
+     * <ul>
+     *   <li>与主循环 tick（{@code consumeOnShadowLoop → ServerChunkCache.tick →
+     *       ChunkMap.processUnloads → save → lockChunk}）**同线程**，chunkLock 只是同线程重入，
+     *       不再有「flush 持 chunkLock 等闸 / 主循环持闸等 chunkLock」的 ABBA（872c9628 的病根）；</li>
+     *   <li>调用方（flush 线程）只持 {@code flushLock}，**不持 chunkLock** 就完成转交，
+     *       故不会与主循环形成跨线程锁环（断连时退出卡满 10s 的成因之一）。</li>
+     * </ul>
+     */
     private byte[] serializeInjectedColumn(String dimension, ChunkPos pos) {
         if (io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager.isEncodingPaused()) {
             return null;
@@ -1786,6 +1788,11 @@ public class ShadowSeedServer extends MinecraftServer {
                 }
             }
             net.minecraft.nbt.CompoundTag nbt = serializeChunkForSave(level(dimension), chunk);
+            if (nbt == null) {
+                // 1.20.1 forge/neoforge 注册表重建窗口内被 ShadowRegistryWindow 跳过：
+                // 保持脏（writeBatch 会还原脏位），clearLevel TAIL 主线程保存时补编。
+                return null;
+            }
             java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
             net.minecraft.nbt.NbtIo.write(nbt, new java.io.DataOutputStream(baos));
             return baos.toByteArray();
@@ -2068,6 +2075,94 @@ public class ShadowSeedServer extends MinecraftServer {
     /** 装配线程回填（见 {@link #createAndStart} 语义）。 */
     void attachMainThread(Thread main) {
         this.mainThreadLoop = main;
+    }
+
+    /** 当前线程是否影子端主循环线程（{@link #runMainLoop()} 所在线程）。 */
+    public boolean isMainLoopThread() {
+        Thread t = mainThreadLoop;
+        return t != null && t == Thread.currentThread();
+    }
+
+    /** 主循环 dispatch 的同步等待上界（毫秒）：超时即就地执行，绝不把调用方挂死。 */
+    private static final long MAIN_LOOP_DISPATCH_WAIT_MS = 15_000L;
+
+    /**
+     * 提交到影子端主循环线程执行并**同步等待**结果——原版 {@code mainThreadExecutor} 语义。
+     * <p>
+     * 用途：把「碰原版 POI / SectionStorage / 注册表」的访问串行到主循环。原版这些结构
+     * （{@code SectionStorage.storage} 裸 map、{@code PoiSection.records} 普通 Set …）
+     * 全无同步，vanilla 靠单线程 {@code mainThreadExecutor} 串行；影子端曾把它们放到池线程
+     * 并发（{@code DISK_READ_PERMITS} 2~8），只能用锁补串行，实测两次 ABBA：
+     * {@code ShadowPoiGate/chunkLock}（872c9628）与 {@code flushLock/注册表写锁}
+     * （断连时退出卡满 10s）。转主循环后与主循环 tick 天然同线程，锁不再需要。
+     * <p>
+     * 已在主循环线程 ⇒ 直接执行（重入安全）。主循环已停（断连/关停后）或等待超时 ⇒
+     * **就地执行**（{@code claimed} 保证恰好执行一次）：既不丢柱，也不把调用方挂死；
+     * 此时主循环已停摆，就地执行不会与它并发。
+     */
+    public <T> T runOnMainLoopAndWait(java.util.function.Supplier<T> action) {
+        if (isMainLoopThread()) {
+            return action.get();
+        }
+        java.util.concurrent.CompletableFuture<T> future = new java.util.concurrent.CompletableFuture<>();
+        java.util.concurrent.atomic.AtomicBoolean claimed = new java.util.concurrent.atomic.AtomicBoolean();
+        Runnable task = () -> {
+            if (!claimed.compareAndSet(false, true)) {
+                return;
+            }
+            try {
+                future.complete(action.get());
+            } catch (Throwable t) {
+                future.completeExceptionally(t);
+            }
+        };
+        Thread loop = mainThreadLoop;
+        boolean dispatched = false;
+        if (loop != null && loop.isAlive()) {
+            try {
+                this.execute(task);
+                dispatched = true;
+            } catch (Throwable rejected) {
+                // 主循环已停（RejectedExecutionException 等）：落回就地执行
+            }
+        }
+        if (!dispatched) {
+            task.run();
+            return joinInline(future);
+        }
+        try {
+            return future.get(MAIN_LOOP_DISPATCH_WAIT_MS, java.util.concurrent.TimeUnit.MILLISECONDS);
+        } catch (java.util.concurrent.TimeoutException te) {
+            io.github.limuqy.mc.hassium.Constants.LOG.warn(
+                    "Hassium: shadow main loop did not run a POI task within {}ms; running it inline",
+                    MAIN_LOOP_DISPATCH_WAIT_MS);
+            task.run();
+            return joinInline(future);
+        } catch (InterruptedException ie) {
+            Thread.currentThread().interrupt();
+            task.run();
+            return joinInline(future);
+        } catch (java.util.concurrent.ExecutionException ee) {
+            throw rethrowDispatchFailure(ee.getCause());
+        }
+    }
+
+    private static <T> T joinInline(java.util.concurrent.CompletableFuture<T> future) {
+        try {
+            return future.join();
+        } catch (java.util.concurrent.CompletionException ce) {
+            throw rethrowDispatchFailure(ce.getCause());
+        }
+    }
+
+    private static RuntimeException rethrowDispatchFailure(Throwable cause) {
+        if (cause instanceof RuntimeException re) {
+            return re;
+        }
+        if (cause instanceof Error er) {
+            throw er;
+        }
+        return new RuntimeException(cause);
     }
 
     /**

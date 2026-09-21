@@ -31,6 +31,8 @@ public final class ClientLifecycleHelper {
      */
     private static volatile boolean connectInFlight = false;
     private static final AtomicBoolean finalized = new AtomicBoolean(false);
+    /** 本次会话拆除的影子端保存是否已跑（{@link #saveShadowOnDisconnect()} 幂等门）。 */
+    private static final AtomicBoolean shadowSaveDone = new AtomicBoolean(false);
     /**
      * 本次会话拆除已跑过 {@link #cleanupOnDisconnect()}。{@link #finalizeDisconnectIfTerminal()}
      * 只在此标志为真时关执行器——避免 {@code ConnectScreen.startConnecting} 的空 {@code clearLevel}
@@ -318,6 +320,7 @@ public final class ClientLifecycleHelper {
 
         initialized = false;
         finalized.set(false);
+        shadowSaveDone.set(false);
         disconnectCleanupArmed.set(true);
         connectInFlight = false;
         JoinWorldFocus.clear();
@@ -343,26 +346,54 @@ public final class ClientLifecycleHelper {
     }
 
     /**
-     * 断开连接最终清理（vanilla 世界拆除之后）。
+     * 断开连接清理（幂等；可能在 {@code clearLevel} 中途或 TAIL 被调用）。
      * <p>
-     * 先恢复编码并关停影子端（异步 saver 从还活着的 ChunkMap 刷脏落盘），**再同步等它落完**
-     * （{@link ShadowServerRegistry#awaitShutdownComplete(long)}，有界）——等待放在断连路径上：
-     * 用户在此处本就预期等待（对齐原版单人「保存世界中」），而不是留给下次进服的主线程去等。
-     * 最后关客户端 executor。
+     * 只做与影子保存无关的收尾：指标复位、关客户端 executor、清客户端 chunk 存储。
+     * <p>
+     * <b>不在此碰影子端保存</b>：1.20.1 forge/neoforge 此处仍处注册表重建窗口内
+     * （{@code revertToFrozen} 未结束、编码暂停），此时启动 saver 会因窗口跳过编码而丢脏柱。
+     * 保存必须等 {@code clearLevel} TAIL 关窗后，由
+     * {@link #saveShadowOnDisconnect()} 在**主线程同步**执行。
      */
     public static void finalizeDisconnect() {
         if (!finalized.compareAndSet(false, true)) return;
         disconnectCleanupArmed.set(false);
-        io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager.resumeEncoding();
-        io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry registry =
-                io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry.getInstance();
-        registry.parkForReuse();
-        registry.awaitShutdownComplete(DISCONNECT_SAVE_WAIT_MS);
         if (HassiumConfigService.getInstance().isMetricsAutoResetEnabled()) {
             io.github.limuqy.mc.hassium.metrics.NetworkStats.reset();
         }
         HassiumTaskExecutor.shutdownClient(5000);
         ClientChunkHandler.resetStorage();
+    }
+
+    /**
+     * 断连保存：**主线程同步**跑影子端保存（有界），须在 {@code clearLevel} TAIL
+     * （注册表重建窗口已关、编码已放行）之后调用。
+     * <p>
+     * 原实现把「启动 saver + 同步等待」放在 {@code finalizeDisconnect}（1.20.1 会由
+     * {@code onPlayerLoggedOut} 在 {@code clearLevel} 中途同步执行），于是 Render 线程在
+     * <b>持注册表写锁</b>期间等 saver：saver 等 {@code flushLock}，在途 flush 任务持
+     * {@code flushLock} 等注册表读锁 —— ABBA，退出卡满 10s 等待超时。现在改为：
+     * 窗口用「跳过」而非锁（见 {@code ShadowRegistryWindow}），保存挪到关窗之后的主线程，
+     * 结构上不存在环。
+     * <p>
+     * {@code finalized} 门：仅真实会话拆除（{@link #finalizeDisconnect()} 跑过）才保存；
+     * ConnectScreen 空 {@code clearLevel} 直接返回。等待有界（{@link #DISCONNECT_SAVE_WAIT_MS}），
+     * 超时即放弃并记 warn（数据靠下次会话 compare miss 重推），不无限拖住退出。
+     */
+    public static void saveShadowOnDisconnect() {
+        if (!finalized.get()) {
+            return;
+        }
+        if (!shadowSaveDone.compareAndSet(false, true)) {
+            return;
+        }
+        // 关窗 + 放行编码：保存要真正编码脏柱，必须在 revert 窗口结束后。
+        io.github.limuqy.mc.hassium.compat.ShadowServerCompat.closeRegistryWindow();
+        io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager.resumeEncoding();
+        io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry registry =
+                io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry.getInstance();
+        registry.parkForReuse();
+        registry.awaitShutdownComplete(DISCONNECT_SAVE_WAIT_MS);
     }
 
     /**
