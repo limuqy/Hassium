@@ -241,9 +241,20 @@ public final class ShadowPullClient {
         if (ShadowLightCompute.hasLocalPullBaseline(dimension, pos)) {
             // 有本地基线：发出 hash 比较请求（服务端按 UNCHANGED/DELTA/FULL 裁决）
             requestFull(dimension, List.of(pos));
+        } else if (io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession.getInstance() != null
+                && io.github.limuqy.mc.hassium.shadow.server.SeedGenExecutor.getInstance().isGenerationGateOpen()
+                && io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession.getInstance()
+                        .isInComputeDomain(pos.x, pos.z)) {
+            // A1-③（handoff-2026-09-18 §1）：seedGen 开 + 无缓存 → 本地生成作基线 → compare。
+            // 拦截路径【只挂起，不驱动】：生成由影子主循环泵的 SEEDGEN_LOCAL 分支统一驱动
+            // （pin FORCED 票等操作仅影子线程安全，渲染线程不得触碰——2026-09-21 实测
+            // 渲染线程 pin 票 + C2ME rewrites-chunk-system 并发 DistanceManager 更新
+            // → LeveledPriorityQueue 结构损坏崩溃）。泵不覆盖的柱（窗外）由 10s 超时
+            // 回退 networkApply 兜底，数据不丢。
+            seedGenIntercepted.incrementAndGet();
         } else {
-            // 无本地基线：空基线请求，服务端必答 FULL——统一 Compare+Pull，
-            // 不再放行未经服务端裁决的网络注入
+            // 无本地基线且本地生成未接管（gate 关 / 窗外 / 在途满）：空基线请求，
+            // 服务端必答 FULL——统一 Compare+Pull，不放行未经服务端裁决的网络注入
             requestAuthoritativeFull(dimension, List.of(pos));
         }
         return true;
@@ -304,6 +315,9 @@ public final class ShadowPullClient {
             new java.util.concurrent.atomic.AtomicLong();
     private static final java.util.concurrent.atomic.AtomicLong nativeIntercepted =
             new java.util.concurrent.atomic.AtomicLong();
+    /** 拦截到无基线包后转交 SeedGen 本地生成的柱数（A1-③ 接管；不与 authoritativeRequests 重叠）。 */
+    private static final java.util.concurrent.atomic.AtomicLong seedGenIntercepted =
+            new java.util.concurrent.atomic.AtomicLong();
 
     public static long nativeBypassPendingPullCount() {
         return nativeBypassPendingPull.get();
@@ -319,6 +333,10 @@ public final class ShadowPullClient {
 
     public static long nativeInterceptedCount() {
         return nativeIntercepted.get();
+    }
+
+    public static long seedGenInterceptedCount() {
+        return seedGenIntercepted.get();
     }
 
     /**
@@ -425,6 +443,10 @@ public final class ShadowPullClient {
                     .clearPullInFlight(response.dimension(), pos);
             if (result.kind() == ShadowPullResponseS2CPacket.Kind.FULL) {
                 recordFullResult(comparedBaseline);
+                byte[] serverPacket = decompressPullFull(result);
+                CompareFullDump.write(response.dimension(), pos, serverPacket,
+                        io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry
+                                .getInstance().get());
                 if (pending != null) {
                     io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
                             .confirm(response.dimension(), pos);
@@ -432,7 +454,7 @@ public final class ShadowPullClient {
                 } else {
                     io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
                             .confirm(response.dimension(), pos);
-                    if (!ClientChunkHandler.applyShadowPullFull(decompressPullFull(result))) {
+                    if (!ClientChunkHandler.applyShadowPullFull(serverPacket)) {
                         Constants.LOG.warn("[SHADOW_PULL] Failed to apply FULL ({}, {})", result.chunkX(), result.chunkZ());
                         io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
                                 .mark(response.dimension(), pos);
@@ -611,6 +633,7 @@ public final class ShadowPullClient {
         nativeBypassApplyInProgress.set(0);
         nativeBypassEngineOff.set(0);
         nativeIntercepted.set(0);
+        seedGenIntercepted.set(0);
         compareRequests.set(0);
         authoritativeRequests.set(0);
         responseUnchanged.set(0);

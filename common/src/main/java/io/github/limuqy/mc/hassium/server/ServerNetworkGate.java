@@ -83,7 +83,7 @@ public final class ServerNetworkGate {
     /**
      * 该玩家的原版整柱下发是否接受 {@code master.maxChunksPerTick} 限速。
      * <ul>
-     *   <li>影子端：否（虚拟连接走 {@code ShadowPlayerCompat} 补泵）</li>
+     *   <li>影子端：否（影子区块只经 Compare+Pull / 影子交付链回传）</li>
      *   <li>专用服：是（含尚未握手的原版客户端；与自有 Pull 通道同频）</li>
      *   <li>集成服已开局域网：仅远程玩家（主机 memory 连接保持原版速度）</li>
      * </ul>

@@ -154,10 +154,7 @@ public final class VanillaAlignedChunkProvider implements ShadowChunkProvider {
         }
         lastDrainMs = now;
         ShadowTrackingSession session = ShadowTrackingSession.getInstance();
-        ChunkPos center = session == null ? null : session.deliveryCenter();
-        if (center == null && session != null) {
-            center = session.virtualPlayerChunk();
-        }
+        ChunkPos center = session == null ? null : session.trackingCenter();
         List<PendingPull> batch = new ArrayList<>(pendingPulls.values());
         final ChunkPos c = center;
         if (c != null) {

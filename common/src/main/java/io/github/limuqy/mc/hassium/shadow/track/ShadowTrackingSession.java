@@ -9,6 +9,7 @@ import io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry;
 import io.github.limuqy.mc.hassium.shadow.server.ShadowWorldgenExecutor;
 import io.github.limuqy.mc.hassium.shadow.server.SeedGenLevelCompat;
 import io.github.limuqy.mc.hassium.shadow.server.SeedGenExecutor;
+import io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate;
 import io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute;
 import io.github.limuqy.mc.hassium.shadow.light.SmokeChunkTrace;
 import io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes;
@@ -16,30 +17,20 @@ import io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes;
 import io.github.limuqy.mc.hassium.compat.ChunkShapeCompat;
 import io.github.limuqy.mc.hassium.compat.LevelCompat;
 import io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat;
-import io.github.limuqy.mc.hassium.compat.ShadowPlayerCompat;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.protocol.ShadowPullClient;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import io.github.limuqy.mc.hassium.utils.DimensionKey;
 import net.minecraft.client.Minecraft;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.level.ChunkPos;
 
 /**
- * 影子虚拟玩家 tracking 会话：§6 目标态的采集决策者。
+ * 影子 tracking 会话：真实客户端位置/维度发布到影子主循环，由显式波前选柱并发出
+ * Compare+Pull。影子端不创建玩家实体，选柱不再依赖 ChunkMap 玩家票。
  * <p>
- * 真实客户端位置/维度单向同步给影子 {@code ShadowSeedServer} 内唯一虚拟
- * {@link ServerPlayer}（GameTestServer 配方 + EmbeddedChannel 连接桩）；原版
- * {@code ChunkMap} 玩家 tracking 决定选柱。选中柱经 {@code scheduleChunkLoad}
- * 影子钩子登记本会话，由影子主循环泵按批发出统一 Compare+Pull：
- * <ul>
- *   <li>有本地基线（磁盘 hash / 注入柱）→ {@link ShadowPullClient#requestFull} 比对请求；</li>
- *   <li>无基线 → {@link ShadowPullClient#requestAuthoritativeFull} 空基线请求（服务端必答 FULL）。</li>
- * </ul>
- * 线程纪律：真实客户端 tick（主线程）只发布 volatile 待同步状态；虚拟玩家创建 /
- * 移动 / chunk 系统簿记 / pull 请求全部在影子主循环线程执行（与 vanilla 单线程
- * ChunkMap 语义一致）。
+ * 线程纪律：真实客户端 tick 仅替换 volatile 待同步状态；影子主循环消费状态、推进
+ * chunk 系统簿记、生成与 pull。
  */
 public final class ShadowTrackingSession {
 
@@ -115,9 +106,8 @@ public final class ShadowTrackingSession {
 
     /** 影子主循环线程持有的会话状态（仅影子线程读写）。 */
     private ShadowSeedServer boundServer;
-    private ServerPlayer virtualPlayer;
     private String currentDimension;
-    private boolean createFailed;
+    private ChunkPos trackingCenter;
     private long lastChunkTickMs;
 
     /** 会话落位基准点：首个稳定座位（虚拟玩家放置瞬间的 chunk）。 */
@@ -192,12 +182,6 @@ public final class ShadowTrackingSession {
             new java.util.concurrent.ConcurrentHashMap<>();
     private long lastOvdSweepMs;
 
-    /** 待移除虚拟玩家（{@link #reset} 在客户端主线程调用；vanilla remove 须留给影子主循环）。 */
-    private record PendingRemoval(ShadowSeedServer server, ServerPlayer player) {}
-
-    private volatile PendingRemoval pendingRemoval;
-    /** 已应用到影子 ChunkMap 的视距（-1 = 未应用；半径晚到/变化时由影子主循环补应用）。 */
-    private volatile int appliedViewDistance = -1;
 
     private ShadowTrackingSession() {}
 
@@ -243,9 +227,9 @@ public final class ShadowTrackingSession {
         }
     }
 
-    /** 交付/pull 轴心：真实玩家优先；无玩家时退回虚拟玩家（进服 boot）。 */
-    public ChunkPos virtualPlayerChunk() {
-        return virtualPlayer == null ? null : virtualPlayer.chunkPosition();
+    /** 当前影子选柱中心；由客户端发布状态在影子主循环更新。 */
+    public ChunkPos trackingCenter() {
+        return trackingCenter;
     }
 
     /**
@@ -373,10 +357,7 @@ public final class ShadowTrackingSession {
         positions.sort(domainComparator(positions, cx, cz));
     }
 
-    /**
-     * 交付/trace/pull 几何中心：真实客户端玩家区块优先（与 ClientChunkCache / 真服
-     * tracking 同轴），缺失时退回虚拟玩家 / homeChunk。
-     */
+    /** 交付/trace/pull 几何中心：真实玩家优先；无客户端时退回会话中心。 */
     public static ChunkPos deliveryCenter() {
         try {
             Minecraft mc = Minecraft.getInstance();
@@ -384,19 +365,9 @@ public final class ShadowTrackingSession {
                 return new ChunkPos(mc.player.getBlockX() >> 4, mc.player.getBlockZ() >> 4);
             }
         } catch (Throwable ignored) {
-            // 无客户端环境（单测/服务端线程）：退回影子会话中心
+            // 无客户端环境：退回会话中心
         }
-        ShadowTrackingSession s = INSTANCE;
-        if (s == null) {
-            return null;
-        }
-        if (s.virtualPlayer != null) {
-            ChunkPos vp = s.virtualPlayer.chunkPosition();
-            if (vp != null) {
-                return vp;
-            }
-        }
-        return s.homeChunk;
+        return INSTANCE.trackingCenter;
     }
 
     /** 当前服务端通告视距（未知 -1）。 */
@@ -415,9 +386,9 @@ public final class ShadowTrackingSession {
         return INSTANCE.effectiveClientVD;
     }
 
-    /** 诊断：虚拟玩家是否已创建（主循环心跳用）。 */
-    public boolean hasVirtualPlayer() {
-        return virtualPlayer != null;
+    /** 诊断：真实客户端状态是否已由影子循环消费。 */
+    public boolean hasTrackingState() {
+        return trackingCenter != null;
     }
 
     /** 诊断：当前跟踪维度（主循环心跳用）。 */
@@ -430,18 +401,15 @@ public final class ShadowTrackingSession {
      * 仅影子主循环线程可调。
      */
     public void consumeOnShadowLoop() {
-        drainPendingRemoval();
         ShadowSeedServer shadow = ShadowServerRegistry.getInstance().get();
         if (shadow != boundServer) {
-            // 实例被重建（换服/seed 重建）：会话失效，随下一次同步重建
             boundServer = shadow;
-            virtualPlayer = null;
             currentDimension = null;
-            createFailed = false;
+            trackingCenter = null;
             sweepInFlight.clear();
             lastChunkTickMs = 0;
         }
-        if (shadow == null || createFailed) {
+        if (shadow == null) {
             return;
         }
         PendingState state = pending;
@@ -449,25 +417,19 @@ public final class ShadowTrackingSession {
         if (state != null) {
             applyState(shadow, state);
         }
-        if (virtualPlayer == null) {
+        if (currentDimension == null || trackingCenter == null) {
             return;
         }
-        applyViewDistanceIfChanged(shadow);
         long now = System.currentTimeMillis();
         if (now - lastChunkTickMs >= CHUNK_TICK_INTERVAL_MS) {
             lastChunkTickMs = now;
             ServerLevel level = shadow.level(currentDimension);
-            // 客户端退出窗口守卫（同 SeedGenLevelCompat.shutdown 的 skipSave 语义）：
-            // vanilla Stopping! → Util.shutdownExecutors() 关停共享 ioPool 后，
-            // tickChunkSystem → ChunkMap.processUnloads → saveChunksEagerly → ChunkMap.save
-            // 会对半死池提交任务，vanilla 内部吞掉 RejectedExecutionException 后记
-            // "Failed to save chunk x,z" ERROR（污染 LogAudit 门禁，无害但吵）。
-            // JVM 即将退出，存档无后续消费者，停止簿记是安全的。
             if (level != null && !ShadowWorldgenExecutor.isTerminated()
                     && !io.github.limuqy.mc.hassium.compat.ShadowServerCompat.isSharedIoPoolShutdown()) {
+                long deadlineNanos = System.nanoTime() + CHUNK_TICK_BUDGET_NANOS;
                 try {
-                    ShadowPlayerCompat.tickChunkSystem(level,
-                            System.nanoTime() + CHUNK_TICK_BUDGET_NANOS);
+                    ((net.minecraft.server.level.ServerChunkCache) level.getChunkSource()).tick(
+                            () -> System.nanoTime() < deadlineNanos, false);
                 } catch (java.util.concurrent.RejectedExecutionException ignored) {
                     // 关停窗口：worldgen 池已拒绝新任务
                 } catch (Throwable t) {
@@ -476,15 +438,9 @@ public final class ShadowTrackingSession {
                 }
             }
         }
-        ShadowPlayerCompat.flushVirtualPlayerChunks(virtualPlayer);
         sweepOvdRing(shadow, now);
         drainAuthorityAcquires(shadow, now);
-        // pull 队列：限流发送 + 出权威窗丢弃（无客户端硬在途上限）
         VanillaAlignedChunkProvider.drainPendingPulls();
-        // WINDOW_PUMP / drainRedeliver 已删：交付由 A1 三链（pull 响应 / materialize publish / 官方桥）承担。
-        // P3（注入表回收）不在此处调用：ShadowSeedServer.unloadChunk 的 flushColumn 会等待
-        // 影子主循环 → 主循环内调用即自死锁（实测 R2 挂死 / teardown 悬挂）。候选由
-        // onClientChunkUnloaded 登记，回收由独立的 hassium-shadow-reclaim 线程驱动。
     }
 
     /**
@@ -501,7 +457,7 @@ public final class ShadowTrackingSession {
      * </ul>
      */
     private void drainAuthorityAcquires(ShadowSeedServer shadow, long nowMs) {
-        if (shadow == null || virtualPlayer == null || currentDimension == null
+        if (shadow == null || trackingCenter == null || currentDimension == null
                 || serverViewDistance <= 0) {
             return;
         }
@@ -509,13 +465,7 @@ public final class ShadowTrackingSession {
             return;
         }
         lastAuthorityAcquireMs = nowMs;
-        ChunkPos center = deliveryCenter();
-        if (center == null) {
-            center = virtualPlayer.chunkPosition();
-        }
-        if (center == null) {
-            return;
-        }
+        ChunkPos center = trackingCenter;
         // 枚举盒 = 膨胀形状的切比雪夫外接盒（原版 updatePlayerStatus 同款「方形循环 + 形状过滤」）：
         // 轴向 |d|=VD+1 的柱属于权威形状，但 inOvdBand 把它们排除在环带之外 → 必须在本驱动枚举，
         // 否则两侧都不交付。实测 serverVD=10/clientVD=16：漏掉 44 柱 → 客户端在权威窗外一圈出现封闭虚空。
@@ -605,9 +555,12 @@ public final class ShadowTrackingSession {
                 }
                 continue;
             }
-            // seedGen 门控开 + 无 material：交给影子 worldgen，不与 authoritative FULL 抢跑
             if (SeedGenExecutor.getInstance().isGenerationGateOpen()
                     && !ShadowLightCompute.hasLocalPullBaseline(currentDimension, pos)) {
+                if (!SeedGenCompareGate.isAwaiting(currentDimension, pos)
+                        && submitLocalGeneration(shadow, currentDimension, pos, nowMs)) {
+                    submitted++;
+                }
                 continue;
             }
             // 预算只约束「本轮新 acquire」；同组（3×3 域）发完才换组。
@@ -708,7 +661,7 @@ public final class ShadowTrackingSession {
     private static final long OVD_SWEEP_INTERVAL_MS = 100L;
 
     private void sweepOvdRing(ShadowSeedServer shadow, long nowMs) {
-        if (shadow == null || virtualPlayer == null || currentDimension == null) {
+        if (shadow == null || trackingCenter == null || currentDimension == null) {
             return;
         }
         // 客户端已切维、tracking 未 reseat：禁止把旧维 OVD 柱推进新 ClientLevel（脚下闪主世界）。
@@ -732,7 +685,7 @@ public final class ShadowTrackingSession {
             return;
         }
         lastOvdSweepMs = nowMs;
-        ChunkPos center = virtualPlayer.chunkPosition();
+        ChunkPos center = trackingCenter;
         int diskTried = 0;
         int published = 0;
         int windowCells = 0;
@@ -941,63 +894,18 @@ public final class ShadowTrackingSession {
     }
 
     private void applyState(ShadowSeedServer shadow, PendingState state) {
-        if (!state.present() || state.dimension() == null) {
-            return;
-        }
-        if (virtualPlayer == null) {
-            ensureVirtualPlayer(shadow, state);
-            if (virtualPlayer == null) {
-                return;
-            }
-        }
-        ServerLevel target = shadow.level(state.dimension());
-        if (target == null) {
-            io.github.limuqy.mc.hassium.Constants.LOG.warn(
-                    "[SHADOW_TRACK] shadow level not assembled for {}; keep tracking {}",
-                    state.dimension(), currentDimension);
+        if (!state.present() || state.dimension() == null || shadow.level(state.dimension()) == null) {
             return;
         }
         boolean dimensionChanged = !state.dimension().equals(currentDimension);
-        ChunkPos newChunk = new ChunkPos((int) state.x() >> 4, (int) state.z() >> 4);
+        currentDimension = state.dimension();
+        trackingCenter = new ChunkPos((int) state.x() >> 4, (int) state.z() >> 4);
         if (dimensionChanged) {
-            io.github.limuqy.mc.hassium.Constants.LOG.info(
-                    "[SHADOW_TRACK] reseating virtual player {} -> {}",
-                    currentDimension, state.dimension());
-            reseatVirtualPlayer(shadow, state);
-            return;
-        }
-        ChunkPos lastChunk = virtualPlayer.chunkPosition();
-        if (newChunk.x != lastChunk.x || newChunk.z != lastChunk.z) {
-            // forge/neoforge：Entity.setPosRaw 在 isAddedToWorld 时会同步 level.getChunk(FULL)，
-            // 目标柱未加载即抛 "Should always be able to create a chunk!"。P5 接管把 tracking
-            // 压到 3x3 后跨 chunk 移动更容易踩空——跳过本拍，下一 pending 在柱就绪后重试。
-            try {
-#if MC_VER < MC_1_21_5
-                virtualPlayer.absMoveTo(state.x(), state.y(), state.z(), state.yRot(), state.xRot());
-#else
-                // 1.21.5+：absMoveTo/moveTo(5 参) 移除，teleportTo(3 参)+旋转同语义（绝对位置设置）
-                virtualPlayer.teleportTo(state.x(), state.y(), state.z());
-                virtualPlayer.setYRot(state.yRot());
-                virtualPlayer.setXRot(state.xRot());
-#endif
-            } catch (Throwable t) {
-                DebugLogger.warn(DebugLogger.LogType.NETWORK,
-                        "[SHADOW_TRACK] virtual player move deferred ({}, {}) targetChunk=({},{}) (dimension={})",
-                        state.x(), state.z(), newChunk.x, newChunk.z, state.dimension(), t);
-                return;
-            }
-            try {
-                ShadowPlayerCompat.moveVirtualPlayer(virtualPlayer);
-            } catch (Throwable t) {
-                DebugLogger.warn(DebugLogger.LogType.ASYNC, "[SHADOW_TRACK] move failed", t);
-            }
+            onTrackingDimensionChanged(state);
         }
     }
 
-    /**
-     * 切维后旧维度的选柱/在途 pull/boot 盘面全部作废，按新落点重新铺权威光盘。
-     * 探针 trace 也按维度会话重置，避免返主世界读到进服那一轮的 stale overworld 计数。
-     */
+    /** 切维后清理旧维度的选柱、在途 pull 与探针状态。 */
     private void onTrackingDimensionChanged(PendingState state) {
         sweepInFlight.clear();
         ovdCounted.clear();
@@ -1006,85 +914,11 @@ public final class ShadowTrackingSession {
         lastOvdSweepMs = 0L;
         homeChunk = new ChunkPos((int) state.x() >> 4, (int) state.z() >> 4);
         lastChunkTickMs = 0L;
-        appliedViewDistance = -1;
         SmokeChunkTrace.reset();
         client().resetMeshCompileLog();
         ShadowLightCompute.onClientDimensionChanged();
         ShadowPullClient.onClientDimensionChanged();
         client().onDimensionChanged();
-    }
-
-    /** teleport 失败时拆掉旧虚拟玩家，按 {@link #ensureVirtualPlayer} 在目标维度重坐。 */
-    private void reseatVirtualPlayer(ShadowSeedServer shadow, PendingState state) {
-        ServerPlayer old = virtualPlayer;
-        virtualPlayer = null;
-        currentDimension = null;
-        if (old != null) {
-            try {
-                ShadowPlayerCompat.removeVirtualPlayer(shadow, old);
-            } catch (Throwable t) {
-                io.github.limuqy.mc.hassium.Constants.LOG.warn(
-                        "[SHADOW_TRACK] old virtual player remove failed", t);
-            }
-        }
-        onTrackingDimensionChanged(state);
-        ensureVirtualPlayer(shadow, state);
-    }
-
-    /** 创建虚拟玩家并进入 tracking（仅影子线程；失败置 createFailed 会话降级）。 */
-    private void ensureVirtualPlayer(ShadowSeedServer shadow, PendingState state) {
-        ServerLevel level = shadow.level(state.dimension());
-        if (level == null) {
-            io.github.limuqy.mc.hassium.Constants.LOG.warn(
-                    "[SHADOW_TRACK] shadow level not assembled for {}; session deferred", state.dimension());
-            return;
-        }
-        io.github.limuqy.mc.hassium.Constants.LOG.info(
-                "[SHADOW_TRACK] creating virtual player (dimension={}, serverRadius={}, effectiveClientVD={})",
-                state.dimension(), serverViewDistance, effectiveClientVD);
-        try {
-            int viewDistance = resolveViewDistance();
-            ShadowPlayerCompat.setChunkViewDistance(level, viewDistance);
-            appliedViewDistance = viewDistance;
-            net.minecraft.network.Connection connection = ShadowPlayerCompat.createConnectionStub();
-            ServerPlayer player = ShadowPlayerCompat.createVirtualPlayer(shadow, level);
-            // 先同步位置再加入世界（不走移动 API）：forge patch 的 Entity.setPosRaw 在
-            // isAddedToWorld() && !isClientSide 时会同步 level.getChunk(FULL) 等待 chunk
-            // future，影子端该柱未生成会死锁影子主循环；未加入世界时该分支跳过，
-            // fabric 原版路径无此调用，行为不变。
-            player.setPosRaw(state.x(), state.y(), state.z());
-            player.setYRot(state.yRot());
-            player.setXRot(state.xRot());
-            ShadowPlayerCompat.placePlayer(shadow, connection, player);
-            // 1.21.6+ placeNewPlayer 的 snapTo 会用共享出生角覆盖朝向（位置已由
-            // adjustSpawnLocation 覆盖保持）。朝向不参与 tracking，仅作状态保真；
-            // setYRot/setXRot 不触发 chunk 加载，加入世界后重申安全。
-            player.setYRot(state.yRot());
-            player.setXRot(state.xRot());
-            try {
-                ShadowPlayerCompat.moveVirtualPlayer(player);
-            } catch (Throwable t) {
-                io.github.limuqy.mc.hassium.Constants.LOG.warn(
-                        "[SHADOW_TRACK] initial move failed", t);
-            }
-            virtualPlayer = player;
-            currentDimension = state.dimension();
-            // 基准点取虚拟玩家坐下的一刻：此后任何旅行都以它为轴心铺静态盘面
-            homeChunk = new ChunkPos(player.chunkPosition().x, player.chunkPosition().z);
-            DebugLogger.info(DebugLogger.LogType.ASYNC,
-                    "[SHADOW_TRACK] virtual player tracking session started (dimension={}, "
-                            + "viewDistance={}, serverRadius={}) S1-ticket-only",
-                    currentDimension, viewDistance, serverViewDistance);
-        } catch (Throwable t) {
-            createFailed = true;
-            logCreateFailed(t);
-        }
-    }
-
-    private int resolveViewDistance() {
-        // S1：影子票半径 = ServerVD（不加载完整 chebyshev 角区）
-        int base = serverViewDistance > 0 ? serverViewDistance : DEFAULT_VIEW_DISTANCE;
-        return Math.min(base, MAX_VIEW_DISTANCE);
     }
 
     /**
@@ -1193,39 +1027,12 @@ public final class ShadowTrackingSession {
     }
 
     /**
-     * 服务端半径晚到/变化（登录包 chunkRadius、VD 切换）：影子主循环线程安全应用。
-     * {@code setChunkViewDistance} 会走原版 {@code ChunkMap.setViewDistance} 的
-     * 全 holder 重跟踪，晚应用可自愈已放置玩家的选柱集合。
-     */
-    private void applyViewDistanceIfChanged(ShadowSeedServer shadow) {
-        int desired = resolveViewDistance();
-        if (desired == appliedViewDistance) {
-            return;
-        }
-        ServerLevel level = shadow.level(currentDimension);
-        if (level == null) {
-            return;
-        }
-        appliedViewDistance = desired;
-        try {
-            ShadowPlayerCompat.setChunkViewDistance(level, desired);
-            DebugLogger.info(DebugLogger.LogType.ASYNC,
-                    "[SHADOW_TRACK] shadow view distance applied (viewDistance={}, serverRadius={})",
-                    desired, serverViewDistance);
-        } catch (Throwable t) {
-            DebugLogger.warn(DebugLogger.LogType.ASYNC, "[SHADOW_TRACK] view distance apply failed", t);
-        }
-        // R4：VD 应用后按当前权威窗扫描注入表，窗外柱入 reclaim（原版票掉出→save→离内存）。
-        enqueueOutOfWindowInjectedForReclaim(shadow);
-    }
-
-    /**
      * 原版生命周期（R4）：保留域外的注入柱登记离开时刻，由 reclaim 线程
      * {@link ShadowColumnStore#flushAndEvict}（type126 先落盘再摘表）。
      * <b>不得</b>在影子主循环内直接 unload（flush 会等主循环 → 自死锁）。
      */
     private void enqueueOutOfWindowInjectedForReclaim(ShadowSeedServer shadow) {
-        if (shadow == null || virtualPlayer == null || currentDimension == null
+        if (shadow == null || trackingCenter == null || currentDimension == null
                 || serverViewDistance <= 0) {
             return;
         }
@@ -1456,6 +1263,33 @@ public final class ShadowTrackingSession {
         }
     }
 
+    private boolean submitLocalGeneration(ShadowSeedServer shadow, String dimension, ChunkPos pos,
+                                          long nowMs) {
+        if (shadow.generationInFlight() >= ShadowSeedServer.generationMaxInFlight()
+                || !markPullInFlight(dimension, pos, nowMs)) {
+            return false;
+        }
+        shadow.generateChunkAsync(dimension, pos, (generatedDimension, chunk) -> {
+            if (chunk == null) {
+                clearPullInFlight(generatedDimension, pos);
+                SeedGenCompareGate.clear(generatedDimension, pos);
+                VanillaAlignedChunkProvider.failAcquire(generatedDimension, pos);
+                requestPullEligible(generatedDimension, pos, true);
+                return;
+            }
+            // 【2026-09-21 顺序修正】生成的在途语义到此结束：`sweepInFlight` 是**生成与 pull
+            // 共用**的一张表，而下面 onChunkMaterialized 里要立刻发 compare —— 它自己也走
+            // `markPullInFlight`。若这里不先释放，onChunkMaterialized 的两次 requestPullEligible
+            // 都会因「已在途」而返回 false ⇒ 一个请求都发不出去，而 SeedGenCompareGate.mark 已经
+            // 置了 AWAITING（该闸无超时/无自愈）⇒ 泵的 `isAwaiting → continue` 与交付闸
+            // 永久跳过本柱 = **玩家脚下中心空洞**（实测 seedGen 场 `seedGen compare requested`=0）。
+            clearPullInFlight(generatedDimension, pos);
+            onChunkMaterialized(generatedDimension, pos, chunk);
+            VanillaAlignedChunkProvider.completeAcquire(generatedDimension, pos, chunk);
+        });
+        return true;
+    }
+
     /**
      * R4：仅在权威窗内且会话就绪时向真服 pull。
      *
@@ -1553,40 +1387,17 @@ public final class ShadowTrackingSession {
         }
     }
 
-    private static void logCreateFailed(Throwable t) {
-        io.github.limuqy.mc.hassium.Constants.LOG.warn(
-                "Hassium: shadow virtual player tracking session failed; "
-                        + "falling back to server-push selection", t);
-    }
-
-    /** 断连/关停/新连接清理：清会话引用；旧虚拟玩家的 vanilla 登出式移除
-     *  （实体/玩家票/ChunkMap 簿记/playerdata）交由影子主循环线程执行——
-     *  本方法在客户端主线程调用，与影子簿记并发移除会自毁主循环。
-     *  R2 复用 park 实例时若不移出，旧玩家仍持有全部 tracking → 新玩家无 in-range
-     *  转换 → 桥不触发 → 真实客户端新世界黑洞。任意线程可调。 */
+    /** 断连、关停或新连接时清会话引用与未完成 acquire。任意线程可调。 */
     public static void reset() {
         ShadowTrackingSession s = INSTANCE;
-        ShadowSeedServer server = s.boundServer;
-        ServerPlayer player = s.virtualPlayer;
-        if (server != null && player != null) {
-            s.pendingRemoval = new PendingRemoval(server, player);
-        }
         s.pending = null;
         s.serverViewDistance = -1;
         s.effectiveClientVD = -1;
-        s.appliedViewDistance = -1;
-        // boundServer 置空后，影子主循环的「实例变化」分支（consumeOnShadowLoop 顶部）
-        // 会在主循环线程上清掉 virtualPlayer/currentDimension —— 不得在此（客户端主线程
-        // onLogin）直接置空：主循环簿记/选柱扫描途中读到「玩家非空、维度已空」的半清状态
-        // 会 NPE（1.21.11 fabric R2 实证 DimensionKey.key(null,…) → [SHADOW_LOOP] crashed、
-        // R2 applied=0）。其余字段保持同步写入：serverViewDistance 等由随后的 R2 视距更新
-        // 覆盖，异步清理会把它抹掉（R2 OVD 窗不开 → ovdLoaded=0）。
         s.boundServer = null;
-        s.createFailed = false;
+        s.currentDimension = null;
+        s.trackingCenter = null;
         s.sweepInFlight.clear();
         s.outsideSinceMs.clear();
-        // Provider 在途 future / 悬置 load 必须随会话清空：R2 join 旧 future 会让
-        // scheduleChunkLoad 悬置 holder 永不完成（R2 landed 只有 71 的根因之一）。
         VanillaAlignedChunkProvider.clearAll();
         ShadowChunkMapCompat.clearSuspendedLoads();
         io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate.clearAll();
@@ -1599,23 +1410,4 @@ public final class ShadowTrackingSession {
         s.lastChunkTickMs = 0;
     }
 
-    /** 影子主循环执行 vanilla 登出式移除；实例已被关停/重建则跳过（旧 world 随实例丢弃）。 */
-    private void drainPendingRemoval() {
-        PendingRemoval removal = pendingRemoval;
-        if (removal == null) {
-            return;
-        }
-        pendingRemoval = null;
-        if (ShadowServerRegistry.getInstance().get() != removal.server()) {
-            return;
-        }
-        try {
-            ShadowPlayerCompat.removeVirtualPlayer(removal.server(), removal.player());
-            io.github.limuqy.mc.hassium.Constants.LOG.info(
-                    "[SHADOW_TRACK] virtual player removed from shadow world");
-        } catch (Throwable t) {
-            io.github.limuqy.mc.hassium.Constants.LOG.warn(
-                    "[SHADOW_TRACK] virtual player removal failed", t);
-        }
-    }
 }

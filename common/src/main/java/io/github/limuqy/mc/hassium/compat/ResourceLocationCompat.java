@@ -55,6 +55,30 @@ public final class ResourceLocationCompat {
     }
 
     /**
+     * 单字符串解析，非法输入返回 {@code null}（对应 vanilla {@code ResourceLocation.tryParse}）。
+     * <p>
+     * 复用 {@link #create(String)} 的各版本解析路径，把它抛出的
+     * {@code ResourceLocationException} 归一为 {@code null}——1.20.1 的单参构造器与
+     * 1.21.1+ 的 {@code parse} 都是「非法即抛」，没有跨版本一致的 try 版本。
+     */
+    public static
+#if MC_VER < MC_1_21_11
+    ResourceLocation
+#else
+    Identifier
+#endif
+    tryCreate(String location) {
+        if (location == null) {
+            return null;
+        }
+        try {
+            return create(location);
+        } catch (RuntimeException ignored) {
+            return null;
+        }
+    }
+
+    /**
      * {@link PacketId} → vanilla 类型（加载器边界转换）。
      * 业务代码持有 {@link PacketId}，仅在注册/发送等需要 vanilla 类型的位置调用本方法。
      */

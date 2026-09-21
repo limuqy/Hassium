@@ -193,7 +193,7 @@ public class MixinChunkMap {
 
 #endif
 
-    /** 影子虚拟玩家交付桥：1.20.1={@code playerLoadedChunk}，1.21+={@code onChunkReadyToSend}。 */
+    /** 影子区块物化桥：1.20.1={@code playerLoadedChunk}，1.21+={@code onChunkReadyToSend}。 */
     @Unique
     private void hassium$notifyShadowMaterialized(LevelChunk chunk) {
         if (!RuntimeServerContext.isShadowServerContext() || chunk == null) {

@@ -103,18 +103,20 @@ public final class SmokeChunkTrace {
         } catch (Throwable ignored) {
             // 配置不可读：按冻结处理，继续走会话门
         }
-        // OVD 冻结：VD≤0 或虚拟玩家未就绪时**不记录**。
-        // isDeliverableToClient 在 center==null 时会放行全部（交付门语义），
-        // 若用作 trace 候选门，R2 join 窗口会把整盘注入记成 expected
-        //（phaseA4：tracked=1384 vs present=511）。
+        // OVD 冻结：VD≤0 或真实客户端状态尚未同步到影子循环时不记录。
+        // isDeliverableToClient 在 center==null 时会放行全部；若用作 trace 候选门，
+        // join 窗口会把整盘注入记成 expected。
         ShadowTrackingSession session = ShadowTrackingSession.getInstance();
-        if (ShadowTrackingSession.serverViewDistance() <= 0 || !session.hasVirtualPlayer()) {
+        if (ShadowTrackingSession.serverViewDistance() <= 0 || !session.hasTrackingState()) {
             return false;
         }
         return ShadowTrackingSession.isDeliverableToClient(pos.x, pos.z);
     }
 
     public static void recordClientApplied(String dimension, ChunkPos pos) {
+        if (!ENABLED || pos == null || !DimensionKey.isCacheableDimension(dimension)) {
+            return;
+        }
         record(CLIENT_APPLIED, CLIENT_APPLIED_AT_MS, dimension, pos);
     }
 

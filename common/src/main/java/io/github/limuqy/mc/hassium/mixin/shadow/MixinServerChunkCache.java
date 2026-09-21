@@ -23,8 +23,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  * 的光照即收集 → 帧尾攒批打包回传）已随光桥整体删除。光照交付改回 vanilla 语义——
  * 光随整柱包一次性下发（{@code SeedGenChunkCodec.buildPacket} 走
  * {@code new ClientboundLevelChunkWithLightPacket(chunk, engine, null, null)}），
- * 经 {@code MixinPlayerChunkSender} / {@code MixinChunkMap} / {@code MixinServerPlayer}
- * 的官方通道直接转发真实客户端；影子服务端无真实连接，不再需要自建 section 级回传。
+ * 经 {@code MixinChunkMap} / {@code MixinServerPlayer} 的影子交付桥转发真实客户端；
+ * 影子服务端无真实连接，不再需要自建 section 级回传。
  * 详见 {@code docs/client-chunk-light-flow.md} §7。
  * <p>
  * 门控：仅影子服务端上下文生效（{@link RuntimeServerContext#isShadowServerContext()}）；

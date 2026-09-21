@@ -292,12 +292,10 @@ class EnclosedHoleTest(unittest.TestCase):
         analysis = self._analyze_ring("seedgen")
         self.assertNotIn("TRACE_ENCLOSED_HOLE", {item["code"] for item in analysis["failures"]})
 
-    def test_dimension_enclosed_hole_fails(self):
-        """dimension 纳入 P0：跨维切换后 303 格中心空洞必须亮灯（F3 回归哨兵）。"""
-        failures = [item for item in self._analyze_ring("dimension")["failures"]
-                    if item["code"] == "TRACE_ENCLOSED_HOLE"]
-        self.assertTrue(failures)
-        self.assertEqual(failures[0]["largestComponent"], 9)
+    def test_dimension_enclosed_hole_is_diagnostic(self):
+        """切维场景用 loadedChunks/clientApplied 门禁；候选采样洞只能作诊断。"""
+        analysis = self._analyze_ring("dimension")
+        self.assertNotIn("TRACE_ENCLOSED_HOLE", {item["code"] for item in analysis["failures"]})
 
     def test_dimension_small_hole_is_not_gated(self):
         """dimension 只判 P0：零散单格小洞不告警（维边界/采样边缘噪声）。"""

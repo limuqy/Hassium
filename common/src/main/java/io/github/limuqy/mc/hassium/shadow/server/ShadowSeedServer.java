@@ -344,15 +344,41 @@ public class ShadowSeedServer extends MinecraftServer {
     }
 
     /**
-     * ③ 声明驱动本地生成的投递线程池（小池：worldgen 本身在 ChunkMap 生成链的
+     * ③ 声明驱动本地生成的投递线程池（worldgen 本身在 ChunkMap 生成链的
      * {@code ShadowWorldgenExecutor} worker 上跑，这里只是等 future + 回主循环）。
+     * <p>
+     * 线程数**自动**（不手动指定）：与影子 worldgen 池同口径（{@code processors - 2}，给渲染留核）。
+     * 池内线程只在 {@code future.isDone()} 上 10ms 轮询等待，故池大小 = 并发生成上限。
      */
     private final java.util.concurrent.ExecutorService localGenExecutor =
-            java.util.concurrent.Executors.newFixedThreadPool(4, r -> {
-                Thread t = new Thread(r, "hassium-local-gen");
-                t.setDaemon(true);
-                return t;
-            });
+            java.util.concurrent.Executors.newFixedThreadPool(
+                    ShadowWorldgenExecutor.workerCount(Runtime.getRuntime().availableProcessors()),
+                    r -> {
+                        Thread t = new Thread(r, "hassium-local-gen");
+                        t.setDaemon(true);
+                        return t;
+                    });
+
+    /** 本地生成在途计数（钉了 FORCED 票、尚未回调的柱数）。 */
+    private final java.util.concurrent.atomic.AtomicInteger generationInFlight =
+            new java.util.concurrent.atomic.AtomicInteger();
+
+    /**
+     * 本地生成在途上限（常量，语义照抄 C2ME {@code SchedulingManager.maxScheduled = 并行度 × 2}）。
+     * <p>
+     * 为什么必须有：每次生成本地都要钉一张 FORCED 票（radius 0）并占一个 localGen 线程；
+     * 无上限时首进服一次可钉上千张票、把 DistanceManager 压满。超限时**不提交**（不完成 future），
+     * 由波前下一轮重试（波前每 200ms 重扫整个计算域）。
+     */
+    public static int generationMaxInFlight() {
+        return Math.max(4, ShadowWorldgenExecutor.workerCount(
+                Runtime.getRuntime().availableProcessors()) * 2);
+    }
+
+    /** 当前在途本地生成数（波前据此决定本轮是否还提交生成）。 */
+    public int generationInFlight() {
+        return generationInFlight.get();
+    }
 
     /**
      * 声明驱动本地生成（③，2026-09-13）：worker 线程执行 {@link #generateChunk}（同步等 vanilla
@@ -368,18 +394,28 @@ public class ShadowSeedServer extends MinecraftServer {
             java.util.function.BiConsumer<String, LevelChunk> onDone) {
         ServerLevel pinLevel = level(dimension);
         pinForcedTicket(pinLevel, pos);
+        generationInFlight.incrementAndGet();
         localGenExecutor.execute(() -> {
-            LevelChunk chunk = generateChunk(dimension, pos);
+            LevelChunk chunk;
+            try {
+                chunk = generateChunk(dimension, pos);
+            } catch (Throwable t) {
+                LOGGER.warn("Hassium: local generate failed ({}, {}) dim={}", pos.x, pos.z, dimension, t);
+                chunk = null;
+            }
+            final LevelChunk result = chunk;
             try {
                 this.execute(() -> {
                     try {
-                        onDone.accept(dimension, chunk);
+                        onDone.accept(dimension, result);
                     } finally {
                         unpinForcedTicket(pinLevel, pos);
+                        generationInFlight.decrementAndGet();
                     }
                 });
             } catch (java.util.concurrent.RejectedExecutionException e) {
                 // 主循环已停（断连竞态）：票随影子世界销毁
+                generationInFlight.decrementAndGet();
             }
         });
     }
@@ -1027,7 +1063,8 @@ public class ShadowSeedServer extends MinecraftServer {
             return;
         }
         net.minecraft.world.level.block.entity.BlockEntity be = chunk.getBlockEntity(packet.getPos());
-        if (be == null || packet.getTag() == null) {
+        if (be == null || packet.getTag() == null || !be.getType().equals(packet.getType())) {
+            invalidateChunkContent(dimension, java.util.Collections.singleton(key));
             return;
         }
         BlockEntityCompat.loadFromTag(be, packet.getTag(), level.registryAccess());
@@ -1609,6 +1646,67 @@ public class ShadowSeedServer extends MinecraftServer {
     private net.minecraft.nbt.CompoundTag serializeChunkForSave(ServerLevel level, LevelChunk chunk) {
         return ShadowServerCompat.serializeChunk(level, chunk);
     }
+
+    /**
+     * 落盘前剔除「pending BE NBT 与方块状态不一致」的条目（vanilla 同语义前置）。
+     *
+     * <p>背景（2026-09-21 冒烟实测）：本地生成柱的 dungeon feature 放置 spawner
+     * 方块 + BE 后，该方块可能被 vanilla 生成链后续步骤（如 lake feature）改写为
+     * {@code cave_air}，而 {@code ProtoChunk.pendingBlockEntities} 的 NBT 残留，
+     * 经 {@code protoChunkToFullChunk} 迁移进 {@code LevelChunk}。影子 flush 序列化
+     * {@code ChunkSerializer.write} → {@code getBlockEntityNbtForSaving} →
+     * {@code promotePendingBlockEntity} 时 vanilla 校验失败，打
+     * {@code ERROR Failed to create block entity}（原版专用服同样存在，非 Hassium 缺陷），
+     * 随后跳过该 BE——落盘 NBT 不含它。
+     *
+     * <p>本方法把「报错后跳过」提前为「序列化前剔除」：落盘结果与 vanilla 行为
+     * 完全一致，仅消除 ERROR 噪音（冒烟日志门禁不再误伤）。判据收口在
+     * {@link io.github.limuqy.mc.hassium.compat.BlockEntityCompat#canPromote}——
+     * 与 vanilla {@code BlockEntity.loadStatic} 同源（{@code id} 能解析出注册表类型，
+     * 且 {@code BlockEntityType.isValid(state)} 成立）。
+     * <p><b>空/非法 id 也要剔除</b>：vanilla 对该分支打的是 ERROR 级
+     * {@code Block entity has invalid type}（不是 warn），同样污染门禁。
+     * {@code DUMMY} 例外——vanilla promote 有独立分支（不查注册表），必须交回 vanilla。
+     *
+     * <p>调用方必须持 {@code chunkLock}（{@code serializeInjectedColumnLocked} 已持）。
+     */
+    private static void pruneInconsistentPendingBlockEntities(LevelChunk chunk, ChunkPos pos) {
+        try {
+            java.util.Map<BlockPos, net.minecraft.nbt.CompoundTag> pending =
+                    ((io.github.limuqy.mc.hassium.mixin.shadow.LevelChunkPendingBeAccessor) (Object) chunk)
+                            .hassium$getPendingBlockEntities();
+            if (pending == null || pending.isEmpty()) {
+                return;
+            }
+            java.util.List<BlockPos> invalid = null;
+            for (java.util.Map.Entry<BlockPos, net.minecraft.nbt.CompoundTag> e : pending.entrySet()) {
+                // 判据收口在 compat：1.21.5 的 getString→Optional、1.21.11 的 Identifier 改名
+                // 都在那里吸收，本类不加 #if（manifold 规则）。
+                boolean promotable;
+                try {
+                    promotable = io.github.limuqy.mc.hassium.compat.BlockEntityCompat
+                            .canPromote(e.getValue(), chunk.getBlockState(e.getKey()));
+                } catch (Throwable probeFailure) {
+                    promotable = false;
+                }
+                if (!promotable) {
+                    if (invalid == null) {
+                        invalid = new java.util.ArrayList<>();
+                    }
+                    invalid.add(e.getKey());
+                }
+            }
+            if (invalid != null) {
+                for (BlockPos bp : invalid) {
+                    pending.remove(bp);
+                }
+                LOGGER.debug("Hassium: Shadow flush pruned {} inconsistent pending block entities at {}",
+                        invalid.size(), pos);
+            }
+        } catch (Throwable t) {
+            LOGGER.debug("Hassium: Shadow flush pending BE prune failed for {}", pos, t);
+        }
+    }
     /** 指定维度注入柱序列化（flush 回调；hash 缺失时回填带维度）。
      * PalettedContainer 须与预览打包 / hash 比对持同一把 {@code chunkLock}，
      * 否则 1.20.1 ThreadingDetector 会刷 ERROR 并把 SeedGen 打包打爆。 */
@@ -1630,6 +1728,7 @@ public class ShadowSeedServer extends MinecraftServer {
         if (chunk == null) {
             return null;
         }
+        pruneInconsistentPendingBlockEntities(chunk, pos);
         try {
             if (io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes.get(dimension, pos) == null) {
                 try {
@@ -1933,10 +2032,10 @@ public class ShadowSeedServer extends MinecraftServer {
                 // 存活性探针（诊断）：只在前 2 万轮各打一条，用于区分「影子主循环静默停摆」
                 // 与「已正常推进」。归入 debug 开关，生产默认不出。
                 DebugLogger.info(DebugLogger.LogType.ASYNC,
-                        "[SHADOW_LOOP] alive loops={} shadowPlayer={} trackingDim={}",
+                        "[SHADOW_LOOP] alive loop={} trackingState={} dimension={}",
                         loopCount,
                         io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession
-                                .getInstance().hasVirtualPlayer(),
+                                .getInstance().hasTrackingState(),
                         io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession
                                 .getInstance().currentDimension());
             }

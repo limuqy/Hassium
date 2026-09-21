@@ -109,6 +109,7 @@ class NetworkStatsBandwidthTest {
         // 数据包：真发 1000B wire + 分片全量等价 4918B（分片不再另列，直接并入数据包）
         m.recordVanillaBytesReceived(1_000L);
         m.recordSectionDeltaReceived(1, VanillaZlibEstimator.estimate((int) NetworkStats.ESTIMATED_CHUNK_BYTES));
+        m.recordCacheDeltaSaved(NetworkStats.ESTIMATED_CHUNK_BYTES);
         // 本地重算：2 个 SeedGen 本地生成
         m.recordLocallyGeneratedChunk(NetworkStats.ESTIMATED_CHUNK_BYTES);
         m.recordLocallyGeneratedChunk(NetworkStats.ESTIMATED_CHUNK_BYTES);
@@ -117,12 +118,11 @@ class NetworkStatsBandwidthTest {
         m.recordCacheFullHitNetworkReplaced(NetworkStats.ESTIMATED_CHUNK_BYTES);
         m.recordCacheFullHit(NetworkStats.ESTIMATED_CHUNK_BYTES);
         m.recordCacheFullHit(NetworkStats.ESTIMATED_CHUNK_BYTES);
-        // 光照：1 直连命中 + 4 影子复用 + 1 本地重算
+        // 光照：1 直连命中 + 4 影子复用 + 1 成功落地的分段增量重算
         m.recordLightCacheHit(NetworkStats.ESTIMATED_LIGHT_BYTES);
         for (int i = 0; i < 4; i++) {
             m.recordLightReuseShadow(NetworkStats.ESTIMATED_LIGHT_BYTES);
         }
-        m.recordLightCacheMiss(NetworkStats.ESTIMATED_LIGHT_BYTES);
         m.recordActualBytesReceived(1_000L);
 
         long chunkWire = VanillaZlibEstimator.estimate((int) NetworkStats.ESTIMATED_CHUNK_BYTES);

@@ -3152,8 +3152,7 @@ public final class ShadowLightCompute {
         int chunkZ = item.chunkPacket.getZ();
         // 维度闸（投递点复检）：publish 时已按客户端维拒过，但柱可能在 ready 队列里等到
         // 客户端切维之后才被投递——原版区块包**不带维度字段**，handleLevelChunkWithLight
-        // 会把它落进「当前」level（实测：TP 进 TF 后 overworld 柱被落进暮色森林）。
-        // 丢弃即可：影子虚拟玩家离开旧维度会 untrackChunk，重进时重新 track → 重新投递。
+        // 会把它落进「当前」level。丢弃即可；显式 tracking 波前在新维度重新选柱并投递。
         if (clientDimensionMismatch(entry.key().dimension())) {
             DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
                     "[SHADOW_CHUNK] drop cross-dimension chunk ({}, {}) dim={} (client switched)",
@@ -3178,14 +3177,10 @@ public final class ShadowLightCompute {
             io.github.limuqy.mc.hassium.metrics.NetworkStats.recordChunkApplied(chunkX, chunkZ);
             accountAuthoritativeLanded(entry.key().dimension(), chunkPos, item.traceOrigin());
             client().noteChunkApplyActivity();
-            // 与原版对齐：apply 后标 dirty 触发 mesh 重建。isApplyInProgress 期间
-            // 原版 handler 可能跳过 dirty 标记，导致柱进缓存不进渲染队列（虚空）。
             if (mc.level != null) {
                 client().markChunkSectionsDirty(mc.level, chunkX, chunkZ);
             }
             client().probeChunkState(chunkPos, mc.level, "shadow");
-            // 整柱包自带光、通常无后续 LightUpdate：必须排队 post-apply 复检，
-            // 否则 darkRegression 只盯 source=light，回程空光整柱在门禁里不可见。
             client().scheduleProbeRecheck(chunkPos);
             return true;
         }

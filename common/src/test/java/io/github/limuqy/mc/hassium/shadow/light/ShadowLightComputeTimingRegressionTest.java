@@ -212,8 +212,8 @@ class ShadowLightComputeTimingRegressionTest {
     }
 
     @Test
-    @DisplayName("落地兜底：内存复用按次记缓存命中，直推记全量（网络侧仍去重）")
-    void authoritativeLandedAccountsByOriginWithoutDoubleCount() {
+    @DisplayName("落地兜底：本地源交付不虚增缓存命中，直推记全量")
+    void authoritativeLandedAccountsNetworkOriginWithoutInflatingCacheHit() {
         NetworkStats.reset();
         NetworkStats.setEnabled(true);
         try {
@@ -227,8 +227,8 @@ class ShadowLightComputeTimingRegressionTest {
             ShadowLightCompute.accountAuthoritativeLanded(DimensionKey.OVERWORLD, push,
                     TraceOrigin.SERVER_PUSH);
 
-            assertEquals(2, NetworkStats.getMetrics().getCacheHitFullChunkCount(),
-                    "两次缓存交付各计一次（允许重复，对齐原版重推口径）");
+            assertEquals(0, NetworkStats.getMetrics().getCacheHitFullChunkCount(),
+                    "本地源交付不是服务端 UNCHANGED 裁决，不得虚增流量节省");
             assertEquals(1, NetworkStats.getMetrics().getFullChunkRequestCount(),
                     "网络侧仍按柱去重：同一柱的一次网络落地不重复计新增/过期");
         } finally {
@@ -265,8 +265,8 @@ class ShadowLightComputeTimingRegressionTest {
     }
 
     @Test
-    @DisplayName("分段增量落地不得记全量 miss；磁盘复用记命中")
-    void deltaLandDoesNotCountAsFullRequestAndDiskCountsAsHit() {
+    @DisplayName("分段增量落地不得记全量 miss；本地源交付不虚增缓存命中")
+    void deltaLandDoesNotCountAsFullRequestOrInflateCacheHit() {
         NetworkStats.reset();
         NetworkStats.setEnabled(true);
         try {
@@ -276,7 +276,7 @@ class ShadowLightComputeTimingRegressionTest {
                     TraceOrigin.SECTION_DELTA);
             ShadowLightCompute.accountAuthoritativeLanded(DimensionKey.OVERWORLD, disk,
                     TraceOrigin.SHADOW_DISK_CACHE);
-            assertEquals(1, NetworkStats.getMetrics().getCacheHitFullChunkCount());
+            assertEquals(0, NetworkStats.getMetrics().getCacheHitFullChunkCount());
             assertEquals(0, NetworkStats.getMetrics().getFullChunkRequestCount());
             assertEquals(0, NetworkStats.getMetrics().getNewFullChunkRequestCount());
         } finally {

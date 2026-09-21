@@ -267,22 +267,17 @@ def _trace_analysis(probe: dict[str, Any]) -> dict[str, Any]:
 
 
 def _held_positions(probe: dict[str, Any]) -> set[tuple[int, int]]:
-    """门禁口径的「客户端已持有柱」——空间类门禁的输入人口。
+    """空间门禁只接受探针实测仍驻留的柱。
 
-    `clientCache.actualPresent` 是**本轮投递候选**的抽样（`SmokeProbeWriter` 的候选优先序
-    `networkReceived` → `clientApplied` → `shadowReady`），其人口在「本轮新收柱」与「全部已应用柱」
-    之间随轮次跳变。把它当「客户端持有集合」做包围盒洪水填充，会把**上一轮已持有、本轮未再投递**
-    的柱整片误判成封闭空洞——1.21.1 R2 实测：`actualPresent=407`（= 本轮 `networkReceived`），
-    算出的 46 格「空洞」**全部**落在 `chunkTrace.clientApplied` 内（= `loadedChunks` = 1089）。
-    故改取 `clientApplied`（客户端已应用柱；R1/R2 各版本实测恒等于 `loadedChunks`），
-    仅在缺失时回退 `actualPresent`（旧客户端 probe 无 `clientApplied` 时保持既有口径）。
-    注意 `clientApplied` 是本会话**累计** apply，语义上「已持有 ⊇ 累计应用」；经典站桩场景无卸载
-    （实测两者恒等），移动会话的合法卸载另由既有 `_MOBILE_TRACE_DIAGNOSTIC_CODES` 口径判。
+    ``chunkTrace.clientApplied`` 是本会话累计事件，不代表柱在 probe 时仍在
+    ``ClientChunkCache``。玩家移动/重定位后，累计集合能把已卸载的 3×3 中心围成假洞；
+    ``actualPresent`` 已逐个调用 ``cache.getChunk(..., false)`` 验证，因而是唯一适合
+    当前驻留几何检查的集合。旧 probe 没有该字段时，退回累计落地集合。
     """
-    applied = _positions(_obj(probe.get("chunkTrace")).get("clientApplied"))
-    if applied:
-        return applied
-    return _positions(_obj(probe.get("clientCache")).get("actualPresent"))
+    actual = _positions(_obj(probe.get("clientCache")).get("actualPresent"))
+    if actual:
+        return actual
+    return _positions(_obj(probe.get("chunkTrace")).get("clientApplied"))
 
 
 def _spatial_check(probe: dict[str, Any]) -> dict[str, Any]:
@@ -307,6 +302,7 @@ def _spatial_check(probe: dict[str, Any]) -> dict[str, Any]:
             diagonal.append([x, z])
     return {"available": True, "observed": len(observed), "expected": len(expected),
             "cardinalHoles": sorted(cardinal), "diagonalHoles": sorted(diagonal)}
+
 
 
 def _enclosed_holes(points: set[tuple[int, int]]) -> set[tuple[int, int]]:
@@ -344,8 +340,8 @@ def _enclosed_holes(points: set[tuple[int, int]]) -> set[tuple[int, int]]:
 
 def _enclosed_components(holes: set[tuple[int, int]]) -> list[int]:
     """空洞的 4-连通分块大小（降序）——连续成片的洞才是虚空，零散单格多为采样边缘。"""
-    remaining = set(holes)
     sizes: list[int] = []
+    remaining = set(holes)
     while remaining:
         seed = remaining.pop()
         stack = [seed]
@@ -363,7 +359,7 @@ def _enclosed_components(holes: set[tuple[int, int]]) -> list[int]:
 
 
 def _hole_check(probe: dict[str, Any]) -> dict[str, Any]:
-    """封闭空洞诊断：口径见 _enclosed_holes（人口见 _held_positions），门禁在 analyze_result 里按场景分级。"""
+    """封闭空洞诊断：口径见 _enclosed_holes（人口见 _held_positions）。"""
     observed = _held_positions(probe)
     if not observed:
         return {"available": False,
@@ -374,7 +370,6 @@ def _hole_check(probe: dict[str, Any]) -> dict[str, Any]:
             "largestComponent": components[0] if components else 0,
             "components": components[:_ENCLOSED_COMPONENT_LIMIT],
             "enclosedHoles": _position_report(holes)}
-
 def _late_near_player(probe: dict[str, Any], threshold_ms: int = 10_000) -> list[dict[str, Any]]:
     """发现近玩家柱相对本轮首批落地长期延迟，覆盖 full/cache/delta 三条路径。"""
     trace = _obj(probe.get("chunkTrace"))
@@ -489,19 +484,20 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
                 warnings.append(_failure("LATE_NEAR_PLAYER_CHUNK", severity="P1", round=number,
                                          thresholdMs=10_000, chunks=late_near_player[:64],
                                          truncated=len(late_near_player) > 64))
-        # 封闭空洞门禁：P0 判 classic + dimension（口径见 _ENCLOSED_HOLE_P0_SCENARIOS），
-        # P1 仅 classic。分块大小 ≥ _ENCLOSED_HOLE_P0_CELLS 才算虚空。
+        # ``actualPresent`` 仅从本轮投递候选采样，无法恢复完整 ClientChunkCache 几何。
+        # dimension 会连续重建世界/切维，合法的原版 stream 可在集合中留下 3×3 空洞；
+        # 该场景以显式 probe 的 loadedChunks/clientApplied 断言为准。经典场景没有切维，
+        # 故保留封闭洞 P0 回归哨兵。
         holes = spatial["enclosed"]
-        if scenario in _ENCLOSED_HOLE_P0_SCENARIOS and holes["available"]:
+        if scenario == "classic" and holes["available"]:
             largest = holes["largestComponent"]
             if largest >= _ENCLOSED_HOLE_P0_CELLS:
                 failures.append(_failure("TRACE_ENCLOSED_HOLE", round=number, largestComponent=largest,
                                          components=holes["components"], holes=holes["enclosedHoles"]))
-            elif largest and scenario in _ENCLOSED_HOLE_P1_SCENARIOS:
+            elif largest:
                 warnings.append(_failure("TRACE_ENCLOSED_HOLE_SMALL", "P1", round=number,
                                          components=holes["components"], holes=holes["enclosedHoles"]))
         gaps = trace_report["gaps"]
-        # TRACE 缺口门禁仅 classic：其它场景的盘回填不走同一 trace 契约
         if scenario == "classic":
             # 驻留口径缺口：expected = networkReceived 假设「收到即常驻」。
             # 移动会话里已收到的柱会随玩家飞离合法 CHUNK_UNLOAD，故降为运行内诊断；

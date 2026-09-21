@@ -112,12 +112,12 @@ class HassiumMetricsImplTest {
     }
 
     @Test
-    void lightCacheHitRateIncludesShadowReuseAndRecompute() {
+    void lightCacheHitRateIncludesShadowReuseAndEffectiveRecompute() {
         HassiumMetricsImpl metrics = new HassiumMetricsImpl();
 
         metrics.recordLightReuseShadow(16_384);
         metrics.recordLightReuseShadow(16_384);
-        metrics.recordLightCacheMiss(16_384);
+        metrics.recordFullChunkRequests(1, NetworkStats.ESTIMATED_CHUNK_BYTES, false);
 
         assertEquals(2.0 / 3.0, metrics.getLightCacheHitRate(), 1e-9);
     }

@@ -151,13 +151,9 @@ public final class SmokeProbeWriter {
     }
 
     /**
-     * `loadedChunks` is the ClientChunkCache's complete resident count. `actualPresent` samples only
-     * trace candidates, so its cardinality must never be used as the world's loaded count.
-     * <p>
-     * Candidate order: {@code networkReceived} → {@code clientApplied} → {@code shadowReady}.
-     * R2 cache-hit rounds have {@code networkReceived=0}; falling back to {@code shadowReady}
-     * under-samples (e.g. 477) while {@code loadedChunks} still holds every applied column
-     * (1074) — {@code actualPresent} then looks like a false “applied gap”.
+     * {@code loadedChunks} 是完整 resident 数；{@code actualPresent} 用全部已落地柱采样。
+     * 网络收到集合只覆盖首个网络来源，SeedGen 本地生成与影子缓存重交付会被遗漏；以它优先
+     * 会把已落地的 3×3 岛误报成空间洞。
      */
     private static void appendClientCache(StringBuilder sb, net.minecraft.client.Minecraft mc, String dimension) {
         long loaded = currentLoadedChunkCount(mc);
@@ -169,9 +165,9 @@ public final class SmokeProbeWriter {
                         ((io.github.limuqy.mc.hassium.mixin.client.ClientLevelAccessor) mc.level).hassium$getChunkSource();
                 io.github.limuqy.mc.hassium.shadow.light.SmokeChunkTrace.Snapshot trace =
                         io.github.limuqy.mc.hassium.shadow.light.SmokeChunkTrace.snapshot(dimension);
-                java.util.List<net.minecraft.world.level.ChunkPos> candidates = trace.networkReceived();
-                if (candidates.isEmpty()) candidates = trace.clientApplied();
+                java.util.List<net.minecraft.world.level.ChunkPos> candidates = trace.clientApplied();
                 if (candidates.isEmpty()) candidates = trace.shadowReady();
+                if (candidates.isEmpty()) candidates = trace.networkReceived();
                 trackedCandidates = candidates.size();
                 java.util.ArrayList<net.minecraft.world.level.ChunkPos> present =
                         new java.util.ArrayList<>(candidates.size());
@@ -332,6 +328,9 @@ public final class SmokeProbeWriter {
                 io.github.limuqy.mc.hassium.protocol.ShadowPullClient.nativeBypassApplyInProgressCount());
         field(sb, "nativeBypassEngineOff",
                 io.github.limuqy.mc.hassium.protocol.ShadowPullClient.nativeBypassEngineOffCount());
+        // A1-③ 拦截转本地生成：无基线原版包被挂起交给泵 SEEDGEN_LOCAL 驱动的柱数。
+        field(sb, "seedGenIntercepted",
+                io.github.limuqy.mc.hassium.protocol.ShadowPullClient.seedGenInterceptedCount());
         // 统一 Compare+Pull 结局分解（请求侧按入口计数，不依赖 REQUEST_MODES 回查）：
         //   compareRequests   —— 带本地基线的 compare 请求（服务端可判 UNCHANGED）；
         //   authoritativeRequests —— 无基线权威 FULL（修好「盘基线」后 R2 应趋零）；
