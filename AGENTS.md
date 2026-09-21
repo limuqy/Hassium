@@ -154,6 +154,24 @@ fabric/ | forge/ | neoforge/
 - **`drainAuthorityAcquires` 的预算只约束「本轮新 acquire」，且不得 `break`**（2026-09-19 用户拍板；实测教训）：判据必须是 `submitted >= budget`，**不得**写成 `submitted + published >= budget`——`published` 是**交付**计数，会让近处已 material 柱的交付吃光预算，把远处非 material 柱的 acquire 饿死（实测 `submitted=0` 占 181/206 轮、1341 柱一轮没 acquire → 邻柱永不到齐 → 齐套门降级）。**不得**用 `break` 提前退出列表（预算用尽后仍要走完，material 分支的交付/compare 照常）。预算值 = `chunk.maxChunksPerFrame × 4`（用户口径，取消原固定 64）；**同组（3×3 域）要发完**：组内超预算也把本组 acquire 完。修好后 R1 交付逐字回到基线 1529、降级 promote 174→60。锚点：`ShadowTrackingSession.authorityAcquireBudget` / `drainAuthorityAcquires`。
 - 锚点：`shadow/light/LightNeighborhoodGate.java`、`ShadowLightCompute.startLightBarrier` / `submitLightReuseOrGate` / `enqueueInjectedForLight`、`ShadowTrackingSession.isInComputeDomain` / `isDeliverableToClient`、`compat/ChunkShapeCompat.containsDilated`。详见 `docs/client-chunk-light-flow.md` §4 / §8.1。
 
+## 并发锁序（钉死）
+
+**影子端两把锁的获取顺序必须是 `ShadowPoiGate` → `chunkLock`。** 主循环路径天然如此：
+`ShadowTrackingSession.consumeOnShadowLoop` → `ShadowPoiGate.runIfIdle` 持 GATE → `ServerChunkCache.tick`
+→ `ChunkMap.processUnloads`/`save` → `MixinChunkMap.hassium$lockShadowSave` → `ShadowLightCompute.lockChunk`。
+任何「先 chunkLock、后进 GATE」的路径都是 ABBA 死锁：flush 的 `serializeInjectedColumn` 原先正是
+（`withChunkLock` 先 → `serializeChunk` 内 `ShadowPoiGate.callExclusive` 后），与主循环互锁。
+
+- **症状指纹**（2026-09-22 neoforge seedgen 实证）：`[SHADOW_LIGHT] Light timeout (10000ms)` 刷屏、
+  `[STALL-DIAG] gen=64 delta=514 ready=0` 永不下降、区块不填充（landed 525/1529）、断连时
+  `shadow save wait timed out (seq still 0)` 再卡 10s 出 hang dump。判读：转储里
+  `hassium-seedgen-main` 停在 `ShadowLightCompute.lockChunk`（栈含 `runIfIdle`）、
+  `hassium-shadow-flush-*` 停在 `ShadowPoiGate.callExclusive`（栈含 `withChunkLock`）。
+- **新增任何碰原版 POI / SectionStorage 状态的路径，GATE 必须放最外层**（`callExclusive` 包住 `withChunkLock`）。
+  GATE 与 chunkLock 都是可重入锁，内层重复获取无害。
+- 锚点：`compat/ShadowPoiGate`、`ShadowSeedServer.serializeInjectedColumn`、
+  `MixinChunkMap.hassium$lockShadowSave`、`ShadowLightCompute.lockChunk`/`withChunkLock`/`tryWithChunkLock`。
+
 ## 配置红线
 
 键集真相源：`ConfigSchema`；审计表见 [`docs/config-audit.md`](docs/config-audit.md)。Fabric 双文件 `hassium-client.toml` / `hassium-server.toml`；**物理客户端双文件合并**（client 配客户端行为，server 供集成服务器/局域网；UI 只显示客户端键）；专用服仅 server。Forge/NeoForge 物理客户端双注册（CLIENT + COMMON），专用服仅 COMMON。
@@ -163,7 +181,7 @@ fabric/ | forge/ | neoforge/
 | `storage.enabled` | **false** | 默认关；开启后改存档格式（type 126）→ 提醒备份；**运行时仅专用服生效**（`isStorageEnabled` 门控 `RuntimeServerContext`），单人/局域网保持原版格式（读兼容）；客户端影子端（hassium_cache）固定写 126，不受本开关约束 |
 | `master.enabled` | true | 专用服网络通道总开关（登录期握手/聚合的门） |
 | `master.enabledOnLan` | **false** | 集成服已开局域网时对**远程**玩家启用网络面；本机 memory 恒原版；storage 仍仅专用服 |
-| `master.maxChunksPerTick` | 5 | 每玩家每 tick 区块下发上限：Pull FULL/DELTA 完成 + **原版通道整柱**（专用服全员 / LAN 远程；满 tick ≈ 100/s；UNCHANGED 另额 32） |
+| `master.maxChunksPerTick` | 5 | 每玩家每 tick 区块下发上限：Pull FULL/DELTA 完成 + **原版通道整柱**（专用服全员 / LAN 远程；满 tick ≈ 100/s；UNCHANGED 另额 32）。**原版整柱的抑制与限速按版本段挂不同钩子**：1.20.1 = `ServerPlayer.trackChunk`（`MixinServerPlayer`）；1.21.1+ = `PlayerChunkSender.sendNextChunks`/`sendChunk`（`MixinPlayerChunkSender`，`sendChunk` 直接 `connection.send`，**绕过** `MixinChunkHolder` 拦的 `ChunkHolder.broadcast`——1.21.1 的 `broadcastChanges` 只广播光照/方块/BE，从不广播整柱）。**删 1.21.1+ 那个钩子等于整柱既不抑制也不限速**（`ServerNetworkGate.shouldRateLimitChunkSend` 会成死代码）：2026-09-21 实测热档 `server_push` 736 柱、`maxChunksPerTick` 调不动原版通道、流量节省 67.9%；恢复后 `server_push` 0 柱、流量节省 85.3% |
 |`master.entity*`|见文档|实体域降帧 **9 键**（分层更新总开关 1 `entityTieredUpdateEnabled`；**两张逗号分隔档位表**（近/中/远/边际，须非降序）`entityTierIntervals`=`3,4,6,10` 与物品流独立的 `entityItemTierIntervals`=`2,4,8,16`——掉落物/经验球原版 `updateInterval`=20 是空闲节拍、位置靠每 tick `hasImpulse`，共用生物表会被压平成 1 包/s 而闪现；热点分档 3 `entityDensityTierCounts`=`10,20,32,64`/`entityDensityTierFactors`=`1.5,2.0,3.0,4.0`（逗号分隔按 近/中/远/边缘，支持小数）+ `entityMaxThrottleFactor` 总上限默认 5；帧预算压力 1 `entityFrameBudgetPerPlayer` 默认 256；错峰推送 1 `entitySmoothPushEnabled`——同间隔实体按 UUID 错开发送时刻，3 刻总量不变、摊平齐发尖峰），默认全开；全关 = 行为等同未接入。**vanilla 兼容、不要求客户端握手**：只改复制节拍，门控 = 主服实例 + `master.enabled`/`enabledOnLan` 总闸 + entity* 配置（压力采样覆盖全部游戏态连接）；玩家实体与 ItemFrame 类豁免；**密度按实体自己所在 chunk 统计（局部）**，**压力每观察者一份（独立反压，取最近观察者那份作用于实体）**；只改复制（下发客户端）节拍，不碰服务端实体 tick/漏斗判定。实施与设计修正记录见 [`docs/handoff/entity-network-optimization-plan.md`](docs/handoff/entity-network-optimization-plan.md) §6/§8/§9|
 | `chunk.enabled` | true | 区块核心总开关（影子端世界保存/算光/缓存；关后全程原版路径） |
 | `chunk.seedGenEnabled` | **false** | 双端同版本；**服务端开启会泄露世界种子** |
@@ -222,7 +240,11 @@ pwsh -File ./scripts/runtime-smoke-test.ps1 -Ver 1.20.1 -Loader fabric -Phase I 
 pwsh -File ./scripts/runtime-smoke-test.ps1 -Ver 1.20.1 -Loader fabric -Phase I -SessionId "1.20.1_fabric_I_seedgen" -Scenario seedgen
 
 # 快速冒烟（L2 三锚点）
-pwsh -File ./scripts/runtime-smoke-test-batch.ps1 -Phase I -Scenarios seedgen,dimension
+# ⚠️ -Scenarios 是 [string[]]：`pwsh -File` **不**拆逗号（会把 "seedgen,dimension" 当成一个场景名，
+#    去加载 seedgen,dimension.scenario → 客户端 fail-fast 闪退 exit 1）。多场景必须走 -Command。
+pwsh -Command '& "./scripts/runtime-smoke-test-batch.ps1" -Phase I -Scenarios seedgen,dimension'
+# 单场景用 -File 无妨：
+pwsh -File ./scripts/runtime-smoke-test-batch.ps1 -Phase I -Scenarios seedgen
 ```
 
 **这条 ps1 会自己结束**（起服 → 等 `Done!` → 起客户端 → 两轮 → 写 JSON → 印 `=== RESULT: PASS|FAIL ===` → 退出码 0/2/3）。典型 4–12 min，最坏约 `ServerReadyTimeoutSec`(180) + `ClientTimeoutSec`(300) + 收尾。
