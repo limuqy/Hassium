@@ -20,6 +20,11 @@ param(
     # 观察 R1 直接面对「已有磁盘基线 + 已存在的服务端世界」时的 compare 行为。
     # 服务端 level-seed 固定为 42，故热复用下世界内容与缓存基线一致，判 UNCHANGED 才是有意义的读数。
     [switch]$WarmRepeat,
+    # -KeepServerSave：只压过场景强制的 -CleanWorld（保留 parity_<loader>_<ver> 存档目录），
+    # 但**仍清客户端影子缓存**。与 -WarmRepeat 的区别：WarmRepeat 是「双端热复用」，
+    # 本开关是「服务端热 + 客户端冷」——用于观察冷客户端首次面对「服务端已有完整磁盘存档」
+    # 时的 compare / 交付读数（R1 的本地基线不再是空缓存，与首场冷档读数可直接对照）。
+    [switch]$KeepServerSave,
     # -PregenOnly：已退役。保留开关以免旧命令行报错，传入时直接跳过。
     [switch]$PregenOnly,
     [string]$SmokeHost = "",
@@ -522,9 +527,10 @@ if ($needConfigTrackerClean) {
 }
 
 if ($Scenario -in @("seedgen", "dimension", "modcompat", "modcompat_strict")) {
-    if ($WarmRepeat) {
-        # 状态只需清一次：首场已清，后续热复用不再清档（-WarmRepeat 显式压过场景强制清档）。
-        Write-Host "[$SessionId] 场景 '$Scenario' 的强制 -CleanWorld 被 -WarmRepeat 压过（复用 ${Loader}/${Ver} 存档目录）"
+    if ($WarmRepeat -or $KeepServerSave) {
+        # 状态只需清一次：首场已清，后续热复用不再清档（显式开关压过场景强制清档）。
+        $keepReason = if ($WarmRepeat) { "-WarmRepeat" } else { "-KeepServerSave" }
+        Write-Host "[$SessionId] 场景 '$Scenario' 的强制 -CleanWorld 被 $keepReason 压过（复用 ${Loader}/${Ver} 存档目录）"
     } else {
         if (-not $CleanWorld) {
             Write-Host "[$SessionId] 场景 '$Scenario' 强制 -CleanWorld（重置 ${Loader}/${Ver} 存档目录）"
