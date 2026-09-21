@@ -21,6 +21,7 @@
         "server.MixinServerLoginPacketListenerImpl",
         "shadow.MixinChunkHolder",
         "server.MixinServerPlayer",
+        "server.MixinPlayerChunkSender",
         "shadow.MixinServerChunkCache",
         "shadow.ServerChunkCacheAccessor",
         "server.MixinLevelTicks",
