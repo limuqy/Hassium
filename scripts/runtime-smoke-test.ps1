@@ -14,6 +14,12 @@ param(
     # -CleanWorld：重置本 loader×ver 的隔离存档目录 $serverLevelName（parity_<loader>_<ver>，
     # 见路径推导段）；非 CleanWorld 时该目录跨轮持久复用。旧固定 world/ 目录不再使用、不主动删除。
     [switch]$CleanWorld,
+    # -WarmRepeat：热复用上一场的状态——不清客户端影子缓存（<loader>/run/client/hassium_cache），
+    # 且**压过** seedgen/dimension/modcompat 场景的强制 -CleanWorld（保留 parity_<loader>_<ver> 存档）。
+    # 用途：状态只需清一次。首场用默认口径建立基线（清缓存 + 清档），后续场用本开关复用它，
+    # 观察 R1 直接面对「已有磁盘基线 + 已存在的服务端世界」时的 compare 行为。
+    # 服务端 level-seed 固定为 42，故热复用下世界内容与缓存基线一致，判 UNCHANGED 才是有意义的读数。
+    [switch]$WarmRepeat,
     # -PregenOnly：已退役。保留开关以免旧命令行报错，传入时直接跳过。
     [switch]$PregenOnly,
     [string]$SmokeHost = "",
@@ -476,8 +482,12 @@ function Stop-SessionJava {
 
 
 # 1. 清理客户端缓存（整个 hassium_cache 目录 + config/hassium 整个目录 + crash-reports）
-Write-Host "[$SessionId] [1/9] 清理客户端缓存 ($Loader/run/client/)..."
-Remove-Item -Recurse -Force (Join-Path $clientRunDir "hassium_cache") -ErrorAction SilentlyContinue
+if ($WarmRepeat) {
+    Write-Host "[$SessionId] [1/9] 热复用：保留客户端影子缓存（-WarmRepeat）..."
+} else {
+    Write-Host "[$SessionId] [1/9] 清理客户端缓存 ($Loader/run/client/)..."
+    Remove-Item -Recurse -Force (Join-Path $clientRunDir "hassium_cache") -ErrorAction SilentlyContinue
+}
 # Remove-Item -Recurse -Force (Join-Path $clientRunDir "config\hassium") -ErrorAction SilentlyContinue
 Remove-Item -Recurse -Force (Join-Path $clientRunDir "crash-reports") -ErrorAction SilentlyContinue
 # 服务端 crash-reports 同步清理（日志审计门禁以「会话内非空」为失败信号，历史残留会误报）
@@ -506,10 +516,15 @@ if ($needConfigTrackerClean) {
 }
 
 if ($Scenario -in @("seedgen", "dimension", "modcompat", "modcompat_strict")) {
-    if (-not $CleanWorld) {
-        Write-Host "[$SessionId] 场景 '$Scenario' 强制 -CleanWorld（重置 ${Loader}/${Ver} 存档目录）"
+    if ($WarmRepeat) {
+        # 状态只需清一次：首场已清，后续热复用不再清档（-WarmRepeat 显式压过场景强制清档）。
+        Write-Host "[$SessionId] 场景 '$Scenario' 的强制 -CleanWorld 被 -WarmRepeat 压过（复用 ${Loader}/${Ver} 存档目录）"
+    } else {
+        if (-not $CleanWorld) {
+            Write-Host "[$SessionId] 场景 '$Scenario' 强制 -CleanWorld（重置 ${Loader}/${Ver} 存档目录）"
+        }
+        $CleanWorld = $true
     }
-    $CleanWorld = $true
 }
 
 # T8 场景配置档案落盘：存在 scripts/smoke/profiles/<Scenario>.profile.properties 时，

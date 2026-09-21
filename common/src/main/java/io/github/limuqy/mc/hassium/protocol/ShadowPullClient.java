@@ -91,6 +91,8 @@ public final class ShadowPullClient {
         }
         long key = io.github.limuqy.mc.hassium.utils.DimensionKey.key(dim, pos.x, pos.z);
         lastFailAtMs.put(key, System.currentTimeMillis());
+        // 拉取失败 ⇒ 释放 compare 去重登记，冷却结束后允许再发（否则该柱一次失败就永不重试）
+        COMPARE_REQUESTED.remove(key);
         io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession.getInstance()
                 .clearPullInFlight(dim, pos);
     }
@@ -131,11 +133,34 @@ public final class ShadowPullClient {
     private static void request(String dimension, List<ChunkPos> chunks, boolean includeLocalBaseline) {
         io.github.limuqy.mc.hassium.utils.DebugLogger.info(
                 io.github.limuqy.mc.hassium.utils.DebugLogger.LogType.NETWORK,
-                "[DIAG] ShadowPullClient.request dim={} chunks={} baseline={}",
-                dimension, chunks == null ? -1 : chunks.size(), includeLocalBaseline);
+                "[DIAG] ShadowPullClient.request dim={} chunks={} baseline={} first=({},{})",
+                dimension, chunks == null ? -1 : chunks.size(), includeLocalBaseline,
+                chunks == null || chunks.isEmpty() ? 0 : chunks.get(0).x,
+                chunks == null || chunks.isEmpty() ? 0 : chunks.get(0).z);
         if (dimension == null || dimension.isEmpty() || chunks == null || chunks.isEmpty()) {
             return;
         }
+        // 【2026-09-21】按柱去重：本会话已为该柱发出过 compare / 权威 FULL 就不再发。
+        // 三个发起线程（Netty 拦截 / 影子主循环 / Render）原本各有一张自己的在途表
+        // （PENDING_COMPARE / sweepInFlight / SeedGenCompareGate），互不感知 ⇒ 实测同一柱被发
+        // 2~3 次（3465 条请求 / 1693 柱，其中 1380 柱恰好 2 次）。收口到本方法 = 唯一出口。
+        // 放行重试的口子：显式重试（retryAuthoritativeFullOnce）、生成失败回退、
+        // publishCached 失败重拉、拉取失败（notePullFailure）都先 clearCompareRequested；
+        // 客户端 unload / 会话 reset / 切维也清（见 ShadowLightCompute.onClientChunkUnloaded）。
+        List<ChunkPos> fresh = null;
+        for (ChunkPos chunkPos : chunks) {
+            if (COMPARE_REQUESTED.add(
+                    io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, chunkPos.x, chunkPos.z))) {
+                if (fresh == null) {
+                    fresh = new java.util.ArrayList<>(chunks.size());
+                }
+                fresh.add(chunkPos);
+            }
+        }
+        if (fresh == null) {
+            return;
+        }
+        chunks = fresh;
         if (includeLocalBaseline) {
             compareRequests.addAndGet(chunks.size());
             materializeForCompare(dimension, chunks);
@@ -318,6 +343,34 @@ public final class ShadowPullClient {
     /** 拦截到无基线包后转交 SeedGen 本地生成的柱数（A1-③ 接管；不与 authoritativeRequests 重叠）。 */
     private static final java.util.concurrent.atomic.AtomicLong seedGenIntercepted =
             new java.util.concurrent.atomic.AtomicLong();
+    /**
+     * 本会话已为该柱发出过 compare / 权威 FULL（按柱去重；见 {@code request}）。
+     * <p>
+     * 语义 = 「已经请求过，不重复请求」，**不是**「已交付」——交付侧判据不动。
+     * 释放点：{@link #clearCompareRequested}（显式重试 / 失败回退）、{@link #reset}、
+     * {@link #onClientDimensionChanged}、{@link #notePullFailure}，以及客户端 unload
+     * （{@code ShadowLightCompute.onClientChunkUnloaded}）。
+     */
+    private static final java.util.Set<Long> COMPARE_REQUESTED =
+            java.util.concurrent.ConcurrentHashMap.newKeySet();
+
+    /** 本会话该柱是否已发出过 compare / 权威 FULL（拦截路径据此不再重复拦截）。 */
+    public static boolean wasCompareRequested(String dimension, ChunkPos pos) {
+        if (dimension == null || pos == null) {
+            return false;
+        }
+        return COMPARE_REQUESTED.contains(
+                io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z));
+    }
+
+    /** 释放去重登记，允许该柱再次请求（重试 / 卸载 / 切维 / 失败回退）。 */
+    public static void clearCompareRequested(String dimension, ChunkPos pos) {
+        if (dimension == null || pos == null) {
+            return;
+        }
+        COMPARE_REQUESTED.remove(
+                io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z));
+    }
 
     public static long nativeBypassPendingPullCount() {
         return nativeBypassPendingPull.get();
@@ -629,6 +682,7 @@ public final class ShadowPullClient {
         REQUEST_MODES.clear();
         PENDING_COMPARE.clear();
         lastFailAtMs.clear();
+        COMPARE_REQUESTED.clear();
         nativeBypassPendingPull.set(0);
         nativeBypassApplyInProgress.set(0);
         nativeBypassEngineOff.set(0);
@@ -647,6 +701,7 @@ public final class ShadowPullClient {
         PENDING_COMPARE.clear();
         lastFailAtMs.clear();
         REQUEST_MODES.clear();
+        COMPARE_REQUESTED.clear();
         io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate.clearAll();
     }
 }

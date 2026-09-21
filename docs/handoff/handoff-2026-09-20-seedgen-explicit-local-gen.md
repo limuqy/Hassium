@@ -510,6 +510,103 @@ drainAuthorityAcquires(seedgen 分支)
 **§11.5 的「1.21.11 形态差异」不受本修复影响**：`rUnch` 仍只有 57、`rFull` 仍占大头（919/1573）
 ⇒ 「本地生成作基线 → compare 复用」在 1.21.11 上依然没生效，仍是独立的待查项。
 
+### 11.8 热复用场：缓存基线生效，但 **R1 确实重复 compare**（2026-09-21，**待排查**）
+
+**新增开关**：`scripts/runtime-smoke-test.ps1 -WarmRepeat` —— 不清客户端影子缓存，且**压过**
+seedgen/dimension/modcompat 场景的强制 `-CleanWorld`（状态只需清一次：首场默认口径建基线，
+后续热复用）。默认行为不变。
+
+**`1.21.11_fabric_I_seedgen_warm` vs 冷启动 `..._fixhole`**（同为 1.21.11 fabric seedgen）：
+
+| | 冷启动 | 热复用 |
+|---|---|---|
+| `loadedChunks` / 交付 | 1573 | 1573 |
+| `locallyGenerated` | 702 | **19** |
+| `seedGenIntercepted` | 345 | **0** |
+| `cacheHitFullChunkCount`（UNCHANGED 命中） | 57 | **611** |
+| `fullChunkRequestCount`（网络整柱**按柱去重**落地） | 1003 | **38** |
+| `responseUnchanged` / `rFull` / `rDelta` | 57 / 919 / 641 | **611 / 28 / 1386** |
+| `rx` | 1003 | **38** |
+| `compareRequests`（**入口计数，不去重**） | 2807 | **3847** |
+
+**结论 1（好）**：缓存基线**确实生效** —— UNCHANGED 命中 57 → 611、网络整柱落地 1003 → **38**、
+`rx` 1003 → 38。**修复后的代码只有在热复用下才兑现 seedGen 的省流量收益**；冷启动那 919 次 FULL
+是「无盘基线」的代价。⇒ §11.5 的「1.21.11 偏 FULL」很可能**不是版本差异**，而是「冷启动」的必然结果
+（同版本热复用下 rFull 只有 28）。**待验证**（需要在 1.21.1 上补一场热复用对照）。
+
+**结论 2（问题）**：**R1 面对缓存基线时会重复 compare**。
+`ShadowPullClient.request()` 里 `compareRequests.addAndGet(chunks.size())` 是**入口计数、不去重**；
+`[DIAG] ShadowPullClient.request` 日志实测 **3847 次调用、每次 `chunks=1 baseline=true`**，
+而交付只有 1573 柱（计算域 ~1749）⇒ **2.2–2.4× 重复**。冷启动是 2807 / 1573 = **1.78×**，
+即热复用**更严重**。
+
+- 注意与 `stats` 块的口径区分：`fullChunkRequestCount` 是**按柱去重**的网络落地数，
+  说明服务端/网络侧没有重复下发；重复发生在**客户端发起侧**。
+- `cacheMiss` / `cacheStale` 两场都恒 **0**：`REQUEST_MODES` 回查恒 miss（既有症状，09-20 亦有），
+  与上面的重复可能是同一族问题，一并留待排查。
+
+**根因（2026-09-21 实测取证）**：compare 有 **6–8 个发起入口，各自一张互不感知的在途表**
+（`SeedGenCompareGate.AWAITING` / `sweepInFlight` / `PENDING_COMPARE` / `requestedMisses`）。
+给 `[DIAG] ShadowPullClient.request` 加上坐标后按线程归因（`..._warm_diag` 场）：
+
+| 发起线程 | 条数 | 对应入口 |
+|---|---|---|
+| `Netty NIO IO #0` | 1508 | 客户端拦截 `tryInterceptForCompare` |
+| `hassium-seedgen-main` | 1236 | 影子泵 / `onChunkMaterialized` / `requestPullEligible` |
+| `Render thread` | 721 | `ShadowLightCompute` publish/disk-miss 路径 |
+
+3465 条 / 1693 柱（117 柱 ×1、**1380 柱 ×2**、196 柱 ×3）；2 次的柱的线程组合
+674× `seedgen-main + Netty`、478× `Netty + Render`、150× `Netty + seedgen-main`、63× `seedgen-main + Render`
+⇒ **同一柱被两条入口各发一次是结构性必然**。
+
+**修复（2026-09-21）**：去重收口到三条入口的**共同出口** `ShadowPullClient.request()`。
+- 新增 `COMPARE_REQUESTED`（按柱、本会话）+ `wasCompareRequested` / `clearCompareRequested`；
+  `request()` 过滤掉已发过的柱，全发过就直接 return（一个包都不发）。
+- 放行重试的口子（都是「重试/新机会」语义，先释放登记）：`notePullFailure`（已覆盖
+  `retryAuthoritativeFullOnce`，它内部调它）、`submitLocalGeneration` 生成失败回退、
+  `pull-injected` 物化失败重拉、`ShadowLightCompute.onClientChunkUnloaded`、
+  `reset()` / `onClientDimensionChanged()`。
+- **不改拦截语义**：拦截被去重挡下时包已挂在 `PENDING_COMPARE` 上，等另一条入口那份响应
+  （或 10s 超时）回放 ⇒ **不丢包**。也不给 `SeedGenCompareGate` 加超时/自愈。
+
+**验证**（`compareRequests` 是去重后真正发出的口径；`[DIAG]` 那行在 `request()` 顶部、
+去重**之前**，故它数的是调用次数、不是发出次数）：
+
+| 场 | `compareRequests` | 倍数 | `loadedChunks` | 封闭空洞 |
+|---|---|---|---|---|
+| `..._seedgen_warm`（修复前，热） | **3847** | 2.44× | 1573 | 0 |
+| `..._seedgen_dedup_cold`（修复后，冷） | **1573** | **1.00×** | 1573 | **0** |
+| `..._seedgen_dedup_warm`（修复后，热） | **1620** | **1.03×** | 1573 | **0** |
+| `1.20.1_forge_I_seedgen_dedup`（修复后，冷） | **1529** | **1.00×** | 1529 | **0** |
+
+⇒ 冷启动从 1.78× 降到 **1.00×（每柱恰好一次）**；热复用从 2.44× 降到 **1.03×**。
+交付量与空洞均无回归。（1.20.1 本来就只有 1.00×——它的 `nativeIntercepted=0`，
+拦截路径从不触发 ⇒ 只有一条入口，无重复可言；这也印证了「重复 = 多入口」这个归因。）
+
+### 11.9 ⚠️ 影子端并发读盘 → POI `Long2ObjectOpenHashMap` 结构损坏（2026-09-21，**未修**）
+
+热复用模式下偶发（**不是**本次去重修复引入）：
+
+```
+java.lang.ArrayIndexOutOfBoundsException: Index -1 out of bounds for length 4097
+  at it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap.rehash(Long2ObjectOpenHashMap.java:1320)
+  at net.minecraft.world.level.chunk.storage.SectionStorage.unpackChunk(SectionStorage.java:203)
+  at net.minecraft.world.entity.ai.village.poi.PoiManager.checkConsistencyWithBlocks(PoiManager.java:210)
+  at net.minecraft.world.level.chunk.storage.SerializableChunkData.read(SerializableChunkData.java:248)
+```
+
+线程 `hassium-seedgen-main`（影子端），随后 vanilla 打 `ERROR Failed to load chunk X,Z` ⇒ LogAudit 门禁 FAIL。
+
+| 场 | `Failed to load chunk` | POI AIOOBE |
+|---|---|---|
+| `..._fixhole` / `..._warm` / 1.20.1 / 1.21.1 冷启动场 | 0 | 0 |
+| `..._warm_diag`（第 2 次热复用） | **340** | 2505 |
+| `..._dedup_warm`（第 1 次热复用） | **4** | 少量 |
+
+⇒ 与「影子端并发读盘」同族（`PoiManager` 的 `SectionStorage` 用非并发 map，而影子端 chunk 读盘跑在
+`ShadowWorldgenExecutor` 池上）；触发与**热复用次数**相关，冷启动场从未复现。
+**未查根因、未修**（独立于 §11.8 的重复 compare）。
+
 **仍未解释**：修复前 `localWorldgen=true` 的柱有 1197 个，按上述链条应全部中招，实测空洞只有 99 格
 ⇒ 其余 ~1100 柱被别的路径救回（最可能是同柱的原版包后来被拦截 → `tryInterceptForCompare` 有基线分支
 发 `requestFull` → 响应 `confirm` 顺手清了 AWAITING）。**未取证。**

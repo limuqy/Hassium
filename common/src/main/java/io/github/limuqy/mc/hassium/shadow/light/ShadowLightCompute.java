@@ -3236,6 +3236,8 @@ public final class ShadowLightCompute {
         client().onProbeChunkUnloaded(pos);
         // 允许对真实服再 compare（卸载后基线可能已过期）；不挡本地 publish
         requestedMisses.remove(chunkKey);
+        // compare 去重登记同理：客户端已卸载该柱，再进视野要允许重新 compare
+        io.github.limuqy.mc.hassium.protocol.ShadowPullClient.clearCompareRequested(dimension, pos);
         // 往返：本会话曾网络加载过的柱，客户端 unload 后必须允许再记缓存命中
         // （accountCacheFullHit 已改为按次记账，此处仍清网络占位以免影响新增/过期分桶）。
         if (removedEpoch != null) {

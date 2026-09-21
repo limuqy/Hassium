@@ -1274,6 +1274,8 @@ public final class ShadowTrackingSession {
                 clearPullInFlight(generatedDimension, pos);
                 SeedGenCompareGate.clear(generatedDimension, pos);
                 VanillaAlignedChunkProvider.failAcquire(generatedDimension, pos);
+                // 生成失败 ⇒ 权威回退属重试，先释放 compare 去重登记（否则该柱一次生成失败就永不回退）
+                ShadowPullClient.clearCompareRequested(generatedDimension, pos);
                 requestPullEligible(generatedDimension, pos, true);
                 return;
             }
@@ -1382,6 +1384,8 @@ public final class ShadowTrackingSession {
             // 注入表有柱但不可物化（异常）：再拉一次权威全量
             ShadowLightCompute.clearRequestMiss(dimension, pos);
             if (markPullInFlight(dimension, pos, System.currentTimeMillis())) {
+                // 物化失败 ⇒ 重拉属重试，先释放 compare 去重登记
+                ShadowPullClient.clearCompareRequested(dimension, pos);
                 ShadowPullClient.requestAuthoritativeFull(dimension, java.util.List.of(pos));
             }
         }
