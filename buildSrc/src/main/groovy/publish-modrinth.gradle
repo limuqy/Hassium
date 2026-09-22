@@ -32,6 +32,10 @@ afterEvaluate {
     def mcVer = gradle.ext.minecraft_version as String
     def projectIdValue = (findProperty('modrinth_project_id') ?: '').toString().trim()
     def releaseTypeValue = (findProperty('modrinth_release_type') ?: 'release').toString().trim()
+    // Modrinth 新环境元数据必填；默认「Client or server / Works best on both」：
+    // 单端可运行，双端安装收益最大（协商压缩 + 缓存命中）。可 -Pmodrinth_environment=... 覆盖。
+    // 枚举见 Minotaur Environment / docs.modrinth.com createversion。
+    def environmentValue = (findProperty('modrinth_environment') ?: 'client_or_server_prefers_both').toString().trim()
     def debugModeValue = (findProperty('modrinth_debug') ?: 'false').toString().equalsIgnoreCase('true')
     def skipExisting = findProperty('publish_skip_existing')?.toString() != 'false'
     def tokenValue = System.getenv('MODRINTH_TOKEN') ?: (findProperty('modrinth_token') ?: '').toString()
@@ -52,6 +56,7 @@ afterEvaluate {
     modrinth {
         projectId = projectIdValue
         versionType = releaseTypeValue
+        environment = environmentValue
         debugMode = debugModeValue
 
         versionNumber = mrVersionNumber
