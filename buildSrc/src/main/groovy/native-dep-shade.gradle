@@ -8,14 +8,26 @@
  *
  * 去掉：IA-32、armv6、FreeBSD、Android、Musl、ppc/riscv/s390x/mips/loongarch 等。
  *
- * lz4-java：保留全部平台 native（net.jpountz.xxhash 的 XXHashFactory.fastestInstance()
- * 生产路径依赖它；缺类会导致 ChunkContentHashUtil.<clinit> 抛
- * NoClassDefFoundError，见 docs/findings-xxhash-missing-in-prod.md）。
+ * lz4-java（仅 MC < 1.21 shade）：
+ * - 1.21+ vanilla 已带 org.lz4:lz4-java（AMN=org.lz4.java，Export-Package 含
+ *   net.jpountz.util）。再 shade 进 mod jar → ModLauncher 模块层
+ *   "Modules hassium and org.lz4.java export package net.jpountz.util" 崩溃。
+ * - 1.20.1 等无游戏侧 lz4 的段仍必须 shade：xxHash 供
+ *   ChunkContentHashUtil / SectionPlaneSyndrome；缺类 → NoClassDefFoundError。
  */
+def hassiumShadeLz4 = {
+    def mcVer = gradle.ext.has('minecraft_version') ? gradle.ext.minecraft_version as String
+            : (gradle.ext.has('mc_ver') ? gradle.ext.mc_ver as String : '')
+    def parts = mcVer.tokenize('.')
+    def major = !parts.isEmpty() && parts[0].isInteger() ? parts[0].toInteger() : 0
+    def minor = parts.size() > 1 && parts[1].isInteger() ? parts[1].toInteger() : 0
+    return !(major > 1 || (major == 1 && minor >= 21))
+}()
+
 jar {
     from({
-        configurations.runtimeClasspath.filter {
-            it.name.contains('zstd-jni') || it.name.contains('lz4-java')
+        configurations.runtimeClasspath.filter { f ->
+            f.name.contains('zstd-jni') || (hassiumShadeLz4 && f.name.contains('lz4-java'))
         }.collect { zipTree(it) }
     }) {
         exclude 'META-INF/**'
