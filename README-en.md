@@ -16,6 +16,7 @@ Smaller world saves and bandwidth than vanilla, local chunk reuse, and smoother 
 ![Minecraft](https://img.shields.io/badge/Minecraft-1.20.1--1.21.11-green.svg)
 ![Loaders](https://img.shields.io/badge/Loaders-Fabric%20%7C%20Forge%20%7C%20NeoForge-orange.svg)
 [![CurseForge](https://img.shields.io/badge/CurseForge-Hassium-644DF4.svg?logo=curseforge)](https://www.curseforge.com/minecraft/mc-mods/hassium)
+[![Modrinth](https://img.shields.io/badge/Modrinth-Hassium-00AF5C.svg?logo=modrinth)](https://modrinth.com/mod/hassium-limuqy)
 
 ---
 
