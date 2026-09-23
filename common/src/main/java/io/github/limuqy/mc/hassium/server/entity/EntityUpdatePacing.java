@@ -37,9 +37,13 @@ import java.util.List;
  * <b>物品流单独一张档位表：</b>掉落物/经验球的 {@code EntityType.updateInterval} 是 20
  * （{@code EntityType.ITEM} / {@code EXPERIENCE_ORB}），但那是它的**空闲**节拍，位置节拍由每 tick 的
  * {@code hasImpulse} 驱动。降帧接管 {@code hasImpulse} 后位置节拍改由档位表决定，此时若仍把 20 当
- * 下限（{@link EntityUpdateTiering#effectiveInterval} 取 max），档位表会被整体压平 ⇒ 物品恒 1 包/s，
- * 而客户端插值窗口只有 3 刻（{@code lerpTo(..., 3)}；1.21.11 {@code InterpolationHandler} 同为 3），
- * 于是画面上就是瞬移/闪烁。故物品流另取一张表（{@code master.entityItemTierInterval*}）且下限取 1
+ * 当下限（{@link EntityUpdateTiering#effectiveInterval} 取 max），档位表会被整体压平 ⇒ 物品恒 1 包/s，
+ * 而原版客户端插值窗口固定 3 刻（{@code lerpTo(..., 3)}；1.21.5+ {@code InterpolationHandler} 同为 3），
+ * 窗口不随间隔放大就会走-停顿挫、极大间隔时瞬移/闪烁。窗口侧已配套自适应：
+ * {@link io.github.limuqy.mc.hassium.client.EntityLerpPacing} 按该实体实际收包间隔给出窗口
+ * （上限 {@code MAX_CATCH_UP_GAP = 20}，超限回退原版 3），故档位间隔可安全拉大，
+ * 但最终生效间隔仍须 ≤ 20 刻，否则超出部分回退 3 窗口重现顿挫。
+ * 物品流仍另取一张表（{@code master.entityItemTierInterval*}）且下限取 1
  * （{@link EntityUpdateTiering#intervalFloor}）；距离分档与原版跟踪范围判定与其它实体共用。
  * <p>
  * <b>本域只改复制（replication）节拍，不碰服务端实体逻辑：</b>被改写的两个取值点只影响

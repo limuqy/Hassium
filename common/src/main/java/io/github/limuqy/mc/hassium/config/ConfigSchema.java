@@ -93,8 +93,8 @@ public final class ConfigSchema {
             "是否按玩家距离分四档降频下发实体更新（离得越远更新越稀）。默认开；关闭后距离档表失效，密度/压力/错峰仍可独立生效",
             "Enable distance-tiered entity updates (entities further away are updated less often). Enabled by default; turning it off disables only the distance tables — density, pressure and smooth-push remain independent");
     public static final ConfigKey<String> MASTER_ENTITY_TIER_INTERVALS = string("master.entityTierIntervals", ConfigScope.SERVER, Domain.MASTER_CORE, EntityUpdateTiering.DEFAULT_ENTITY_INTERVALS,
-            "四个距离档的实体更新间隔（刻），用逗号分隔，依次为 近/中/远/边缘；挡位边界是实体跟踪范围的 25%/50%/75%。默认 3,4,6,10（越远越稀）。数字要大不要小，须非递减；写 0 或留空用默认值",
-            "Entity update interval in ticks for the four distance tiers, comma-separated, ordered near/mid/far/edge (tier boundaries at 25%/50%/75% of the tracking range). Default 3,4,6,10. Values must be non-decreasing; 0 or blank means default");
+            "四个距离档的实体更新间隔（刻），用逗号分隔，依次为 近/中/远/边缘；挡位边界是实体跟踪范围的 25%/50%/75%。默认 3,4,6,10（越远越稀）。数字要大不要小，须非递减；写 0 或留空用默认值。最终生效间隔（乘上密度/压力倍率后）建议 ≤ 20 刻：客户端平滑窗口上限 20 刻，超出会回退 3 刻窗口、画面走-停",
+            "Entity update interval in ticks for the four distance tiers, comma-separated, ordered near/mid/far/edge (tier boundaries at 25%/50%/75% of the tracking range). Default 3,4,6,10. Values must be non-decreasing; 0 or blank means default. Keep the final effective interval (after density/pressure multipliers) at 20 ticks or below: the client smoothing window caps at 20, beyond which it falls back to a 3-tick window and movement stutters");
     public static final ConfigKey<String> MASTER_ENTITY_ITEM_TIER_INTERVALS = string("master.entityItemTierIntervals", ConfigScope.SERVER, Domain.MASTER_CORE, EntityUpdateTiering.DEFAULT_ITEM_INTERVALS,
             "掉落物与经验球的四档更新间隔（刻），逗号分隔、顺序同上，默认 2,4,8,16。物品数量多、带宽吃紧时可以把它们调稀；贴近玩家的掉落物建议不超过 3 刻，否则看起来会一跳一跳",
             "Update interval in ticks for dropped items and experience orbs across the same four tiers, default 2,4,8,16. Raise these values when many items are on the ground; keep the near value at 3 ticks or lower so items next to the player still move smoothly");

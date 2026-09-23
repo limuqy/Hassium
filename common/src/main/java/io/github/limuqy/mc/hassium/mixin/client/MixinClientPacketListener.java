@@ -4,9 +4,11 @@ import io.github.limuqy.mc.hassium.platform.client.TraceOrigin;
 
 import io.github.limuqy.mc.hassium.client.ClientLifecycleHelper;
 import io.github.limuqy.mc.hassium.client.ClientMetadataHandler;
+import io.github.limuqy.mc.hassium.client.EntityLerpPacing;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
@@ -163,6 +165,88 @@ public class MixinClientPacketListener {
     @Inject(method = "handleBlockEntityData", at = @At("HEAD"))
     private void hassium$onBlockEntityData(net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket packet, CallbackInfo ci) {
         ClientMetadataHandler.forwardBlockUpdate(packet);
+    }
+
+    // === 实体插值窗口自适应（服务端实体降帧配套）：按该实体实际收包间隔替换原版固定 3 步窗口 ===
+    // 分段依据（各段 handleMoveEntity 调用点逐一核对过，缺一即注入失败）：
+    //   1.20.1        lerpTo 七参（位置/纯旋转两分支，同描述符）
+    //   1.21.1-1.21.2 lerpTo 六参（同上）
+    //   1.21.5-1.21.6 moveOrInterpolateTo 仅 (Vec3,FF) 重载（三调用点同描述符）
+    //   1.21.9+       另含 Pos-only (Vec3) 与 Rot-only (FF) 重载
+    // teleport 纠偏走 handleTeleportEntity（不同方法），不经此路径，保持原版快速对齐。
+
+#if MC_VER < MC_1_21_1
+    @Redirect(method = "handleMoveEntity", at = @At(value = "INVOKE",
+            target = "Lnet/minecraft/world/entity/Entity;lerpTo(DDDFFIZ)V"))
+    private void hassium$adaptiveEntitySteps(net.minecraft.world.entity.Entity entity, double x, double y,
+            double z, float yRot, float xRot, int steps, boolean flag) {
+        entity.lerpTo(x, y, z, yRot, xRot,
+                EntityLerpPacing.observeAndPlan(entity.getId(), entity.level().getGameTime()), flag);
+    }
+#elif MC_VER < MC_1_21_5
+    @Redirect(method = "handleMoveEntity", at = @At(value = "INVOKE",
+            target = "Lnet/minecraft/world/entity/Entity;lerpTo(DDDFFI)V"))
+    private void hassium$adaptiveEntitySteps(net.minecraft.world.entity.Entity entity, double x, double y,
+            double z, float yRot, float xRot, int steps) {
+        entity.lerpTo(x, y, z, yRot, xRot,
+                EntityLerpPacing.observeAndPlan(entity.getId(), entity.level().getGameTime()));
+    }
+#elif MC_VER < MC_1_21_9
+    @Redirect(method = "handleMoveEntity", at = @At(value = "INVOKE",
+            target = "Lnet/minecraft/world/entity/Entity;moveOrInterpolateTo(Lnet/minecraft/world/phys/Vec3;FF)V"))
+    private void hassium$adaptiveEntitySteps(net.minecraft.world.entity.Entity entity,
+            net.minecraft.world.phys.Vec3 pos, float yRot, float xRot) {
+        hassium$applyAdaptiveEntitySteps(entity);
+        entity.moveOrInterpolateTo(pos, yRot, xRot);
+    }
+#else
+    @Redirect(method = "handleMoveEntity", at = @At(value = "INVOKE",
+            target = "Lnet/minecraft/world/entity/Entity;moveOrInterpolateTo(Lnet/minecraft/world/phys/Vec3;FF)V"))
+    private void hassium$adaptiveEntitySteps(net.minecraft.world.entity.Entity entity,
+            net.minecraft.world.phys.Vec3 pos, float yRot, float xRot) {
+        hassium$applyAdaptiveEntitySteps(entity);
+        entity.moveOrInterpolateTo(pos, yRot, xRot);
+    }
+
+    @Redirect(method = "handleMoveEntity", at = @At(value = "INVOKE",
+            target = "Lnet/minecraft/world/entity/Entity;moveOrInterpolateTo(Lnet/minecraft/world/phys/Vec3;)V"))
+    private void hassium$adaptiveEntityStepsNoRotation(net.minecraft.world.entity.Entity entity,
+            net.minecraft.world.phys.Vec3 pos) {
+        hassium$applyAdaptiveEntitySteps(entity);
+        entity.moveOrInterpolateTo(pos);
+    }
+
+    @Redirect(method = "handleMoveEntity", at = @At(value = "INVOKE",
+            target = "Lnet/minecraft/world/entity/Entity;moveOrInterpolateTo(FF)V"))
+    private void hassium$adaptiveEntityRotationSteps(net.minecraft.world.entity.Entity entity,
+            float yRot, float xRot) {
+        hassium$applyAdaptiveEntitySteps(entity);
+        entity.moveOrInterpolateTo(yRot, xRot);
+    }
+#endif
+
+#if MC_VER >= MC_1_21_5
+    /**
+     * 1.21.5+：窗口存放于 {@code InterpolationHandler.interpolationSteps}（构造默认 3），
+     * 收包时先写入自适应步数，随后原版 moveOrInterpolateTo 按该步数插值。
+     * null（无插值处理器的实体）走原版直接 setPos 路径，无需干预。
+     */
+    private void hassium$applyAdaptiveEntitySteps(net.minecraft.world.entity.Entity entity) {
+        int steps = EntityLerpPacing.observeAndPlan(entity.getId(), entity.level().getGameTime());
+        net.minecraft.world.entity.InterpolationHandler interpolation = entity.getInterpolation();
+        if (interpolation != null) {
+            interpolation.setInterpolationLength(steps);
+        }
+    }
+#endif
+
+    /** 头旋转包：lerpHeadTo 描述符全版本一致，与位置包共用同一节奏表（同 tick 第二包 gap=0 幂等）。 */
+    @Redirect(method = "handleRotateMob", at = @At(value = "INVOKE",
+            target = "Lnet/minecraft/world/entity/Entity;lerpHeadTo(FI)V"))
+    private void hassium$adaptiveEntityHeadSteps(net.minecraft.world.entity.Entity entity,
+            float yHeadRot, int steps) {
+        entity.lerpHeadTo(yHeadRot,
+                EntityLerpPacing.observeAndPlan(entity.getId(), entity.level().getGameTime()));
     }
 
 }

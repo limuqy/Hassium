@@ -80,6 +80,7 @@ public final class ClientLifecycleHelper {
     public static void onLogin() {
         io.github.limuqy.mc.hassium.utils.LoginTiming.markLogin(); // T0b 诊断：handleLogin 时刻（总耗时起点）
         connectInFlight = false;
+        EntityLerpPacing.clear(); // 实体插值节奏表按会话隔离，防跨服 entity id 复用串窗口
         // 单人/集成服本机：纯原版路径——不启影子、不重置 tracking（避免 cancel 原版区块）
         if (isLocalIntegratedSession()) {
             if (!initialized) {
