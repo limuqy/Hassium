@@ -49,13 +49,13 @@ class ConfigRestructureRoundTripTest {
         Map<String, ConfigEntry<?>> byPath = ConfigSchema.entries().stream()
                 .collect(Collectors.toMap(e -> e.scope() + "/" + e.path(), Function.identity()));
 
-        assertEquals(54, ConfigSchema.entries().size(), "schema 留存键数");
-        assertEquals(54, values.asMap().size(), "defaults 键数");
+        assertEquals(55, ConfigSchema.entries().size(), "schema 留存键数");
+        assertEquals(55, values.asMap().size(), "defaults 键数");
 
         Map<String, Long> prefixCounts = ConfigSchema.entries().stream()
                 .collect(Collectors.groupingBy(e -> e.path().substring(0, e.path().indexOf('.') + 1),
                         Collectors.counting()));
-        assertEquals(Map.of("chunk.", 17L, "master.", 17L, "debug.", 16L,
+        assertEquals(Map.of("chunk.", 17L, "master.", 17L, "debug.", 17L,
                 "storage.", 2L, "compat.", 2L), prefixCounts);
 
         // 双端同名键 chunk.seedGenEnabled 各一
@@ -81,7 +81,8 @@ class ConfigRestructureRoundTripTest {
                 true, 8192, 0.5, 0.8, 0.2, 1200, 1024, 200,
                 true, true, 16, 2, 12, 30, true, true);
         HassiumConfig.DebugConfig debug = new HassiumConfig.DebugConfig(
-                true, false, true, false, true, false, true, true, true, true, false);
+                // 末位 exportAggregatedPackets 为 SERVER 键：client.toml 不承载，保持默认 false 才能读回相等
+                true, false, true, false, true, false, true, true, true, true, false, false);
         // 网关拓扑退役：client.toml 不再承载任何 master.* 键（原迁移策略 6 键已删）
         HassiumConfig.MasterCoreConfig master = HassiumConfig.MasterCoreConfig.DEFAULT;
         HassiumConfig original = new HassiumConfig(
@@ -117,7 +118,7 @@ class ConfigRestructureRoundTripTest {
                 true, true, 16, 1, 6, 15, false, false);
         HassiumConfig.CompatConfig compat = new HassiumConfig.CompatConfig(true, false);
         HassiumConfig.DebugConfig debug = new HassiumConfig.DebugConfig(
-                false, true, false, true, false, true, false, false, false, false, true);
+                false, true, false, true, false, true, false, false, false, false, true, true);
 
         HassiumConfig original = new HassiumConfig(storage, chunk, master, compat, debug);
         FabricTomlConfigIO.saveServer(root, original);
@@ -148,6 +149,7 @@ class ConfigRestructureRoundTripTest {
         assertFalse(toml.contains("metadataLogging"), "server toml 不应含客户端专属 debug.metadataLogging:\n" + toml);
         assertFalse(toml.contains("cacheLogging"), "server toml 不应含客户端专属 debug.cacheLogging:\n" + toml);
         assertFalse(toml.contains("lightVerify"), "server toml 不应含客户端专属 debug.lightVerify:\n" + toml);
+        assertTrue(toml.contains("exportAggregatedPackets = true"), "server toml 缺 debug.exportAggregatedPackets=true:\n" + toml);
         assertFalse(toml.contains("maxRenderDistance"), "server toml 不应含 CLIENT 键 maxRenderDistance:\n" + toml);
         // 双 scope 同名键注释按 SERVER scope：须含种子泄露警告
         assertTrue(toml.contains("泄露服务端种子") || toml.contains("leaks the server world seed"),

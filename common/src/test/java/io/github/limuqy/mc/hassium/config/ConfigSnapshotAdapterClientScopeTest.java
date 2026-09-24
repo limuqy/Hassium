@@ -43,7 +43,7 @@ class ConfigSnapshotAdapterClientScopeTest {
     @Test
     void clientDebugFlagsRoundTripThroughValues() {
         HassiumConfig.DebugConfig debug = new HassiumConfig.DebugConfig(
-                true, false, true, false, true, false, true, true, true, true, false);
+                true, false, true, false, true, false, true, true, true, true, false, true);
         HassiumConfig original = HassiumConfig.DEFAULT.withDebug(debug);
 
         ConfigValues values = ConfigSnapshotAdapter.toValues(original);
@@ -57,12 +57,13 @@ class ConfigSnapshotAdapterClientScopeTest {
         assertEquals(true, values.get(ConfigSchema.CLIENT_DEBUG_CACHE));
         assertEquals(true, values.get(ConfigSchema.CLIENT_DEBUG_LIGHT_VERIFY));
         assertEquals(true, values.get(ConfigSchema.CLIENT_DEBUG_LIGHT));
+        assertEquals(true, values.get(ConfigSchema.SERVER_DEBUG_EXPORT_AGGREGATED_PACKETS));
     }
 
     @Test
     void fromValuesOnClientSideReadsClientDebugFlags() {
         HassiumConfig.DebugConfig debug = new HassiumConfig.DebugConfig(
-                true, false, true, false, true, false, true, true, true, true, false);
+                true, false, true, false, true, false, true, true, true, true, false, true);
         HassiumConfig original = HassiumConfig.DEFAULT.withDebug(debug);
 
         ConfigValues values = ConfigSnapshotAdapter.toValues(original);
@@ -74,7 +75,7 @@ class ConfigSnapshotAdapterClientScopeTest {
     @Test
     void fromValuesOnServerSideReadsServerDebugFlags() {
         HassiumConfig.DebugConfig debug = new HassiumConfig.DebugConfig(
-                false, true, false, true, false, true, false, false, false, false, true);
+                false, true, false, true, false, true, false, false, false, false, true, true);
         HassiumConfig original = HassiumConfig.DEFAULT.withDebug(debug);
 
         ConfigValues values = ConfigSnapshotAdapter.toValues(original);
@@ -99,6 +100,7 @@ class ConfigSnapshotAdapterClientScopeTest {
         assertTrue(ConfigSchema.clientEntries().stream().anyMatch(e -> e.path().equals("debug.cacheLogging")));
 
         assertTrue(ConfigSchema.serverEntries().stream().anyMatch(e -> e.path().equals("debug.networkLogging")));
+        assertTrue(ConfigSchema.serverEntries().stream().anyMatch(e -> e.path().equals("debug.exportAggregatedPackets")));
         assertTrue(ConfigSchema.serverEntries().stream().noneMatch(e -> e.path().equals("debug.metadataLogging")));
         assertTrue(ConfigSchema.serverEntries().stream().noneMatch(e -> e.path().equals("debug.cacheLogging")));
         assertTrue(ConfigSchema.serverEntries().stream().noneMatch(e -> e.path().equals("debug.lightVerify")));

@@ -578,7 +578,8 @@ public final class FabricTomlConfigIO {
                 getBool(cfg, "debug.lightVerify", d.lightVerify()),
                 getBool(cfg, "debug.lightLogging", d.lightLogging()),
                 getBool(cfg, "debug.networkMetricsEnabled", d.networkMetricsEnabled()),
-                getBool(cfg, "debug.networkMetricsAutoReset", d.networkMetricsAutoReset())
+                getBool(cfg, "debug.networkMetricsAutoReset", d.networkMetricsAutoReset()),
+                getBool(cfg, "debug.exportAggregatedPackets", d.exportAggregatedPackets())
         );
     }
 
@@ -602,6 +603,7 @@ public final class FabricTomlConfigIO {
         set(cfg, "debug.compressionLogging", d.compressionLogging(), "压缩调试日志", ConfigScope.SERVER);
         set(cfg, "debug.chunkApplyLogging", d.chunkApplyLogging(), "区块 apply 调试日志", ConfigScope.SERVER);
         set(cfg, "debug.networkLogging", d.networkLogging(), "网络调试日志", ConfigScope.SERVER);
+        set(cfg, "debug.exportAggregatedPackets", d.exportAggregatedPackets(), "导出聚合包调试流（S2C 包 + 聚合帧 → logs/hassium-aggregated-packets/*.jsonl；单人也生效）", ConfigScope.SERVER);
     }
 
     // --- value helpers ---

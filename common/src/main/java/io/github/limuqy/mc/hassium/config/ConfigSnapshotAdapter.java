@@ -73,7 +73,8 @@ public final class ConfigSnapshotAdapter {
                 .with(ConfigSchema.SERVER_DEBUG_ASYNC, debug.asyncLogging())
                 .with(ConfigSchema.SERVER_DEBUG_COMPRESSION, debug.compressionLogging())
                 .with(ConfigSchema.SERVER_DEBUG_CHUNK_APPLY, debug.chunkApplyLogging())
-                .with(ConfigSchema.SERVER_DEBUG_NETWORK, debug.networkLogging());
+                .with(ConfigSchema.SERVER_DEBUG_NETWORK, debug.networkLogging())
+                .with(ConfigSchema.SERVER_DEBUG_EXPORT_AGGREGATED_PACKETS, debug.exportAggregatedPackets());
         values = values.with(ConfigSchema.STORAGE_ENABLED, config.storage().enabled())
                 .with(ConfigSchema.STORAGE_ZSTD_LEVEL, config.storage().zstdLevel())
                 .with(ConfigSchema.MASTER_ENABLED, master.enabled())
@@ -157,7 +158,9 @@ public final class ConfigSnapshotAdapter {
                 values.get(ConfigSchema.CLIENT_DEBUG_LIGHT_VERIFY),
                 values.get(ConfigSchema.CLIENT_DEBUG_LIGHT),
                 values.get(ConfigSchema.CLIENT_DEBUG_NETWORK_METRICS),
-                values.get(ConfigSchema.CLIENT_DEBUG_NETWORK_METRICS_AUTO_RESET));
+                values.get(ConfigSchema.CLIENT_DEBUG_NETWORK_METRICS_AUTO_RESET),
+                // 纯 SERVER 键：无 client/server 双 scope 路由，两物理端都取同一 schema 键
+                values.get(ConfigSchema.SERVER_DEBUG_EXPORT_AGGREGATED_PACKETS));
         return new HassiumConfig(new HassiumConfig.StorageConfig(
                 values.get(ConfigSchema.STORAGE_ENABLED), values.get(ConfigSchema.STORAGE_ZSTD_LEVEL)),
                 chunk, master, compat, debug);

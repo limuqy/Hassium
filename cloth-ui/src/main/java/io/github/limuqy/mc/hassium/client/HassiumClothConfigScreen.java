@@ -244,7 +244,9 @@ public final class HassiumClothConfigScreen {
                     new HassiumConfig.DebugConfig(
                             metadataLogging, dispatcherLogging, asyncLogging, compressionLogging,
                             chunkApplyLogging, networkLogging, cacheLogging,
-                            lightVerify, lightLogging, metricsEnabled, metricsAutoReset));
+                            lightVerify, lightLogging, metricsEnabled, metricsAutoReset,
+                            // SERVER 键：本屏只编辑客户端字段，服务端导出开关原样保留
+                            baseDebug.exportAggregatedPackets()));
         }
     }
 }

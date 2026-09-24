@@ -290,6 +290,10 @@ public class HassiumConfigService {
         return config.master().enablePacketAggregation();
     }
 
+    public boolean isExportAggregatedPacketsEnabled() {
+        return config.debug().exportAggregatedPackets();
+    }
+
     public long getAggregationMaxWaitTimeMs() {
         return config.master().aggregationMaxWaitTimeMs();
     }

@@ -156,7 +156,7 @@ public final class ConfigSchema {
     public static final ConfigKey<Boolean> CLIENT_DEBUG_NETWORK_METRICS_AUTO_RESET = bool("debug.networkMetricsAutoReset", ConfigScope.CLIENT, Domain.DEBUG, true,
             "登出服务器时自动重置网络指标", "Auto-reset network metrics when leaving a server");
 
-    // === 调试（debug.*；SERVER 5 键：不含元数据/缓存/光照/网络指标）===
+    // === 调试（debug.*；SERVER 6 键：不含元数据/缓存/光照/网络指标）===
     public static final ConfigKey<Boolean> SERVER_DEBUG_DISPATCHER = bool("debug.dispatcherLogging", ConfigScope.SERVER, Domain.DEBUG, false,
             "主线程调度调试日志", "Main-thread dispatcher debug logging");
     public static final ConfigKey<Boolean> SERVER_DEBUG_ASYNC = bool("debug.asyncLogging", ConfigScope.SERVER, Domain.DEBUG, false,
@@ -167,6 +167,10 @@ public final class ConfigSchema {
             "区块 apply 调试日志", "Chunk-apply debug logging");
     public static final ConfigKey<Boolean> SERVER_DEBUG_NETWORK = bool("debug.networkLogging", ConfigScope.SERVER, Domain.DEBUG, false,
             "网络调试日志", "Network debug logging");
+    /** 导出点在握手/聚合 gating 之前（MixinConnection send 拦截 + flushBatch 聚合帧），单人集成服 memory 连接同样生效。 */
+    public static final ConfigKey<Boolean> SERVER_DEBUG_EXPORT_AGGREGATED_PACKETS = bool("debug.exportAggregatedPackets", ConfigScope.SERVER, Domain.DEBUG, false,
+            "导出聚合包调试流：所有经过服务端发包拦截点的 S2C 包（含编码后的聚合帧）逐行写入 logs/hassium-aggregated-packets/*.jsonl（payload 为 base64）。单人/LAN 集成服同样生效；每包写盘，性能开销大，仅诊断用",
+            "Export aggregated-packet debug stream: every S2C packet passing the server send intercept (incl. encoded aggregation frames) is appended to logs/hassium-aggregated-packets/*.jsonl (payload base64). Works on singleplayer / integrated servers too; writes on every packet — diagnostics only");
 
     static {
         validateUniquePaths();

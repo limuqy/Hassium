@@ -107,7 +107,7 @@
 | `compat.requireClientMod` | `false` | 是否强制要求客户端安装 Hassium |
 | `compat.autoDowngradeOnError` | `true` | 出错时是否自动降级 |
 
-**B5. debug.\*（SERVER 5 键；与 CLIENT 同名键共用路径，scope 隔离；不含元数据/缓存/光照）**
+**B5. debug.\*（SERVER 6 键；与 CLIENT 同名键共用路径，scope 隔离；不含元数据/缓存/光照）**
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
@@ -116,6 +116,7 @@
 | `debug.compressionLogging` | `false` | 压缩调试日志 |
 | `debug.chunkApplyLogging` | `false` | 区块 apply 调试日志 |
 | `debug.networkLogging` | `false` | 网络调试日志 |
+| `debug.exportAggregatedPackets` | `false` | 导出聚合包调试流：所有经过服务端发包拦截点的 S2C 包（含编码后的聚合帧）逐行写入 `logs/hassium-aggregated-packets/*.jsonl`（payload base64）。导出点在握手/聚合 gating 之前，单人/LAN 集成服同样生效；每包写盘，仅诊断用 |
 
 
 ## 三、退役键族（直连拓扑 / OVD / 全局包压缩，全部已删）
@@ -145,7 +146,7 @@
 | `storage.*` | SERVER | 2 | `enabled`=false |
 | `master.*` | SERVER | 17 | `enabledOnLan`=false；`entity*` 键族 = 实体网络优化 **9 键**（分层更新总开关 + 两张逗号分隔档位表 + 每档热点阈值/倍率 + 倍率上限 + 帧预算压力 + 错峰，默认全开） |
 | `compat.*` | SERVER | 2 | `requireClientMod`=false |
-| `debug.*` | SERVER | 5 | 全 false |
+| `debug.*` | SERVER | 6 | 全 false |
 | `chunk.lightStrip` / `chunk.seedGenEnabled` | SERVER | 2 | `seedGenEnabled`=false |
 | **合计** | | **53** | |
 

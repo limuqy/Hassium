@@ -5,6 +5,7 @@ import io.github.limuqy.mc.hassium.protocol.handshake.LoginHandshakeManager;
 import io.github.limuqy.mc.hassium.protocol.HassiumConnectionRegistry;
 import io.github.limuqy.mc.hassium.protocol.HassiumAggregationManager;
 import io.github.limuqy.mc.hassium.protocol.AggregationDecodeQueue;
+import io.github.limuqy.mc.hassium.protocol.AggregatedPacketExporter;
 import io.github.limuqy.mc.hassium.protocol.PullResponseDecodeQueue;
 import io.github.limuqy.mc.hassium.protocol.PacketCompressionBlacklist;
 import io.github.limuqy.mc.hassium.protocol.PacketTypeHelper;
@@ -108,6 +109,10 @@ public class MixinConnection {
         if (!(packetListener instanceof ServerGamePacketListenerImpl)) {
             return;
         }
+
+        // debug.exportAggregatedPackets：导出点在握手/聚合/黑名单 gating 之前，
+        // 单人/LAN 集成服的本机 memory 连接（不握手、不聚合）同样导出
+        AggregatedPacketExporter.exportSendPacket(packet, self);
 
         // 实体更新包实测计数（帧率压力的输入；只计数，不改变投递语义）
         if (io.github.limuqy.mc.hassium.server.entity.EntityPacketCounters.isEntityUpdatePacket(packet)) {

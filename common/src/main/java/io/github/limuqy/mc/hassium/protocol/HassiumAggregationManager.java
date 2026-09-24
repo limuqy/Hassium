@@ -315,6 +315,8 @@ public class HassiumAggregationManager {
             HassiumAggregationPacket aggregationPacket = new HassiumAggregationPacket(batch, indexManager);
             FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
             aggregationPacket.encode(buf);
+            // debug.exportAggregatedPackets：导出编码后的完整聚合帧（开关关时仅一次配置读）
+            AggregatedPacketExporter.exportAggregationFrame(buf, batch.size());
 
             if (sender != null) {
                 sendAggregateBypassingVanillaCompression(connection, buf);
