@@ -2,7 +2,9 @@ package io.github.limuqy.mc.hassium.protocol;
 
 import net.minecraft.network.Connection;
 
+import java.util.ArrayList;
 import java.util.Collections;
+import java.util.List;
 import java.util.Set;
 import java.util.WeakHashMap;
 
@@ -21,6 +23,12 @@ public class HassiumConnectionRegistry {
     private static final Set<Connection> ENABLED =
             Collections.synchronizedSet(Collections.newSetFromMap(new WeakHashMap<>()));
     private static final Set<Connection> PENDING =
+            Collections.synchronizedSet(Collections.newSetFromMap(new WeakHashMap<>()));
+    /**
+     * 已协商字典 epoch 帧的连接（aggregation_ready 携带字典回执）。
+     * 服务端编码只对这类连接在 DICT 帧头写 epoch；旧协议客户端帧格式不变。
+     */
+    private static final Set<Connection> EPOCH_AWARE =
             Collections.synchronizedSet(Collections.newSetFromMap(new WeakHashMap<>()));
 
     /**
@@ -48,6 +56,7 @@ public class HassiumConnectionRegistry {
     public static void markDisabled(Connection connection) {
         PENDING.remove(connection);
         ENABLED.remove(connection);
+        EPOCH_AWARE.remove(connection);
     }
 
     /**
@@ -70,6 +79,36 @@ public class HassiumConnectionRegistry {
     public static boolean isActive(Connection connection) {
         synchronized (PENDING) {
             return ENABLED.contains(connection) || PENDING.contains(connection);
+        }
+    }
+
+    /**
+     * 标记连接已协商字典 epoch 帧（aggregation_ready 携带字典回执时调用；
+     * 必须先于 markEnabled/flush，保证缓冲帧冲出时帧头即带 epoch）。
+     */
+    public static void markEpochAware(Connection connection) {
+        EPOCH_AWARE.add(connection);
+    }
+
+    /** 连接是否已协商字典 epoch 帧（编码端决定 DICT 帧头是否写 epoch）。 */
+    public static boolean isEpochAware(Connection connection) {
+        return EPOCH_AWARE.contains(connection);
+    }
+
+    /**
+     * 当前活跃（ENABLED ∪ PENDING）连接快照。
+     * <p>
+     * 字典 rollout 门控遍历用（{@code DictionaryManager.evaluateFlip}）；
+     * 返回副本，遍历不受后续并发变更影响。
+     */
+    public static List<Connection> activeConnections() {
+        synchronized (PENDING) {
+            synchronized (ENABLED) {
+                List<Connection> out = new ArrayList<>(ENABLED.size() + PENDING.size());
+                out.addAll(ENABLED);
+                out.addAll(PENDING);
+                return out;
+            }
         }
     }
 

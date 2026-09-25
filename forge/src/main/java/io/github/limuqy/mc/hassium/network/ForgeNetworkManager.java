@@ -8,6 +8,7 @@ import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.protocol.AggregationDecodeQueue;
 import io.github.limuqy.mc.hassium.protocol.AggregationReadyPayload;
 import io.github.limuqy.mc.hassium.protocol.DictionaryManager;
+import io.github.limuqy.mc.hassium.protocol.DictionarySnapshot;
 import io.github.limuqy.mc.hassium.protocol.HassiumAggregationManager;
 import io.github.limuqy.mc.hassium.protocol.HassiumConnectionRegistry;
 import io.github.limuqy.mc.hassium.protocol.IndexSyncManager;
@@ -115,14 +116,16 @@ public class ForgeNetworkManager implements INetworkManagerService {
             }
         });
 
-        // 字典热推回调：服务端字典重建后向全体在线玩家推送 DictionarySync（镜像 NeoForge/NeoForgeNetworkManager）
-        DictionaryManager.setPushCallback(dictionary -> {
+        // 字典热推回调：服务端字典重建后向全体在线玩家推送 DictionarySync。
+        // 回调携带版本化快照（epoch + id）——offer 阶段激活版尚未切换，读全局会拿到旧版；
+        // 接收端幂等安装并回带字典回执的 aggregation_ready，全员 ACK 后才切激活版。
+        DictionaryManager.setPushCallback(snapshot -> {
             try {
                 net.minecraft.server.MinecraftServer server =
                         net.minecraftforge.server.ServerLifecycleHooks.getCurrentServer();
                 if (server != null) {
                     for (ServerPlayer player : server.getPlayerList().getPlayers()) {
-                        sendDictionarySyncPacket(player);
+                        sendDictionarySyncPacket(player, snapshot);
                     }
                 }
             } catch (Exception e) {
@@ -179,7 +182,7 @@ public class ForgeNetworkManager implements INetworkManagerService {
                 AggregationReadyWrapper::encode,
                 AggregationReadyWrapper::decode,
                 (msg, ctx) -> {
-                    ctx.get().enqueueWork(() -> handleActivationReadyServer(ctx.get().getSender(), msg.ready()));
+                    ctx.get().enqueueWork(() -> handleActivationReadyServer(ctx.get().getSender(), msg));
                     ctx.get().setPacketHandled(true);
                 },
                 java.util.Optional.of(NetworkDirection.PLAY_TO_SERVER)
@@ -257,7 +260,7 @@ public class ForgeNetworkManager implements INetworkManagerService {
                         .addMain(AggregationReadyWrapper.class,
                                 playCodec(AggregationReadyWrapper::encode, AggregationReadyWrapper::decode),
                                 (msg, ctx) -> ctx.enqueueWork(() ->
-                                        handleActivationReadyServer(ctx.getSender(), msg.ready())))
+                                        handleActivationReadyServer(ctx.getSender(), msg)))
                         .addMain(ShadowPullRequestWrapper.class,
                                 playCodec(ShadowPullRequestWrapper::encode, ShadowPullRequestWrapper::decode),
                                 (msg, ctx) -> ctx.enqueueWork(() -> handleShadowPullRequest(msg, ctx.getSender())))
@@ -358,15 +361,21 @@ public class ForgeNetworkManager implements INetworkManagerService {
     // ========== 共享处理逻辑 ==========
 
     /**
-     * aggregation_ready 服务端 handler：转调 common {@code ServerHandshakeActivation.handleActivationReady}
-     * （首个 ACK → 服务端切 ZSTD 管线 + 发 dictionary_sync/index_sync + registry markPending；
-     * 客户端 index_sync 后重发的 ready ACK → registry 提升 ENABLED）。
+     * aggregation_ready 服务端 handler：转调 common 激活/重同步链。
+     * ready=true → {@code ServerHandshakeActivation.handleActivationReady}
+     * （首个 ACK → 字典校验 → 聚合放行；热更期的新版本 ACK → rollout 门控）；
+     * ready=false → {@code handleDictionaryResync}（客户端未知 epoch 帧的恢复请求）。
      */
-    private static void handleActivationReadyServer(ServerPlayer player, boolean ready) {
-        if (!ready || player == null) {
+    private static void handleActivationReadyServer(ServerPlayer player, AggregationReadyWrapper msg) {
+        if (player == null) {
             return;
         }
-        io.github.limuqy.mc.hassium.server.ServerHandshakeActivation.handleActivationReady(player);
+        if (!msg.ready()) {
+            io.github.limuqy.mc.hassium.server.ServerHandshakeActivation.handleDictionaryResync(player);
+            return;
+        }
+        io.github.limuqy.mc.hassium.server.ServerHandshakeActivation.handleActivationReady(
+                player, msg.dictEpoch(), msg.dictId(), msg.hasDictInfo());
     }
 
 #if MC_VER >= MC_1_21_1
@@ -414,12 +423,12 @@ public class ForgeNetworkManager implements INetworkManagerService {
         io.github.limuqy.mc.hassium.Constants.LOG.info("[PRE_HANDSHAKE] announced (answered forge hello)");
     }
 #endif
-    private static void sendAggregationReadyToServer() {
+    private static void sendAggregationReadyToServer(int dictionaryEpoch, long dictionaryId) {
         try {
 #if MC_VER < MC_1_21_1
-            CHANNEL.sendToServer(new AggregationReadyWrapper(true));
+            CHANNEL.sendToServer(new AggregationReadyWrapper(true, dictionaryEpoch, dictionaryId));
 #else
-            sendToServer(new AggregationReadyWrapper(true));
+            sendToServer(new AggregationReadyWrapper(true, dictionaryEpoch, dictionaryId));
 #endif
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to send aggregation ready", e);
@@ -582,25 +591,53 @@ public class ForgeNetworkManager implements INetworkManagerService {
         }
     }
 
-    public record AggregationReadyWrapper(boolean ready) {
+    /**
+     * aggregation_ready 载体（ready + 字典回执 epoch/id）。
+     * <p>
+     * 客户端发送总是带回执（{@link #AggregationReadyWrapper(boolean, int, long)}）；
+     * 服务端解码按尾随字段区分旧协议客户端（无回执 → hasDictInfo=false，跳过字典校验）。
+     */
+    public record AggregationReadyWrapper(boolean ready, int dictEpoch, long dictId, boolean hasDictInfo) {
+        public AggregationReadyWrapper(boolean ready) {
+            this(ready, 0, 0L, true);
+        }
+
+        public AggregationReadyWrapper(boolean ready, int dictEpoch, long dictId) {
+            this(ready, dictEpoch, dictId, true);
+        }
+
         public void encode(FriendlyByteBuf buf) {
             buf.writeBoolean(ready);
+            buf.writeVarInt(dictEpoch);
+            buf.writeLong(dictId);
         }
 
         public static AggregationReadyWrapper decode(FriendlyByteBuf buf) {
-            return new AggregationReadyWrapper(buf.readBoolean());
+            boolean ready = buf.readBoolean();
+            if (!buf.isReadable()) {
+                return new AggregationReadyWrapper(ready, 0, 0L, false);
+            }
+            int epoch = buf.readVarInt();
+            long id = buf.readLong();
+            return new AggregationReadyWrapper(ready, epoch, id, true);
         }
     }
 
     private static void sendDictionarySyncPacket(ServerPlayer player) {
+        sendDictionarySyncPacket(player, DictionaryManager.getActiveSnapshot());
+    }
+
+    /** 带快照重载：offer 推送在激活版切换前触发，必须携带回调传入的快照（epoch+id+字节）。 */
+    private static void sendDictionarySyncPacket(ServerPlayer player, DictionarySnapshot snapshot) {
         try {
-            byte[] body = PayloadHandlers.encodeDictionarySyncBody(DictionaryManager.getAggregationDict());
+            byte[] body = PayloadHandlers.encodeDictionarySyncBody(snapshot);
 #if MC_VER < MC_1_21_1
             CHANNEL.sendTo(new DictionarySyncWrapper(body), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
 #else
             sendToPlayer(player, new DictionarySyncWrapper(body));
 #endif
-            LOGGER.debug("Hassium: Sent dictionary sync packet ({} bytes)", body.length);
+            LOGGER.debug("Hassium: Sent dictionary sync packet (epoch={}, {} bytes)",
+                    snapshot != null ? snapshot.epoch() : 0, body.length);
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to send dictionary sync packet", e);
         }
@@ -665,8 +702,22 @@ public class ForgeNetworkManager implements INetworkManagerService {
 
     /** SPI：客户端 aggregation_ready ACK（C2S；common {@code ClientActivation} 经 Services.NETWORK_MANAGER 消费）。 */
     @Override
-    public void sendAggregationReady() {
-        sendAggregationReadyToServer();
+    public void sendAggregationReady(int dictionaryEpoch, long dictionaryId) {
+        sendAggregationReadyToServer(dictionaryEpoch, dictionaryId);
+    }
+
+    /** SPI：客户端请求字典重同步（unknown-epoch 恢复；载体 = ready=false 的 aggregation_ready）。 */
+    @Override
+    public void sendDictionaryResyncRequest() {
+        try {
+#if MC_VER < MC_1_21_1
+            CHANNEL.sendToServer(new AggregationReadyWrapper(false, 0, 0L, false));
+#else
+            sendToServer(new AggregationReadyWrapper(false, 0, 0L, false));
+#endif
+        } catch (Exception e) {
+            LOGGER.error("Hassium: Failed to send dictionary resync request", e);
+        }
     }
 }
 

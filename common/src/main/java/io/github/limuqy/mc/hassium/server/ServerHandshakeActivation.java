@@ -6,6 +6,7 @@ import io.github.limuqy.mc.hassium.protocol.HassiumAggregationManager;
 import io.github.limuqy.mc.hassium.protocol.HassiumConnectionRegistry;
 import io.github.limuqy.mc.hassium.protocol.IndexSyncManager;
 import io.github.limuqy.mc.hassium.protocol.DictionaryManager;
+import io.github.limuqy.mc.hassium.protocol.DictionarySnapshot;
 import io.github.limuqy.mc.hassium.protocol.SeedGenTail;
 import io.github.limuqy.mc.hassium.protocol.handshake.LoginCaps;
 import io.github.limuqy.mc.hassium.protocol.handshake.LoginHandshake;
@@ -185,8 +186,17 @@ public final class ServerHandshakeActivation {
     /**
      * 客户端激活 ACK（收到 index_sync 后回发；loader receiver 转调；幂等）。
      * PENDING → ENABLED，把缓冲中的聚合帧冲出（聚合正式放行）。
+     * <p>
+     * 字典回执（epoch+id，新协议客户端必带）：校验客户端安装的字典与当前激活快照一致才
+     * ENABLE；不一致保持 PENDING 并重发字典（5s 超时兜底降级原版路径）。回执同时用于
+     * epoch 感知登记与热更 rollout 门控（{@code DictionaryManager.onDictionaryAck}）。
+     *
+     * @param dictEpoch        客户端已安装字典的 epoch（无回执时为 0）
+     * @param dictId           客户端已安装字典的内容 hash（无回执时为 0）
+     * @param dictInfoPresent  是否携带字典回执（false = 旧协议客户端）
      */
-    public static void handleActivationReady(ServerPlayer player) {
+    public static void handleActivationReady(ServerPlayer player, int dictEpoch, long dictId,
+                                             boolean dictInfoPresent) {
         int caps = ACTIVE_CAPS.getOrDefault(player.getUUID(), 0);
         if (!LoginCaps.has(caps, LoginCaps.AGGREGATION)) {
             return;
@@ -195,13 +205,61 @@ public final class ServerHandshakeActivation {
         if (connection == null) {
             return;
         }
+        // 回执归类（单一判据）：OFFER=热更候选 / ACTIVE=激活版 / NONE=未知
+        DictionaryManager.AckKind kind = dictInfoPresent
+                ? DictionaryManager.classifyDictionaryAck(dictEpoch, dictId)
+                : DictionaryManager.AckKind.NONE;
+        if (dictInfoPresent) {
+            // 新协议客户端：DICT 帧头写 epoch（顺序在前：ENABLE+flush 冲出的缓冲帧即需带 epoch）
+            HassiumConnectionRegistry.markEpochAware(connection);
+        }
         if (READY_HANDLED.putIfAbsent(player.getUUID(), Boolean.TRUE) != null) {
+            // 后续 ready 只剩热更字典 ACK 语义（rollout 计数）
+            if (kind == DictionaryManager.AckKind.OFFER) {
+                DictionaryManager.onDictionaryAck(connection, dictEpoch, dictId);
+            }
             return;
+        }
+        if (kind == DictionaryManager.AckKind.NONE && dictInfoPresent) {
+            // 客户端安装的字典既不是激活版也不是候选版（同步丢失/损坏）：不 ENABLE
+            // （保持 PENDING 缓冲），清幂等守卫允许重装后的 ready 再入，重发当前字典
+            Constants.LOG.warn(
+                    "Hassium: Dictionary mismatch in activation ready for {} (client epoch={} id={}); resending dictionary, aggregation stays pending",
+                    player.getName().getString(), dictEpoch, dictId);
+            READY_HANDLED.remove(player.getUUID());
+            Services.NETWORK_MANAGER.sendDictionarySync(player);
+            DictionaryManager.onConnectionActivated(connection);
+            return;
+        }
+        if (kind == DictionaryManager.AckKind.OFFER) {
+            // 客户端在 offer 窗口内入服、装的是候选版：照常计 rollout ACK（可能当场触发切换），
+            // 也照常 ENABLE——切换前冲出的缓冲帧是激活版，客户端保留历史可解
+            DictionaryManager.onDictionaryAck(connection, dictEpoch, dictId);
         }
         HassiumConnectionRegistry.markEnabled(connection);
         HassiumAggregationManager.flushConnectionSync(connection);
-        Constants.LOG.info("Hassium: Aggregation enabled for {} (activation ready)",
+        Constants.LOG.info("Hassium: Aggregation enabled for {} (activation ready{})",
+                player.getName().getString(), dictInfoPresent ? ", dict epoch=" + dictEpoch : "");
+        // 生命周期收尾：搁置的候选字典（offer 超时放弃等）借新连接激活重试 offer
+        DictionaryManager.onConnectionActivated(connection);
+    }
+
+    /**
+     * 客户端字典重同步请求（{@code aggregation_ready} 的 {@code ready=false}；loader
+     * receiver 转调）：客户端解到未知 epoch 的聚合帧后主动请求，服务端重发当前激活字典。
+     * <p>
+     * 客户端幂等安装后即可恢复当前 epoch 帧解码。历史 epoch 在正常时序下必然存在于客户端
+     * 保留窗口（每轮 flip 都要求该连接 ACK 过），缺失只可能来自激活期同步丢失/损坏——
+     * 重同步当前版即为完整恢复，无需回原版协议（review P2 恢复策略）。
+     */
+    public static void handleDictionaryResync(ServerPlayer player) {
+        int caps = ACTIVE_CAPS.getOrDefault(player.getUUID(), 0);
+        if (!LoginCaps.has(caps, LoginCaps.AGGREGATION)) {
+            return;
+        }
+        Constants.LOG.warn("Hassium: dictionary resync requested by {} (client decoded unknown-epoch frame)",
                 player.getName().getString());
+        Services.NETWORK_MANAGER.sendDictionarySync(player);
     }
 
     private static void sendPlayInit(ServerPlayer player, int caps) {

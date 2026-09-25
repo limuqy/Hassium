@@ -25,6 +25,7 @@ import net.neoforged.neoforge.network.handling.IPayloadContext;
 import java.util.UUID;
 import io.github.limuqy.mc.hassium.protocol.AggregationDecodeQueue;
 import io.github.limuqy.mc.hassium.protocol.DictionaryManager;
+import io.github.limuqy.mc.hassium.protocol.DictionarySnapshot;
 import io.github.limuqy.mc.hassium.protocol.HassiumConnectionRegistry;
 import io.github.limuqy.mc.hassium.protocol.HassiumAggregationManager;
 import io.github.limuqy.mc.hassium.protocol.PayloadHandlers;
@@ -99,12 +100,38 @@ public class NeoForgeNetworkManager implements INetworkManagerService {
                 buf -> new ByteArrayPayload(type, buf.readByteArray()));
     }
 
-    public record AggregationReadyNeoPayload(boolean ready) implements CustomPacketPayload {
+    /**
+     * aggregation_ready 载体（ready + 字典回执 epoch/id）。
+     * <p>
+     * 客户端发送总是带回执（{@link #AggregationReadyNeoPayload(boolean, int, long)}）；
+     * 服务端解码按尾随字段区分旧协议客户端（无回执 → hasDictInfo=false，跳过字典校验）。
+     */
+    public record AggregationReadyNeoPayload(boolean ready, int dictEpoch, long dictId, boolean hasDictInfo)
+            implements CustomPacketPayload {
         public static final Type<AggregationReadyNeoPayload> TYPE = new Type<>(ResourceLocationCompat.vanilla(HassiumChannels.AGGREGATION_READY_C2S));
         public static final StreamCodec<FriendlyByteBuf, AggregationReadyNeoPayload> STREAM_CODEC = StreamCodec.of(
-                (buf, p) -> buf.writeBoolean(p.ready()),
-                buf -> new AggregationReadyNeoPayload(buf.readBoolean())
+                (buf, p) -> {
+                    buf.writeBoolean(p.ready());
+                    buf.writeVarInt(p.dictEpoch());
+                    buf.writeLong(p.dictId());
+                },
+                buf -> {
+                    boolean ready = buf.readBoolean();
+                    if (!buf.isReadable()) {
+                        return new AggregationReadyNeoPayload(ready, 0, 0L, false);
+                    }
+                    return new AggregationReadyNeoPayload(ready, buf.readVarInt(), buf.readLong(), true);
+                }
         );
+
+        public AggregationReadyNeoPayload(boolean ready) {
+            this(ready, 0, 0L, true);
+        }
+
+        public AggregationReadyNeoPayload(boolean ready, int dictEpoch, long dictId) {
+            this(ready, dictEpoch, dictId, true);
+        }
+
         @Override
         public Type<AggregationReadyNeoPayload> type() {
             return TYPE;
@@ -232,13 +259,16 @@ public class NeoForgeNetworkManager implements INetworkManagerService {
         });
 
         // 字典热推回调（镜像 fabric/forge）：服务端字典重建后向全体在线玩家推送。
-        DictionaryManager.setPushCallback(dictionary -> {
+        // 回调携带版本化快照（epoch + id）——offer 阶段激活版尚未切换，读全局会拿到旧版
+        // （1.21.1 实证过旧写法的 null/旧版字典问题）；接收端幂等安装并回带字典回执的
+        // aggregation_ready，全员 ACK 后才切激活版。
+        DictionaryManager.setPushCallback(snapshot -> {
             try {
                 net.minecraft.server.MinecraftServer server =
                         net.neoforged.neoforge.server.ServerLifecycleHooks.getCurrentServer();
                 if (server != null) {
                     for (ServerPlayer player : server.getPlayerList().getPlayers()) {
-                        sendDictionarySyncPacket(player);
+                        sendDictionarySyncPacket(player, snapshot);
                     }
                 }
             } catch (Exception e) {
@@ -291,9 +321,15 @@ public class NeoForgeNetworkManager implements INetworkManagerService {
                 AggregationReadyNeoPayload.TYPE,
                 AggregationReadyNeoPayload.STREAM_CODEC,
                 (payload, ctx) -> ctx.enqueueWork(() -> {
-                    if (ctx.player() instanceof ServerPlayer player && payload.ready()) {
-                        // 直连拓扑：转调 common 激活链（服务端 ZSTD 切换 + Dict/Index 同步 + 聚合放行）
-                        ServerHandshakeActivation.handleActivationReady(player);
+                    if (ctx.player() instanceof ServerPlayer player) {
+                        if (payload.ready()) {
+                            // 直连拓扑：转调 common 激活链（字典校验 → 聚合放行；热更 ACK → rollout 门控）
+                            ServerHandshakeActivation.handleActivationReady(player,
+                                    payload.dictEpoch(), payload.dictId(), payload.hasDictInfo());
+                        } else {
+                            // ready=false = 客户端请求字典重同步（未知 epoch 帧的恢复动作）
+                            ServerHandshakeActivation.handleDictionaryResync(player);
+                        }
                     }
                 })
         );
@@ -416,12 +452,18 @@ public class NeoForgeNetworkManager implements INetworkManagerService {
         sendIndexSyncPacket(player);
     }
 
-    /** 发送聚合字典同步到客户端（SPI：Services.NETWORK_MANAGER.sendDictionarySync 转调）。 */
+    /** 发送聚合字典同步到客户端（SPI：Services.NETWORK_MANAGER.sendDictionarySync 转调；读激活快照）。 */
     public static void sendDictionarySyncPacket(ServerPlayer player) {
+        sendDictionarySyncPacket(player, DictionaryManager.getActiveSnapshot());
+    }
+
+    /** 带快照重载：offer 推送在激活版切换前触发，必须携带回调传入的快照（epoch+id+字节）。 */
+    public static void sendDictionarySyncPacket(ServerPlayer player, DictionarySnapshot snapshot) {
         try {
-            byte[] body = PayloadHandlers.encodeDictionarySyncBody(DictionaryManager.getAggregationDict());
+            byte[] body = PayloadHandlers.encodeDictionarySyncBody(snapshot);
             player.connection.send(new ByteArrayPayload(DICTIONARY_SYNC_TYPE, body));
-            LOGGER.debug("Hassium: Sent dictionary sync ({} bytes) to {}", body.length, player.getName().getString());
+            LOGGER.debug("Hassium: Sent dictionary sync (epoch={}, {} bytes) to {}",
+                    snapshot != null ? snapshot.epoch() : 0, body.length, player.getName().getString());
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to send dictionary sync packet", e);
         }
@@ -440,15 +482,28 @@ public class NeoForgeNetworkManager implements INetworkManagerService {
 
     /** SPI：客户端 aggregation_ready ACK（C2S；common {@code ClientActivation} 经 Services.NETWORK_MANAGER 消费）。 */
     @Override
-    public void sendAggregationReady() {
-        sendAggregationReadyToServer();
+    public void sendAggregationReady(int dictionaryEpoch, long dictionaryId) {
+        sendAggregationReadyToServer(dictionaryEpoch, dictionaryId);
     }
 
-    public static void sendAggregationReadyToServer() {
+    /** SPI：客户端请求字典重同步（unknown-epoch 恢复；载体 = ready=false 的 aggregation_ready）。 */
+    @Override
+    public void sendDictionaryResyncRequest() {
         try {
             var connection = net.minecraft.client.Minecraft.getInstance().getConnection();
             if (connection != null) {
-                connection.send(new AggregationReadyNeoPayload(true));
+                connection.send(new AggregationReadyNeoPayload(false, 0, 0L, false));
+            }
+        } catch (Exception e) {
+            LOGGER.error("Hassium: Failed to send dictionary resync request", e);
+        }
+    }
+
+    public static void sendAggregationReadyToServer(int dictionaryEpoch, long dictionaryId) {
+        try {
+            var connection = net.minecraft.client.Minecraft.getInstance().getConnection();
+            if (connection != null) {
+                connection.send(new AggregationReadyNeoPayload(true, dictionaryEpoch, dictionaryId));
             }
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to send aggregation ready", e);

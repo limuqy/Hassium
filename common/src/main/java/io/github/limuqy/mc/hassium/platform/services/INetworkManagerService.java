@@ -65,8 +65,21 @@ public interface INetworkManagerService {
 
     /**
      * 客户端回发 aggregation_ready ACK（index_sync 收到后激活聚合时调用；C2S）。
+     * <p>
+     * 携带已安装字典的版本回执（epoch + 内容 hash）：服务端据此校验字典一致性、
+     * 登记 epoch 感知、并对热更 offer 计 ACK 门控。
+     *
+     * @param dictionaryEpoch 客户端已安装字典的 epoch（未安装为 0）
+     * @param dictionaryId    客户端已安装字典的内容 hash（未安装为 0）
      */
-    default void sendAggregationReady() {
+    default void sendAggregationReady(int dictionaryEpoch, long dictionaryId) {
+    }
+
+    /**
+     * 客户端请求字典重同步（C2S；解码到未知 epoch 聚合帧后的恢复动作，客户端节流）。
+     * 载体沿用 {@code aggregation_ready} 的 {@code ready=false} 语义，服务端重发当前激活字典。
+     */
+    default void sendDictionaryResyncRequest() {
     }
 
 }

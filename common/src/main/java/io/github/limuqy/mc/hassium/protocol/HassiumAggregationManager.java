@@ -43,6 +43,25 @@ public class HassiumAggregationManager {
     private static final int MAX_PENDING_BUFFER_ENTRIES = 65536;
 
     /**
+     * 会话内序列化失败过的包类型（"ns:path"）：直发短路 + 失败降噪。
+     * <p>
+     * 第三方 payload 可能无法在服务端序列化（如方法签名引用 client 专属类，专用服上
+     * dist-clean 拒绝加载）。失败对同一类型是持续性的——不短路则每包重复反射尝试
+     * （CPU 开销）并每包一条 ERROR 刷屏。仅内存集合：重启后重新尝试一次（mod 更新后可自愈）。
+     */
+    private static final java.util.Set<String> AGGREGATION_INCOMPATIBLE_TYPES = ConcurrentHashMap.newKeySet();
+
+    /** 该类型本会话是否曾聚合序列化失败（调用方应直接放行直发）。 */
+    public static boolean isAggregationIncompatible(String packetTypeId) {
+        return AGGREGATION_INCOMPATIBLE_TYPES.contains(packetTypeId);
+    }
+
+    /** 记录一次序列化失败；返回 true 表示该类型首见（调用方据此决定日志级别）。 */
+    private static boolean markAggregationIncompatible(PacketId type) {
+        return AGGREGATION_INCOMPATIBLE_TYPES.add(type.fullId());
+    }
+
+    /**
      * 单连接聚合缓冲：O(1) 运行计数（takeOver 是 Netty 热路径，逐包累计避免 O(n²)）。
      * {@code bytes}/{@code count} 与 {@code packets} 在同一把锁内维护，二者恒一致。
      */
@@ -121,7 +140,11 @@ public class HassiumAggregationManager {
                 // 但 identifier 已通过 CompactHeader 单独存储，不能重复编码
                 data = PacketPayloadCompat.extractPayloadData(packet);
                 if (data == null) {
-                    Constants.LOG.warn("Failed to extract payload data, skipping aggregation: {}", type);
+                    if (markAggregationIncompatible(type)) {
+                        Constants.LOG.warn("Failed to extract payload data, skipping aggregation: {} (further occurrences degrade to direct send silently)", type);
+                    } else {
+                        Constants.LOG.debug("Failed to extract payload data, skipping aggregation: {}", type);
+                    }
                     return false;
                 }
                 Constants.LOG.debug("Hassium: Extracted payload from CustomPayloadPacket: {} ({} bytes)",
@@ -159,7 +182,11 @@ public class HassiumAggregationManager {
                 return true;
             }
         } catch (Exception e) {
-            Constants.LOG.error("Failed to serialize packet for aggregation: {}", type, e);
+            if (markAggregationIncompatible(type)) {
+                Constants.LOG.error("Failed to serialize packet for aggregation: {} (type marked incompatible; further occurrences degrade to direct send silently)", type, e);
+            } else {
+                Constants.LOG.debug("Failed to serialize packet for aggregation: {}", type, e);
+            }
             return false;
         } finally {
             buf.release();
@@ -314,9 +341,12 @@ public class HassiumAggregationManager {
 
             HassiumAggregationPacket aggregationPacket = new HassiumAggregationPacket(batch, indexManager);
             FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-            aggregationPacket.encode(buf);
+            // DICT 帧头是否写 epoch 按连接协商结果决定（旧协议客户端保持旧帧格式）
+            byte[] rawFrame = aggregationPacket.encode(buf, HassiumConnectionRegistry.isEpochAware(connection));
             // debug.exportAggregatedPackets：导出编码后的完整聚合帧（开关关时仅一次配置读）
             AggregatedPacketExporter.exportAggregationFrame(buf, batch.size());
+            // 字典更新语料：存在激活字典后每分钟随机目标捕获一帧（压缩前原始字节；异步落盘）
+            DictionaryManager.collectCorpusSample(connection, rawFrame);
 
             if (sender != null) {
                 sendAggregateBypassingVanillaCompression(connection, buf);

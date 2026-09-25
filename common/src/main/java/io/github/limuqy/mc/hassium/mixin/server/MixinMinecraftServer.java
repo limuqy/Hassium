@@ -128,6 +128,8 @@ public class MixinMinecraftServer {
         Constants.LOG.info("Hassium: ChunkAuthorityHashes {}",
                 io.github.limuqy.mc.hassium.server.ChunkAuthorityHashes.statsLine());
         io.github.limuqy.mc.hassium.server.ChunkAuthorityHashes.clear();
+        // 字典会话复位：路径/快照/rollout/样本全清（同 JVM 内下一服务端实例重新锚定，防跨世界残留）
+        io.github.limuqy.mc.hassium.protocol.DictionaryManager.resetServerSession();
         RuntimeServerContext.setActiveServer(null);
     }
 }

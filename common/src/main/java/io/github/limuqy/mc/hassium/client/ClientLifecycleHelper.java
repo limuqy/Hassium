@@ -332,6 +332,9 @@ public final class ClientLifecycleHelper {
         io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.clearDiskReadEmpty();
         io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate.clearAll();
         io.github.limuqy.mc.hassium.protocol.PullResponseDecodeQueue.discard();
+        // 字典会话复位：清聚合字典快照 + 「服务端带 epoch 帧」标记 + 激活 ACK 标记（防跨服残留）
+        io.github.limuqy.mc.hassium.protocol.DictionaryManager.resetClientSession();
+        ClientActivation.resetForDisconnect();
 
         ChunkMeshCompileLog.reset();
 

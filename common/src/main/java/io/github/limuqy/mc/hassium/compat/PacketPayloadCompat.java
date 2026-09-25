@@ -106,6 +106,22 @@ public final class PacketPayloadCompat {
             || packet instanceof net.minecraft.network.protocol.common.ServerboundCustomPayloadPacket;
 #endif
     }
+
+#if MC_VER >= MC_1_21_1
+    /**
+     * 1.21.1+：非 {@code minecraft} 命名空间的 S2C custom payload（mod / 加载器注册类型，
+     * 如 {@code neoforge:custom_time_packet}、{@code create:*}）。
+     * <p>
+     * 这类 payload 的客户端 handler 按注册时的具体类型对象分发；聚合重放只能构造
+     * {@link RawCustomPayload}（id + 字节），进分发器即 ClassCastException
+     * （NeoForge custom_time_packet 实证）。1.20.1 的分发按 id + 字节进行，无此问题，
+     * 因此仅 1.21.1+ 段存在本判定，聚合入口据此对这类包直发。
+     */
+    public static boolean isModdedS2CCustomPayload(Packet<?> packet) {
+        return packet instanceof net.minecraft.network.protocol.common.ClientboundCustomPayloadPacket cp
+                && !"minecraft".equals(cp.payload().type().id().getNamespace());
+    }
+#endif
 #if MC_VER >= MC_1_21_1
     /**
      * 1.21.1+：为 payload id 创建类型化 {@code CustomPacketPayload.Type}。

@@ -112,16 +112,44 @@ public final class PayloadHandlers {
     }
 
     /**
-     * dictionary_sync（客户端）：聚合字典登记（聚合包解码前置条件）。
+     * dictionary_sync（客户端）：校验 + 登记聚合字典快照（聚合包解码前置条件）。
+     * <p>
+     * 内容 hash 与服务端 id 不符的字典拒绝安装（截断/损坏不得静默上线）。
+     * <p>
+     * ACK 语义 =「index + 字典均已就绪」：激活 ACK 由 {@code ClientActivation.handleIndexSync}
+     * 在 index 安装后统一发出（携带当前字典 epoch）；激活完成后的 dictionary_sync 是热推
+     * offer，立即回 ACK 参与 rollout 门控。激活前不单独回 ACK，避免「字典已装、索引未装」
+     * 时过早触发服务端 ENABLE+flush（缓冲帧因索引缺失解码失败）。
      */
     public static void handleDictionarySync(byte[] data) {
+        FriendlyByteBuf buf = wrap(data);
         try {
-            DictionarySyncPayload payload = DictionarySyncPayload.decode(wrap(data));
-            DictionaryManager.setAggregationDict(payload.dictionary());
-            LOGGER.debug("Hassium: Received aggregation dictionary ({} bytes)",
-                    payload.dictionary() != null ? payload.dictionary().length : 0);
+            DictionarySyncPayload payload = DictionarySyncPayload.decode(buf);
+            byte[] dict = payload.dictionary();
+            if (payload.hasDictionaryInfo() && payload.dictionaryId() != 0) {
+                long actual = DictionarySnapshot.hash(dict);
+                if (actual != payload.dictionaryId()) {
+                    LOGGER.error("Hassium: Dictionary sync content hash mismatch (id={}, actual={}, {} bytes); refusing install",
+                            payload.dictionaryId(), actual, dict.length);
+                    return;
+                }
+            }
+            // 尾部扩展字段是否存在 = 服务端是否 epoch 感知（DICT 帧头写 epoch 的判定依据）
+            DictionaryManager.markServerEpochAware(payload.hasDictionaryInfo());
+            DictionaryManager.installAggregationSnapshot(
+                    DictionarySnapshot.of(payload.dictionaryEpoch(), dict));
+            LOGGER.debug("Hassium: Received aggregation dictionary ({} bytes, epoch={}, id={}, extended={})",
+                    dict != null ? dict.length : 0, payload.dictionaryEpoch(),
+                    payload.dictionaryId(), payload.hasDictionaryInfo());
+            if (payload.hasDictionaryInfo()
+                    && io.github.limuqy.mc.hassium.client.ClientActivation.isActivationAckSent()) {
+                io.github.limuqy.mc.hassium.platform.Services.NETWORK_MANAGER
+                        .sendAggregationReady(payload.dictionaryEpoch(), payload.dictionaryId());
+            }
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to handle dictionary sync", e);
+        } finally {
+            buf.release();
         }
     }
 
@@ -155,6 +183,22 @@ public final class PayloadHandlers {
                 return;
             }
             HassiumAggregationPacket.decode(packetBuf, indexManager).handle(connection);
+        } catch (DictionaryMissingException e) {
+            // 断连拆解窗口：resetClientSession 已清字典，队列残余在途帧解码必失败——
+            // 会话已结束，降噪跳过、不请求重同步（review 冒烟 forge 场实证）
+            if (connection != null && !connection.isConnected()) {
+                LOGGER.debug("Hassium: aggregation frame dropped after disconnect (dictionary session cleared)");
+                return;
+            }
+            // 字典缺失/未知 epoch：请求服务端重发当前字典（节流），恢复当前 epoch 解码；
+            // 恢复前的不可解帧丢弃并降噪记录
+            if (io.github.limuqy.mc.hassium.client.ClientActivation.requestDictionaryResync()) {
+                LOGGER.error("Hassium: aggregation frame rejected, dictionary missing ({}); "
+                        + "requested dictionary resync from server", e.getMessage());
+            } else {
+                LOGGER.debug("Hassium: aggregation frame dropped (dictionary missing, resync in flight): {}",
+                        e.getMessage());
+            }
         } catch (Throwable e) {
             LOGGER.error("Failed to handle aggregation packet", e);
         } finally {
@@ -190,14 +234,18 @@ public final class PayloadHandlers {
     // ===== 服务端发送端编码 =====
 
     /**
-     * dictionary_sync body 字节（{@link DictionarySyncPayload} 布局；null 字典
-     * 按空字典发送，与 Forge/NeoForge 端原守卫一致）。
+     * dictionary_sync body 字节（{@link DictionarySyncPayload} 布局；null 快照按
+     * 「无字典」发送（空内容 + epoch 0 + id 0），与 Forge/NeoForge 端原守卫一致）。
      */
-    public static byte[] encodeDictionarySyncBody(byte[] dictionary) {
-        byte[] dict = dictionary != null ? dictionary : new byte[0];
+    public static byte[] encodeDictionarySyncBody(DictionarySnapshot snapshot) {
+        byte[] dict = snapshot != null ? snapshot.data() : new byte[0];
         FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
         try {
-            new DictionarySyncPayload(dict, false).encode(buf);
+            // 扩展字段恒写（epoch/id 为 0 表示「无字典」的显式声明，客户端据此清空状态）
+            new DictionarySyncPayload(dict, false,
+                    snapshot != null ? snapshot.epoch() : 0,
+                    snapshot != null ? snapshot.id() : 0L,
+                    true).encode(buf);
             return readAll(buf);
         } finally {
             buf.release();

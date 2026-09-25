@@ -24,7 +24,11 @@ import java.util.List;
  * 将多个子包聚合为一个大包，内部使用 ZSTD 压缩。
  * <p>
  * 编码格式：
- * [isCompressed:byte] [uncompressedLength:VarInt] [compressedData]
+ * [isCompressed:byte] ([dictEpoch:VarInt] 仅 DICT 帧 + epoch 感知连接) [uncompressedLength:VarInt] [compressedData]
+ * <p>
+ * dictEpoch 只在「帧用字典压缩且对端已协商 epoch 感知」（{@code aggregation_ready} 携带
+ * 字典回执）时写入；旧协议客户端的帧格式不变。客户端凭 epoch 在当前 + 上一版字典中选择
+ * 解压字典，热切换窗口内的在途旧帧不会误用新字典。
  * <p>
  * compressedData 解压后是：
  * [packetCount:VarInt] [subPacket1...] [subPacket2...] ...
@@ -54,9 +58,21 @@ public class HassiumAggregationPacket {
     }
 
     /**
-     * 编码聚合包
+     * 编码聚合包（帧头不写 epoch；仅兼容旧调用方/调试工具，正式发送路径走
+     * {@link #encode(FriendlyByteBuf, boolean)}）
      */
-    public void encode(FriendlyByteBuf buf) {
+    public byte[] encode(FriendlyByteBuf buf) {
+        return encode(buf, false);
+    }
+
+    /**
+     * 编码聚合包
+     *
+     * @param dictEpochInFrame DICT 帧头写 epoch（仅对已协商 epoch 感知的连接；
+     *                         旧协议客户端的帧格式保持不变）
+     * @return 压缩前的原始帧字节（聚合包明文流；字典更新语料采集用）
+     */
+    public byte[] encode(FriendlyByteBuf buf, boolean dictEpochInFrame) {
         // 编码子包到原始缓冲区
         FriendlyByteBuf rawBuf = new FriendlyByteBuf(Unpooled.buffer());
         try {
@@ -83,8 +99,9 @@ public class HassiumAggregationPacket {
                 compressCtx.setLevel(level);
                 compressCtx.setMagicless(true);
 
-                // 加载聚合包字典（如果有）
-                byte[] dict = DictionaryManager.getAggregationDict();
+                // 加载聚合包字典（如果有；快照整体读取，epoch 与字节同源）
+                DictionarySnapshot snapshot = DictionaryManager.getActiveSnapshot();
+                byte[] dict = snapshot != null ? snapshot.data() : null;
                 boolean useDict = dict != null;
                 if (useDict) {
                     compressCtx.loadDict(dict);
@@ -98,20 +115,25 @@ public class HassiumAggregationPacket {
                 byte[] compressed = compressCtx.compress(rawBytes);
                 compressCtx.close();
 
-                // 写入标志位：区分是否使用了字典
+                // 写入标志位：区分是否使用了字典；DICT 帧对 epoch 感知连接附带字典代
                 buf.writeByte(useDict ? COMPRESSED_WITH_DICT_FLAG : COMPRESSED_FLAG);
+                if (useDict && dictEpochInFrame) {
+                    buf.writeVarInt(snapshot.epoch());
+                }
                 buf.writeVarInt(rawSize);
                 buf.writeBytes(compressed);
 
-                Constants.LOG.debug("Aggregated and compressed: {} -> {} bytes ({}% reduction, dict={})",
+                Constants.LOG.debug("Aggregated and compressed: {} -> {} bytes ({}% reduction, dict={}, epoch={})",
                         rawSize, compressed.length,
-                        String.format("%.2f", 100f * compressed.length / rawSize), useDict);
+                        String.format("%.2f", 100f * compressed.length / rawSize), useDict,
+                        useDict && dictEpochInFrame ? snapshot.epoch() : -1);
             } else {
                 // 不压缩
                 buf.writeByte(NOT_COMPRESSED_FLAG);
                 buf.writeBytes(rawBytes);
             }
             NetworkStats.recordVanillaBytesSent(VanillaZlibEstimator.estimate(rawBytes));
+            return rawBytes;
         } finally {
             rawBuf.release();
         }
@@ -125,6 +147,11 @@ public class HassiumAggregationPacket {
 
         byte[] rawData;
         if (flag == COMPRESSED_FLAG || flag == COMPRESSED_WITH_DICT_FLAG) {
+            int dictEpoch = 0;
+            if (flag == COMPRESSED_WITH_DICT_FLAG && DictionaryManager.isServerEpochAware()) {
+                // 服务端已协商 epoch 帧（dictionary_sync 扩展格式）→ DICT 帧头带字典代
+                dictEpoch = buf.readVarInt();
+            }
             // 解压
             int uncompressedLength = buf.readVarInt();
             if (uncompressedLength < 0 || uncompressedLength > MAXIMUM_UNCOMPRESSED_LENGTH) {
@@ -141,12 +168,23 @@ public class HassiumAggregationPacket {
 
             // 只有当标志位指示使用了字典时，才加载字典
             if (flag == COMPRESSED_WITH_DICT_FLAG) {
-                byte[] dict = DictionaryManager.getAggregationDict();
-                if (dict != null) {
-                    decompressCtx.loadDict(dict);
+                byte[] dict;
+                if (dictEpoch != 0) {
+                    // epoch 帧：按帧头代在当前 + 上一版中选择，切换窗口内的在途旧帧不误用新字典
+                    dict = DictionaryManager.getAggregationDictForEpoch(dictEpoch);
+                    if (dict == null) {
+                        throw new DictionaryMissingException(
+                                "dictionary epoch " + dictEpoch + " not installed (have current/previous only); frame rejected");
+                    }
                 } else {
-                    Constants.LOG.warn("Compressed with dict flag set, but no dictionary available on client");
+                    dict = DictionaryManager.getAggregationDict();
+                    if (dict == null) {
+                        // 缺字典不解压（旧实现 warn 后继续解压必然 zstd 报错且语义含混）：直接拒绝该帧
+                        throw new DictionaryMissingException(
+                                "dict-flagged frame but no dictionary installed; frame rejected");
+                    }
                 }
+                decompressCtx.loadDict(dict);
             }
 
             rawData = decompressCtx.decompress(compressed, uncompressedLength);

@@ -86,14 +86,27 @@ public class MixinConnection {
     }
 
     // review-fix: T7-59: handler 统一加 hassium$ 前缀（Mixin 惯例，避免与目标类未来同名成员 merge 冲突）
-#if MC_VER < MC_1_21_6
+    // 拦截点分版本（真相源 = vanilla Connection.send 重载集 + ServerCommonPacketListenerImpl.send 的委托目标）：
+    // - 1.20.1：无 ServerCommonPacketListenerImpl 中间层，ServerGamePacketListenerImpl 直调双参
+    //   send(Packet, PacketSendListener)——拦双参即全部发送路径。
+    // - 1.20.5+（1.21.1-1.21.5）：发包统一经 ServerCommonPacketListenerImpl.send 直调三参
+    //   send(Packet, PacketSendListener, boolean)，双参重载只剩 Connection.send(Packet) 单参入口在用——
+    //   拦双参会整段漏包（1.21.1 实证：debug.log 0 条拦截日志，聚合静默失效）。只拦三参：
+    //   单参→双参→三参全部汇聚，天然无重复拦截。
+    // - 1.21.6+：三参第二参类型改为 ChannelFutureListener，结构同上。
+#if MC_VER < MC_1_21_1
     @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;Lnet/minecraft/network/PacketSendListener;)V", at = @At("HEAD"), cancellable = true)
     private void hassium$onSendPacket(Packet<?> packet, net.minecraft.network.PacketSendListener sendListener, CallbackInfo ci) {
         hassium$tryAggregate(packet, sendListener != null, ci);
     }
+#elif MC_VER < MC_1_21_6
+    @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;Lnet/minecraft/network/PacketSendListener;Z)V", at = @At("HEAD"), cancellable = true)
+    private void hassium$onSendPacket(Packet<?> packet, net.minecraft.network.PacketSendListener sendListener, boolean flushNow, CallbackInfo ci) {
+        hassium$tryAggregate(packet, sendListener != null, ci);
+    }
 #else
-    @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;Lio/netty/channel/ChannelFutureListener;)V", at = @At("HEAD"), cancellable = true)
-    private void hassium$onSendPacket(Packet<?> packet, io.netty.channel.ChannelFutureListener sendListener, CallbackInfo ci) {
+    @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;Lio/netty/channel/ChannelFutureListener;Z)V", at = @At("HEAD"), cancellable = true)
+    private void hassium$onSendPacket(Packet<?> packet, io.netty.channel.ChannelFutureListener sendListener, boolean flushNow, CallbackInfo ci) {
         hassium$tryAggregate(packet, sendListener != null, ci);
     }
 #endif
@@ -141,10 +154,23 @@ public class MixinConnection {
             return;
         }
 
+#if MC_VER >= MC_1_21_1
+        // mod / 加载器注册的 S2C payload：客户端 handler 按具体类型对象分发，
+        // 聚合重放的 RawCustomPayload 会 ClassCastException（neoforge:custom_time_packet 实证）→ 直发
+        if (PacketPayloadCompat.isModdedS2CCustomPayload(packet)) {
+            return;
+        }
+#endif
+
         // 检查黑名单 / 高频排除：控制面、独立压缩通道、区块图控制包不聚合
         String packetTypeId = packetType.toString();
         if (!PacketCompressionBlacklist.shouldAggregate(packetTypeId)) {
             Constants.LOG.debug("Packet {} skipped aggregation (blacklist or high-freq)", packetTypeId);
+            return;
+        }
+
+        // 会话级序列化失败短路：曾无法聚合的类型（如 client 类引用的第三方 payload）直接放行直发
+        if (HassiumAggregationManager.isAggregationIncompatible(packetTypeId)) {
             return;
         }
 
@@ -186,6 +212,8 @@ public class MixinConnection {
         io.github.limuqy.mc.hassium.server.entity.EntityPacketCounters.forget(self);
         HassiumAggregationManager.discardConnection(self);
         AggregationDecodeQueue.discard(self);
+        // 字典 rollout：断连解除其 offer ACK 门控（或触发阻断者离开后的重试）
+        io.github.limuqy.mc.hassium.protocol.DictionaryManager.onConnectionGone(self);
         // review-fix: 仅客户端连接断连才清空 pull 解码队列——队列是进程级单例，
         // LAN/集成服上远程玩家断连不能清掉主机客户端的在途 pull 响应（review §1.3）
         if (receiving == PacketFlow.CLIENTBOUND) {

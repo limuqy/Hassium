@@ -255,6 +255,19 @@ Sector 2+:    [length(4)][type=126][magic 0x48][hash(8)][ZSTD 压缩数据]
 
 控制面（握手、index sync、chunkHash 等）在压缩黑名单，不进 PENDING 聚合缓冲；区块图控制包（`forget_level_chunk` / `set_chunk_cache_center` / `set_chunk_cache_radius`）保持直发（pull 模式域，规避顺序倒置窗口）；实体高频包（位移/旋转/motion 等）进聚合（2026-09-14 评估放开：tick 尾 + 50ms watchdog 兜底使帧 staleness 上界恒定，客户端重放路径与原版等价）；`ClientboundBundlePacket` 直发（1.21.1+ play codec 表无 bundle 条目，无法经聚合序列化）。UDP 数据面/网关帧协议/L1 迁移已随直连拓扑裁剪（历史见 [`archive/multi-channel_network_research.md`](archive/multi-channel_network_research.md)）。
 
+### 8.1 聚合字典 epoch 协议（2026-09-25 起）
+
+字典从全局裸 `byte[]` 升级为版本化快照（`DictionarySnapshot`：epoch 单调递增 + FNV-1a 64 内容 hash + 字节）：
+
+- **dictionary_sync（S2C）**：`[isChunkDict][len][bytes]` 尾部追加 `[epoch:VarInt][id:long]`。旧客户端忽略尾随字段照常安装；新客户端校验 `hash(bytes)==id` 后安装，**尾字段是否存在 = 服务端 epoch 感知判定**（决定客户端解析 DICT 帧头是否读 epoch、是否可回字典回执）。
+- **聚合 DICT 帧头**：`[flag][epoch:VarInt（仅 epoch 感知连接 + 字典帧）][rawLen][data]`。旧协议客户端帧格式不变；客户端按帧头 epoch 在「激活版 + 保留历史（合计 ≤5 份，超出挤出最旧）」中选字典，未知 epoch 直接拒绝该帧并**请求重同步**（见下），不静默误解。
+- **aggregation_ready（C2S）**：`[ready]` 尾部追加 `[epoch:VarInt][id:long]` 字典回执。旧服务端只读 boolean 忽略尾随；新服务端按回执归类（`DictionaryManager.classifyDictionaryAck`）：
+  - 初始激活：接受**激活版或 pendingOffer 快照**（offer 窗口内入服的客户端可能已装候选版，照常 ENABLE + 计 rollout ACK）；
+  - 热更 rollout：候选版 ACK 计入门控，**全部活跃连接确认后才切换激活版**（超时 10s 放弃本轮保持旧版；旧协议连接阻断切换；搁置候选由后续 epoch-aware 连接激活 / 阻断连接离开重试）；
+  - `ready=false` = **字典重同步请求**（客户端解到未知 epoch 帧的恢复动作，节流 5s）：服务端重发当前激活字典，客户端幂等安装后恢复解码——不回原版协议。
+- **字典更新机制**：存在激活字典后，每分钟随机取一个活跃玩家捕获一帧聚合包（压缩前原始字节）落盘 `config/hassium/aggregation_corpus/`（保留 2160 文件/128MB 上限）；按**服务器日历天**每天最多尝试一次重训练，语料须满足最低数据集（≥256KB 且 ≥32 样本，zstd 训练器对样本数有硬下限，见 `DictTrainerMinimumCorpusTest`）——不达标拒绝并保持现行字典；重训练产物与激活版逐字节比对（相同则跳过升版），不同则原子落盘并走 rollout 切换，消费后语料清空。
+- **兼容边界（过渡协议，无独立能力位）**：epoch 感知与回执能力**未进 `LoginCaps`**，以 payload 尾字段存在性自协商——两端同版本获得完整 rollout；旧客户端 + 新服务端可激活聚合但永不触发字典切换（保持旧版，安全但拿不到新压缩率）；新客户端 + 旧服务端按旧格式解析。中间版本客户端（能读尾字段但无完整 rollout 逻辑）不存在——epoch/id 尾字段与 rollout 门控同版本落地，无单独拆分点。若未来需要形式化，应在 `LoginCaps` 增加 `AGGREGATION_DICT_EPOCH` 能力位并在此更新。
+
 ## 9. 配置默认值（安全与行为）
 
 配置文件（双文件按物理端加载）：

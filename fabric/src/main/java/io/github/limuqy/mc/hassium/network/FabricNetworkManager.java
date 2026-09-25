@@ -6,6 +6,7 @@ import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.protocol.AggregationReadyPayload;
 import io.github.limuqy.mc.hassium.protocol.DictionaryManager;
+import io.github.limuqy.mc.hassium.protocol.DictionarySnapshot;
 import io.github.limuqy.mc.hassium.protocol.HassiumAggregationManager;
 import io.github.limuqy.mc.hassium.protocol.IndexSyncManager;
 import io.github.limuqy.mc.hassium.protocol.PayloadHandlers;
@@ -156,13 +157,13 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
             }
         });
 
-        // 设置字典推送回调
-        DictionaryManager.setPushCallback((dictionary) -> {
+        // 设置字典推送回调（携带版本化快照；接收端幂等安装 + 回 ACK）
+        DictionaryManager.setPushCallback((snapshot) -> {
             try {
                 net.minecraft.server.MinecraftServer server = cachedServer;
                 if (server != null) {
                     for (ServerPlayer player : server.getPlayerList().getPlayers()) {
-                        sendDictionarySyncPacket(player, dictionary);
+                        sendDictionarySyncPacket(player, snapshot);
                     }
                 }
             } catch (Exception e) {
@@ -208,9 +209,9 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
      * 发送字典同步包到指定玩家（body 编码在 common {@link PayloadHandlers}；
      * 本类只保留传输面）。
      */
-    private static void sendDictionarySyncPacket(ServerPlayer player, byte[] dictionary) {
+    private static void sendDictionarySyncPacket(ServerPlayer player, DictionarySnapshot snapshot) {
         try {
-            byte[] body = PayloadHandlers.encodeDictionarySyncBody(dictionary);
+            byte[] body = PayloadHandlers.encodeDictionarySyncBody(snapshot);
 #if MC_VER < MC_1_21_1
             ServerPlayNetworking.send(player, DICTIONARY_SYNC_S2C,
                     new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(body)));
@@ -218,8 +219,9 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
             ServerPlayNetworking.send(player,
                     FabricPayloadRegistry.createPayload(FabricPayloadRegistry.DICTIONARY_SYNC_S2C_TYPE, body));
 #endif
-            DebugLogger.debug(LogType.NETWORK, "Hassium: Sent aggregation dictionary sync to player {} ({} bytes)",
-                    player.getName().getString(), dictionary != null ? dictionary.length : 0);
+            DebugLogger.debug(LogType.NETWORK, "Hassium: Sent aggregation dictionary sync to player {} (epoch={}, {} bytes)",
+                    player.getName().getString(), snapshot != null ? snapshot.epoch() : 0,
+                    snapshot != null ? snapshot.data().length : 0);
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to send dictionary sync packet", e);
         }
@@ -253,7 +255,7 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
      */
     @Override
     public void sendDictionarySync(ServerPlayer player) {
-        sendDictionarySyncPacket(player, DictionaryManager.getAggregationDict());
+        sendDictionarySyncPacket(player, DictionaryManager.getActiveSnapshot());
     }
 
     /**
@@ -297,22 +299,45 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
      * SPI：客户端激活 ACK（index_sync 收到后回发；C2S；common {@code ClientActivation}
      * 经 Services.NETWORK_MANAGER 消费）。
      * <p>
-     * body = {@link AggregationReadyPayload}（ready=true），服务端 receiver 转调
-     * common {@code ServerHandshakeActivation.handleActivationReady}（聚合 PENDING→ENABLED）。
+     * body = {@link AggregationReadyPayload}（ready=true + 字典回执 epoch/id），服务端
+     * receiver 转调 common {@code ServerHandshakeActivation.handleActivationReady}
+     * （字典校验 → 聚合 PENDING→ENABLED）。
      */
     @Override
-    public void sendAggregationReady() {
+    public void sendAggregationReady(int dictionaryEpoch, long dictionaryId) {
         try {
             FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-            new AggregationReadyPayload(true).encode(buf);
+            new AggregationReadyPayload(true, dictionaryEpoch, dictionaryId).encode(buf);
 #if MC_VER < MC_1_21_1
             ClientPlayNetworking.send(AGGREGATION_READY_C2S, buf);
 #else
             ClientPlayNetworking.send(FabricPayloadRegistry.toPayload(FabricPayloadRegistry.AGGREGATION_READY_C2S_TYPE, buf));
 #endif
-            DebugLogger.debug(LogType.NETWORK, "Hassium: Sent aggregation ready ACK");
+            DebugLogger.debug(LogType.NETWORK, "Hassium: Sent aggregation ready ACK (dict epoch={}, id={})",
+                    dictionaryEpoch, dictionaryId);
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to send aggregation ready ACK", e);
+        }
+    }
+
+    /**
+     * SPI：客户端请求字典重同步（解码到未知 epoch 帧的恢复动作；C2S）。
+     * 载体 = {@link AggregationReadyPayload} ready=false，服务端转调
+     * {@code ServerHandshakeActivation.handleDictionaryResync}（重发当前激活字典）。
+     */
+    @Override
+    public void sendDictionaryResyncRequest() {
+        try {
+            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+            new AggregationReadyPayload(false).encode(buf);
+#if MC_VER < MC_1_21_1
+            ClientPlayNetworking.send(AGGREGATION_READY_C2S, buf);
+#else
+            ClientPlayNetworking.send(FabricPayloadRegistry.toPayload(FabricPayloadRegistry.AGGREGATION_READY_C2S_TYPE, buf));
+#endif
+            DebugLogger.debug(LogType.NETWORK, "Hassium: Sent dictionary resync request");
+        } catch (Exception e) {
+            LOGGER.error("Hassium: Failed to send dictionary resync request", e);
         }
     }
 
@@ -344,7 +369,7 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
         // ===== 预握手（配置阶段）：提前登记 Hassium 客户端能力位 =====
         registerPreHandshakeServer();
 
-        // 注册激活 ACK（客户端 index_sync 确认 → common 激活：聚合 PENDING→ENABLED）
+        // 注册激活 ACK（客户端 index_sync 确认 → common 激活：字典校验 + 聚合 PENDING→ENABLED）
 #if MC_VER < MC_1_21_1
         ServerPlayNetworking.registerGlobalReceiver(AGGREGATION_READY_C2S, (server, player, handler, buf, sender) -> {
             AggregationReadyPayload payload = AggregationReadyPayload.decode(buf);
@@ -352,7 +377,11 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
                     player.getName().getString(), payload.isReady());
 
             if (payload.isReady()) {
-                ServerHandshakeActivation.handleActivationReady(player);
+                ServerHandshakeActivation.handleActivationReady(player,
+                        payload.getDictionaryEpoch(), payload.getDictionaryId(), payload.hasDictionaryInfo());
+            } else {
+                // ready=false = 客户端请求字典重同步（解码到未知 epoch 帧的恢复动作）
+                ServerHandshakeActivation.handleDictionaryResync(player);
             }
         });
 #else
@@ -364,7 +393,11 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
                         context.player().getName().getString(), readyPayload.isReady());
 
                 if (readyPayload.isReady()) {
-                    ServerHandshakeActivation.handleActivationReady(context.player());
+                    ServerHandshakeActivation.handleActivationReady(context.player(),
+                            readyPayload.getDictionaryEpoch(), readyPayload.getDictionaryId(),
+                            readyPayload.hasDictionaryInfo());
+                } else {
+                    ServerHandshakeActivation.handleDictionaryResync(context.player());
                 }
             } catch (Exception e) {
                 LOGGER.error("Failed to handle aggregation ready packet", e);
