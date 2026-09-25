@@ -542,6 +542,27 @@ if ($Scenario -in @("seedgen", "dimension", "modcompat", "modcompat_strict")) {
 # T8 场景配置档案落盘：存在 scripts/smoke/profiles/<Scenario>.profile.properties 时，
 # 按键值对 patch 双端 hassium toml（须在服务端/客户端启动前完成）。文件不存在则 no-op。
 Invoke-SmokeProfilePatch -Name $Scenario -ClientRunDir $clientRunDir -ServerRunDir $serverRunDir -SessionTag $SessionId
+
+if ($Scenario -eq "dictionary") {
+    # 字典热更场景前置：删除服务端已训练字典（含 tmp 残留）与语料目录内容（agg-*.bin*，
+    # 保留 retrain.marker——跨场次的「今天是否已训」种子），强制本场从头采样训练，
+    # 走「offer → 客户端 hash 校验安装 → aggregation_ready(epoch,id) → 全连接 ACK → 切换」
+    # 全链（十倍速 tick 由场景内 /tick rate 200 驱动；门禁见 analyzer dictionary_rollout）。
+    # 不清语料会让上一场残留的 corpus 达标后抢在首训前触发重训练（SMOKE 触发在首训
+    # 前被 DictionaryManager 门禁拦下，但残留本身会造成非确定性）。
+    # 客户端侧无字典文件（只经网络同步），无需清理。
+    $hassiumServerConfigDir = Join-Path $serverRunDir "config\hassium"
+    $dictFiles = @(Get-ChildItem -Path $hassiumServerConfigDir -File -Filter "hassium_aggregation_dict.bin*" -ErrorAction SilentlyContinue)
+    if ($dictFiles.Count -gt 0) {
+        $dictFiles | Remove-Item -Force -ErrorAction SilentlyContinue
+    }
+    $corpusStale = @(Get-ChildItem -Path (Join-Path $hassiumServerConfigDir "aggregation_corpus") -File -Filter "agg-*.bin*" -ErrorAction SilentlyContinue)
+    if ($corpusStale.Count -gt 0) {
+        $corpusStale | Remove-Item -Force -ErrorAction SilentlyContinue
+    }
+    Write-Host "[$SessionId] dictionary 场景：删除字典文件 $($dictFiles.Count) 个 + 残留语料 $($corpusStale.Count) 个（强制全新训练）"
+}
+
 if ($Scenario -eq "classic") {
     # classic 固定 OVD 上限 16（R1 服 20 > OVD 16 > R2 服 10）
     Set-SmokeTomlKeys -Label "classic OVD pin" -ClientRunDir $clientRunDir -ServerRunDir $serverRunDir -SessionTag $SessionId -Pairs @(
@@ -771,7 +792,8 @@ $clientExit = if ($clientProc.ExitCode) { $clientProc.ExitCode } else { 0 }
 Write-Host "[$SessionId] [8/9] 解析结果 (客户端退出码: $clientExit)..."
 # 单轮场景没有 ROUND2；不得把未运行的轮次写成 stats=false / pass=false。
 # flyroundtrip：单轮往返飞行黑块专项（join → 飞出去 → 掉头飞回 → dump ROUND1 → assertProbe → exit rounds=1）。
-$requiresRound2 = $Scenario -notin @("seedgen", "modcompat", "modcompat_strict", "flyroundtrip")
+# dictionary：单轮字典热更 rollout（join → /tick rate 200 → 等训练+offer+ACK 切换 → dump ROUND1 → exit rounds=1）。
+$requiresRound2 = $Scenario -notin @("seedgen", "modcompat", "modcompat_strict", "flyroundtrip", "dictionary")
 $clientContent = if (Test-Path $clientLog) { Get-Content $clientLog -Raw } else { "" }
 
 # F17：Gradle 会把 fork 出的游戏 JVM 的真实退出码写进自己的失败信息（在 client 的 stderr 日志里）。挂起被系统关闭时是

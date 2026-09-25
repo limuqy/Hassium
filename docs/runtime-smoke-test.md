@@ -88,7 +88,7 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 | 参数 | 必填 | 默认 | 说明 |
 |------|------|------|------|
 | `-Phase` | 是 | — | `I` 或 `R` |
-| `-Scenarios` | 否 | `classic` | 场景列表（逗号分隔）。`classic` 走全矩阵（`-Versions` × `-Loaders`）；非 classic 场景只跑锚点集（硬编码：1.20.1 forge、1.21.1 neoforge、1.21.11 fabric，再与 `-Versions`/`-Loaders`/`builds_for` 取交集）。非 classic 会话 sessionId 追加 `_<scenario>` 后缀避免 result JSON 冲突 |
+| `-Scenarios` | 否 | `classic` | 场景列表（逗号分隔）。`classic` 走全矩阵（`-Versions` × `-Loaders`）；非 classic 场景只跑锚点集（硬编码：1.20.1 forge、1.21.1 neoforge、1.21.11 fabric，再与 `-Versions`/`-Loaders`/`builds_for` 取交集；`dictionary` 依赖 1.20.3+ 的 `/tick` 命令，**自动剔除 1.20.1 锚点**）。非 classic 会话 sessionId 追加 `_<scenario>` 后缀避免 result JSON 冲突 |
 | `-Versions` | 否 | 全部 12 版 | 指定版本子集 |
 | `-Loaders` | 否 | `fabric,neoforge` | 加载器子集 |
 | `-MaxRetries` | 否 | `3` | 仅游戏打不开时重试（服务端未就绪 / 客户端没写出 ROUND1）。进过世界的业务 FAIL 不重跑 |
@@ -246,9 +246,10 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 | `modcompat.scenario` | 单轮，与 seedgen 同形。锚点刻意 **mod 无关**，供「带外部 mod」与「不带」两组对照跑分 | `stats.clientAppliedChunkCount > 0`、`stats.clientLandedChunkCount > 0` |
 | `modcompat_strict.scenario` | 同上，追加兼容层 **强断言**（防空测），仅用于「带 mods」组 | 另加 `modCompat.c2meChunkIoReplaced == 1`、`modCompat.c2meCompatArmed == 1`（mixin 放行结构信号）；`c2meHookHits` / `type126Patched` 只作观测（影子主路径不经 wrap / 补丁被收编短路，见 [mod-compat.md](mod-compat.md) §7.2b/§7.3） |
 | `flyroundtrip.scenario` | **往返飞行黑块专项**（单轮）：join → settle（`round1WaitMs`）→ `fly` 飞出去 → `tp @s ~ ~ ~ 180 0` 原地掉头 → `fly` 飞回来 → settle（`dimWaitMs`）→ dump → 断言。必须配 `-MoveSeconds > 0`（=0 时只有 settle，不构成往返）。覆盖「离开视距卸载 → 重入视距重交付（redeliver / publishCached / 两阶段光照中间态）」，这是站桩 classic 与只往外飞的移动冒烟都到不了的路径 | `counters.clientDarkRegressionChunks == 0`（口径见下）；`clientDarkLightProbeChunks` / `clientDarkLightProbeSamples` 作观测 |
+| `dictionary.scenario` | **字典热更 rollout 专项**（单轮，**1.21.1+ 专用**——场景内 `/tick rate 200` 依赖 1.20.3+ 的 `/tick` 命令）：join → `/tick rate 200`（十倍速 tick；聚合帧按 tick 尾冲刷，采样帧频率 ∝ tick 频率，把「4000 样本 → 首训 → offer 推送 → 客户端 hash 校验安装 → `aggregation_ready(epoch,id)` ACK → 全连接确认 → 激活 epoch 1」整链压进窗口）→ wait 120s → dump → exit。服务端以 **SMOKE 模式**运行（`hassium.serverSmokeScenario=dictionary` 自动启用）：harness 前置**删除服务端字典文件**（强制首训）+ 语料**攒批**高频采集（8KB 合并落盘），语料 ≥256KB（最低数据集）时**主动触发一次重训练** → offer epoch 2 → ACK → 切换，完整验证「语料 → 重训练 → ACK 门控切换」更新链路；重训练后语料自动清空 | analyzer `dictionary_rollout`：服务端日志出现 `Aggregation dictionary activated (epoch=2,`——epoch 1 是删档后首训，epoch 2 才是更新链路的证据；probe 基本面同 seedgen |
 **黑块判据（`flyroundtrip` 门禁口径）**：门禁主锚 `clientDarkRegressionChunks` = 「曾亮过的柱在诊断时刻仍黑」（用户报的症状原文）。探针采样「`topY`」——列内最高方块之上第一格，该点按定义无遮挡，正确光必 >0。**判定值一律取光包落地后下一帧复检的 post-apply 采样**（`ClientChunkHandler.runProbeRecheck`，`drainReady` 帧首执行）：vanilla `handleLightUpdatePacket` 只入队、后续 client tick 才落地，即时读数是旧值，首落地柱必然先采到一次 0（曾造成 flyrt11 门禁假阳性 FAIL）。观测口径：`clientDarkLightProbeSamples`（全部即时 0 采样，含首落地瞬态）、`clientDarkLightProbeChunks`（复检后仍黑的柱数，含从未亮过的）。三个计数器由 `ClientChunkHandler` 在 `debug.lightVerify` 开启时统计，故该场景必须有 profile 打开 `debug.lightVerify`（见 `scripts/smoke/profiles/flyroundtrip.profile.properties`），否则拿到恒 0 的假 PASS。
 
-单轮场景（`seedgen` / `modcompat` / `modcompat_strict` / `flyroundtrip`）必须在 `scripts/smoke/analyzer.py` 的 `single_round_scenarios` 登记，否则 analyzer 按两轮判定 → `PROBE_MISSING` P0（harness 自己那条 `-Scenario` 白名单不参与该判定，只影响 ROUND2 统计提取）。
+单轮场景（`seedgen` / `modcompat` / `modcompat_strict` / `flyroundtrip` / `dictionary`）必须在 `scripts/smoke/analyzer.py` 的 `single_round_scenarios` 登记，否则 analyzer 按两轮判定 → `PROBE_MISSING` P0（harness 自己那条 `-Scenario` 白名单不参与该判定，只影响 ROUND2 统计提取）。
 
 存在 `scripts/smoke/profiles/<name>.profile.properties` 时，单会话脚本按键值对 patch 双端 hassium toml（客户端 `run/client/config/hassium/hassium-client.toml`、服务端 `run/server/config/hassium/hassium-server.toml`）。行式 `key=value`、`#` 注释；value 须为合法 TOML 字面量（字符串自带引号）。profile 文件不存在时整体 no-op。
 

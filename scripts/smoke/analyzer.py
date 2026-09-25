@@ -455,8 +455,18 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
     checks["login_handshake"] = "PASS" if has_handshake else "FAIL"
     checks["zstd_pipeline"] = "PASS" if has_agg else "FAIL"
 
+    # 字典热更 rollout 门禁（scenario=dictionary 专属）：冒烟服务端以 SMOKE 模式跑
+    # （预删字典文件 + 语料攒批高频采集 + 语料达标主动触发一次重训练），必须出现
+    # 「Aggregation dictionary activated (epoch=2,」——epoch 1 是删档后的首训，
+    # epoch 2 才是「语料 → 重训练 → offer → 客户端 ACK → 全员确认 → 切换」更新链路的证据。
+    if scenario == "dictionary":
+        has_dict_flip = "Aggregation dictionary activated (epoch=2," in log_text
+        if not has_dict_flip:
+            failures.append(_failure("DICTIONARY_ROLLOUT_NOT_ACTIVATED"))
+        checks["dictionary_rollout"] = "PASS" if has_dict_flip else "FAIL"
+
     # 单轮场景（probe 只有 round1.json）：新场景必须在此登记，否则会被按两轮判定 → PROBE_MISSING。
-    single_round_scenarios = {"seedgen", "modcompat", "modcompat_strict", "flyroundtrip"}
+    single_round_scenarios = {"seedgen", "modcompat", "modcompat_strict", "flyroundtrip", "dictionary"}
     round_numbers = (1,) if scenario in single_round_scenarios else (1, 2)
     stats_ok = {n: bool(re.search(rf"CLIENT_STATS ROUND{n} begin", log_text)
                     and re.search(rf"CLIENT_STATS ROUND{n} end", log_text)) for n in round_numbers}

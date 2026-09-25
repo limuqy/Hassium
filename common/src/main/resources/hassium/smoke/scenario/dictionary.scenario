@@ -1,0 +1,22 @@
+# 字典热更 rollout 冒烟（单轮，1.21.1+ 专用——/tick 命令 1.20.3 才有）。
+#
+# 服务端 SMOKE 模式（harness 注入 hassium.serverSmokeScenario=dictionary 自动启用）：
+# - 前置：删除服务端 hassium_aggregation_dict.bin → 首训 epoch 1；
+# - 语料攒批高频采集（8KB 合并落盘，非正常路径的每分钟一帧）；
+# - 语料 ≥256KB（最低数据集）时主动触发一次重训练 → offer epoch 2 → 客户端 ACK → 切换
+#   ——完整验证「语料 → 重训练 → ACK 门控切换」更新链路。
+#
+# /tick rate 200 = 十倍速 tick：聚合帧按 tick 尾冲刷，训练采样帧频率正比 tick 频率，
+# 十倍速把「4000 样本 → 训练 → offer 推送 → 客户端 hash 校验安装 →
+# aggregation_ready(epoch,id) ACK → 全连接确认 → 激活切换」整条链压进窗口。
+#
+# 门禁（analyzer.py，scenario=dictionary 专属）：服务端日志出现
+# 「Aggregation dictionary activated (epoch=2,」——epoch 1 是删档后首训，
+# epoch 2 才是更新链路（重训练 + ACK 切换）的证据；客户端字典缺失帧拒绝由日志审计兜底。
+join label=WAIT_JOIN_1 since=start timeoutMs=${joinTimeoutMs}
+command text="tick rate 200"
+wait ms=120000
+dump label=ROUND1 round=1
+assertProbe key=stats.clientAppliedChunkCount op=gt value=0
+assertProbe key=stats.clientLandedChunkCount op=gt value=0
+exit rounds=1

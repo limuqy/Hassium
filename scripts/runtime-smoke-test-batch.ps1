@@ -90,7 +90,9 @@ foreach ($sc in $Scenarios) {
         $anchors = @(
             $smokeScenarioAnchors |
                 Where-Object { $Loaders -contains $_.Loader } |
-                Where-Object { -not $Versions -or ($targetVersions -contains $_.Ver) }
+                Where-Object { -not $Versions -or ($targetVersions -contains $_.Ver) } |
+                # dictionary 场景依赖 /tick 命令（1.20.3+）做十倍速采样，1.20.1 锚点不适用
+                Where-Object { $sc -ne "dictionary" -or $_.Ver -ne "1.20.1" }
         )
         if ($anchors.Count -eq 0) {
             Write-Host "[scenario:$sc] 锚点集与 -Versions/-Loaders 无交集，跳过该场景" -ForegroundColor Yellow
