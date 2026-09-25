@@ -162,7 +162,8 @@ public record HassiumConfig(
                 true,              // enabled（专用服网络通道总开关）
                 false,             // enabledOnLan（集成服开局域网后对远程玩家的网络面，默认关）
                 3,                 // compressionLevel
-                true,              // enablePacketAggregation
+                !io.github.limuqy.mc.hassium.compat.mods.ModCompatFlags.bandwidthOptimizer(),
+                                   // enablePacketAggregation（检测到 BandwidthOptimizer 时默认关；显式 true 恒生效）
                 50,                // aggregationMaxWaitTimeMs（冲刷兜底）
                 256 * 1024,        // aggregationMaxSize
                 DEFAULT_COMPRESSION_BLACKLIST,

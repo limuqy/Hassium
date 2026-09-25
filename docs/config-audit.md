@@ -85,7 +85,7 @@
 | `master.enabled` | `true` | 是否启用服务端网络通道（压缩/聚合/区块推送/实体优化） |
 | `master.enabledOnLan` | `false` | 局域网主机是否对远程玩家启用 Hassium 网络面（握手/聚合/推送/lightStrip 等）。默认关；本机 memory 连接始终原版；storage 仍仅专用服 |
 | `master.compressionLevel` | `3` | 自有通道 ZSTD 压缩等级 |
-| `master.enablePacketAggregation` | `true` | 是否启用包聚合 |
+| `master.enablePacketAggregation` | `true`（检测到 BandwidthOptimizer 时默认 `false`） | 是否启用包聚合。三方兼容（`compat/mods/ModCompatFlags`）：BO 的原版字节流批处理/流式压缩与聚合帧叠加冲突，检测到时新配置默认关；显式 `true` 恒生效，**已落盘的旧值视为显式选择、不自动翻转** |
 | `master.aggregationMaxWaitTimeMs` | `50` | 冲刷兜底：超过该时长（ms）未冲刷则强制冲一次（tick 尾冲刷为主，应对主线程卡顿） |
 | `master.aggregationMaxSize` | `262144` | 聚合最大大小 |
 | `master.compressionBlacklist` | `[]` | 第三方包 ID 的压缩/聚合排除列表（默认空）。Hassium 控制面与独立压缩通道已硬编码排除，改本列表不影响它们 |

@@ -536,7 +536,8 @@ public final class FabricTomlConfigIO {
                 "局域网主机是否对远程玩家启用 Hassium 网络面（本机 memory 恒原版；storage 仍仅专用服）",
                 ConfigScope.SERVER);
         set(cfg, "master.compressionLevel", n.compressionLevel(), "自有通道 ZSTD 等级", ConfigScope.SERVER);
-        set(cfg, "master.enablePacketAggregation", n.enablePacketAggregation(), "是否启用包聚合", ConfigScope.SERVER);
+        set(cfg, "master.enablePacketAggregation", n.enablePacketAggregation(),
+                "是否启用包聚合；检测到 BandwidthOptimizer 时默认关（批处理/流式压缩与聚合帧冲突），显式 true 恒生效", ConfigScope.SERVER);
         set(cfg, "master.aggregationMaxWaitTimeMs", (int) n.aggregationMaxWaitTimeMs(), "冲刷兜底（ms；tick 尾冲刷为主，超时未冲则强制冲）", ConfigScope.SERVER);
         set(cfg, "master.aggregationMaxSize", n.aggregationMaxSize(), "聚合最大大小（字节）", ConfigScope.SERVER);
         set(cfg, "master.compressionBlacklist", new ArrayList<>(n.compressionBlacklist()), "第三方包压缩/聚合排除（Hassium 控制面已硬编码，与本列表无关）", ConfigScope.SERVER);

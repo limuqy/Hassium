@@ -136,6 +136,10 @@ public class HassiumConfigService {
         this.storageEnabled.set(loaded.storage().enabled());
         this.configLoaded.set(true);
         NetworkStats.setEnabled(resolveMetricsEnabled(loaded));
+        // 帮「配置文件里已烤死 true」的存量用户定位：装了 BO 但聚合仍开时，日志里能看到原因
+        if (io.github.limuqy.mc.hassium.compat.mods.ModCompatFlags.bandwidthOptimizer()) {
+            LOGGER.info("Hassium: BandwidthOptimizer detected — master.enablePacketAggregation defaults to false (an explicit true in the config still applies)");
+        }
     }
 
     /**

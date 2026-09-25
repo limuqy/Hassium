@@ -73,8 +73,10 @@ public final class ConfigSchema {
             "Enable Hassium network features for remote LAN players on an Open-to-LAN host (handshake/aggregation/push/lightStrip). Default off; host local memory connection stays vanilla; storage remains dedicated-only");
     public static final ConfigKey<Integer> MASTER_COMPRESSION_LEVEL = integer("master.compressionLevel", ConfigScope.SERVER, Domain.MASTER_CORE, 3, 1, 22,
             "自有通道 ZSTD 压缩等级", "Private-channel ZSTD level");
-    public static final ConfigKey<Boolean> MASTER_PACKET_AGGREGATION = bool("master.enablePacketAggregation", ConfigScope.SERVER, Domain.MASTER_CORE, true,
-            "是否启用包聚合", "Enable packet aggregation");
+    public static final ConfigKey<Boolean> MASTER_PACKET_AGGREGATION = bool("master.enablePacketAggregation", ConfigScope.SERVER, Domain.MASTER_CORE,
+            !io.github.limuqy.mc.hassium.compat.mods.ModCompatFlags.bandwidthOptimizer(),
+            "是否启用包聚合；检测到 BandwidthOptimizer 时默认关（其批处理/流式压缩与聚合帧叠加冲突），显式 true 恒生效",
+            "Enable packet aggregation; defaults to false when BandwidthOptimizer is present (its batching/streaming compression conflicts with aggregation frames); explicit true always applies");
     public static final ConfigKey<Long> MASTER_AGGREGATION_MAX_WAIT = longValue("master.aggregationMaxWaitTimeMs", ConfigScope.SERVER, Domain.MASTER_CORE, 50L, 1L, 5000L,
             "冲刷兜底：超过该时长（ms）未冲刷则强制冲一次（tick 尾冲刷为主，应对主线程卡顿）",
             "Flush watchdog: force flush if none happened for this many ms (tick-end flush is primary; covers main-thread stalls)");

@@ -31,6 +31,10 @@ public final class ModCompatFlags {
     private static final boolean STARLIGHT_FAMILY =
             present("ca.spottedleaf.starlight.common.light.StarLightLightingProvider");
 
+    /** BandwidthOptimizer（原版编码后字节流的批处理/流式压缩；入口类为稳定类）。 */
+    private static final boolean BANDWIDTH_OPTIMIZER =
+            present("com.PinkCats.bandwidthoptimizer.Bandwidthoptimizer");
+
     private static volatile boolean announced;
 
     private ModCompatFlags() {
@@ -59,6 +63,14 @@ public final class ModCompatFlags {
         return STARLIGHT_FAMILY;
     }
 
+    /**
+     * BandwidthOptimizer 是否在场。检测结果仅用于配置默认值回落
+     * （{@code master.enablePacketAggregation} 默认关），不构成接管路径，不计入 {@link #any()}。
+     */
+    public static boolean bandwidthOptimizer() {
+        return BANDWIDTH_OPTIMIZER;
+    }
+
     /** 是否检测到任何被本兼容层识别并接管的外部 Mod。 */
     public static boolean any() {
         return C2ME || STARLIGHT_FAMILY;
@@ -70,12 +82,12 @@ public final class ModCompatFlags {
             return;
         }
         announced = true;
-        if (!any() && !C2ME_OPENCL) {
+        if (!any() && !C2ME_OPENCL && !BANDWIDTH_OPTIMIZER) {
             return;
         }
         LOGGER.info(
-                "Hassium: third-party mods detected c2me={} c2meChunkIoReplaced={} opencl={} starlightFamily={}",
-                C2ME, C2ME_REPLACED_CHUNK_IO, C2ME_OPENCL, STARLIGHT_FAMILY);
+                "Hassium: third-party mods detected c2me={} c2meChunkIoReplaced={} opencl={} starlightFamily={} bandwidthOptimizer={}",
+                C2ME, C2ME_REPLACED_CHUNK_IO, C2ME_OPENCL, STARLIGHT_FAMILY, BANDWIDTH_OPTIMIZER);
     }
 
     private static boolean present(String className) {
