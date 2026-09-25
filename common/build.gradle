@@ -8,7 +8,9 @@ dependencies {
     // IMixinConfigPlugin 的方法签名引用 org.objectweb.asm.tree.ClassNode；
     // ASM 由 Mixin 在运行时自带，这里只需编译期可见（compileOnly 不进产物）。
     compileOnly 'org.ow2.asm:asm-tree:9.7'
-    implementation 'com.github.luben:zstd-jni:1.5.5-7'
+    // zstd-jni 零编译期依赖：运行期整 jar 嵌入（native-dep-shade.gradle）+
+    // ZstdRuntimeBridge 隔离加载，mod jar 不含 zstd class（模块层 split-package 崩溃源），
+    // 编译器会阻止任何直接引用回归。版本唯一源 = gradle.properties 的 zstd_jni_version。
     implementation 'org.lz4:lz4-java:1.8.0'
     implementation 'com.google.code.findbugs:jsr305:3.0.1'
     // Fabric 自管 toml（Forge/NeoForge 走 Spec，不依赖此路径）
@@ -25,6 +27,33 @@ dependencies {
 
 test {
     useJUnitPlatform()
+}
+
+// 嵌入 zstd-jni 资源（与 native-dep-shade.gradle 同款机制、同版本源 zstd_jni_version）：
+// 让 common:test 的 ZstdRuntimeBridge 走与生产一致的嵌入隔离路径（无外部回退可用）。
+// common 产物仅内部消费；loader 发布 jar 由各自 native-dep-shade.gradle 的嵌入兜底，
+// 两处同路径资源在 loader jar 合并时经 DuplicatesStrategy.EXCLUDE 去重。
+configurations {
+    hassiumEmbeddedRuntimeLibs {
+        canBeConsumed = false
+        canBeResolved = true
+        transitive = false
+    }
+}
+dependencies {
+    hassiumEmbeddedRuntimeLibs "com.github.luben:zstd-jni:${zstd_jni_version}"
+}
+def hassiumEmbeddedLibsDir = layout.buildDirectory.dir('generated/hassiumEmbeddedLibs')
+tasks.register('prepareHassiumEmbeddedLibs', Copy) {
+    from(configurations.hassiumEmbeddedRuntimeLibs) {
+        rename { 'zstd-jni.jar' }
+        into 'META-INF/hassium/libs'
+    }
+    into(hassiumEmbeddedLibsDir)
+}
+sourceSets.main.resources.srcDir(tasks.named('prepareHassiumEmbeddedLibs'))
+tasks.named('processResources').configure {
+    dependsOn tasks.named('prepareHassiumEmbeddedLibs')
 }
 
 task runJava(type: JavaExec) {

@@ -1,6 +1,7 @@
 package io.github.limuqy.mc.hassium.benchmark;
 
-import com.github.luben.zstd.Zstd;
+import io.github.limuqy.mc.hassium.compression.ZstdRuntimeBridge;
+
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -137,7 +138,7 @@ public final class HollowBenefitBenchmark {
         for (Map.Entry<ChunkPos, ChunkEncoded> e : chunks.entrySet()) {
             byte[] full = encodeChunk(e.getValue(), null, null, 0);
             totalFullRaw += full.length;
-            totalFullZstd += Zstd.compress(full, ZSTD_LEVEL).length;
+            totalFullZstd += ZstdRuntimeBridge.compress(full, ZSTD_LEVEL).length;
         }
         List<Map<Integer, int[]>> yCullPerDepth = new ArrayList<>();
         System.out.printf("%-10s | %12s | %12s | %8s | %12s | %12s | %8s | %9s%n",
@@ -155,7 +156,7 @@ public final class HollowBenefitBenchmark {
                 int[] d = dist.get(cd.pos());
                 byte[] hollow = encodeChunk(cd, dense, d, depth);
                 hollowRaw += hollow.length;
-                hollowZstd += Zstd.compress(hollow, ZSTD_LEVEL).length;
+                hollowZstd += ZstdRuntimeBridge.compress(hollow, ZSTD_LEVEL).length;
                 for (int i = 0; i < cd.sections().size(); i++) {
                     int y = cd.sections().get(i).y();
                     int[] v = yCull.computeIfAbsent(y, k -> new int[2]);

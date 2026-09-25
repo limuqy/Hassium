@@ -1,11 +1,9 @@
 package io.github.limuqy.mc.hassium.compression;
 
-import com.github.luben.zstd.Zstd;
-
 /**
  * ZSTD 压缩编解码器
  * <p>
- * 使用 zstd-jni 库实现 ZSTD 压缩和解压。
+ * 经 {@link ZstdRuntimeBridge} 调用 zstd-jni（隔离加载，mod jar 不含 zstd class）。
  */
 public class ZstdCompressionCodec implements CompressionCodec {
 
@@ -21,7 +19,7 @@ public class ZstdCompressionCodec implements CompressionCodec {
     @Override
     public byte[] compress(byte[] input, CompressionOptions options) throws CompressionException {
         try {
-            return Zstd.compress(input, options.level());
+            return ZstdRuntimeBridge.compress(input, options.level());
         } catch (Exception e) {
             throw new CompressionException.CompressionFailedException("ZSTD compression failed", e);
         }
@@ -30,7 +28,7 @@ public class ZstdCompressionCodec implements CompressionCodec {
     @Override
     public byte[] decompress(byte[] input, CompressionOptions options) throws CompressionException {
         try {
-            long contentSize = Zstd.getFrameContentSize(input);
+            long contentSize = ZstdRuntimeBridge.getFrameContentSize(input);
             // review-fix: T5-88 超限拒绝——巨大声明（及 -1 强转负值）在分配前拦截
             if (contentSize > MAX_DECOMPRESSED_SIZE) {
                 throw new CompressionException.DecompressionFailedException(
@@ -42,7 +40,7 @@ public class ZstdCompressionCodec implements CompressionCodec {
                 return new byte[0];
             }
             // contentSize 已知时按声明精确分配；未知（-1）时以上限兜底（native 侧仍校验实际大小）
-            byte[] result = Zstd.decompress(input, contentSize < 0 ? MAX_DECOMPRESSED_SIZE : (int) contentSize);
+            byte[] result = ZstdRuntimeBridge.decompress(input, contentSize < 0 ? MAX_DECOMPRESSED_SIZE : (int) contentSize);
             if (result == null) {
                 throw new CompressionException.DecompressionFailedException("ZSTD decompression failed: null output");
             }

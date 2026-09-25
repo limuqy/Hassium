@@ -1,6 +1,7 @@
 package io.github.limuqy.mc.hassium.metrics;
 
-import com.github.luben.zstd.Zstd;
+import io.github.limuqy.mc.hassium.compression.ZstdRuntimeBridge;
+
 import org.junit.jupiter.api.Test;
 
 import java.util.Locale;
@@ -87,7 +88,7 @@ class ZstdVsZlibSpeedBenchmarkTest {
 
             System.out.printf(Locale.ROOT, "%-10d\t%.1f\t", sz, zlibC);
             for (int lv : zstdLevels) {
-                double zstdC = rawMB / (medianMs(() -> Zstd.compress(raw, lv), WARMUP, ITERATIONS) / 1000.0);
+                double zstdC = rawMB / (medianMs(() -> ZstdRuntimeBridge.compress(raw, lv), WARMUP, ITERATIONS) / 1000.0);
                 System.out.printf(Locale.ROOT, "%.1f\t", zstdC);
             }
             System.out.println();
@@ -124,8 +125,8 @@ class ZstdVsZlibSpeedBenchmarkTest {
 
             System.out.printf(Locale.ROOT, "%-10d\t%.1f\t", sz, zlibD);
             for (int lv : zstdLevels) {
-                byte[] zstdCompressed = Zstd.compress(raw, lv);
-                double zstdD = rawMB / (medianMs(() -> Zstd.decompress(zstdCompressed, sz), WARMUP, ITERATIONS) / 1000.0);
+                byte[] zstdCompressed = ZstdRuntimeBridge.compress(raw, lv);
+                double zstdD = rawMB / (medianMs(() -> ZstdRuntimeBridge.decompress(zstdCompressed, sz), WARMUP, ITERATIONS) / 1000.0);
                 System.out.printf(Locale.ROOT, "%.1f\t", zstdD);
             }
             System.out.println();

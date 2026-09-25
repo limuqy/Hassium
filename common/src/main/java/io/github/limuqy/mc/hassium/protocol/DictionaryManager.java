@@ -1,7 +1,7 @@
 package io.github.limuqy.mc.hassium.protocol;
 
-import com.github.luben.zstd.ZstdDictTrainer;
 import io.github.limuqy.mc.hassium.Constants;
+import io.github.limuqy.mc.hassium.compression.ZstdRuntimeBridge;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -322,7 +322,7 @@ public class DictionaryManager {
             try {
                 LOGGER.debug("Training aggregation dictionary from {} samples...", snapshot.size());
                 int sampleSum = snapshot.stream().mapToInt(s -> s.length).sum();
-                var trainer = new ZstdDictTrainer(sampleSum, DICT_SIZE);
+                var trainer = ZstdRuntimeBridge.newDictTrainer(sampleSum, DICT_SIZE);
                 for (byte[] sample : snapshot) {
                     trainer.addSample(sample);
                 }

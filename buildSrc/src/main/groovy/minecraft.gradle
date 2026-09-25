@@ -32,7 +32,9 @@ dependencies {
     compileOnly(project(":common"))
     // compileOnly 不传递 common 的 runtime 依赖，这里显式透传（与 common/build.gradle 同坐标；
     // fabric 自声明的同坐标自动去重）。
-    implementation 'com.github.luben:zstd-jni:1.5.5-7'
+    // zstd-jni 零编译期依赖：运行期整 jar 嵌入（native-dep-shade.gradle）+ ZstdRuntimeBridge
+    // 隔离加载，mod jar 不含 zstd class（模块层 split-package 崩溃源）。
+    // 版本唯一源 = gradle.properties 的 zstd_jni_version。
     implementation 'org.lz4:lz4-java:1.8.0'
     implementation 'com.electronwill.night-config:core:3.6.7'
     implementation 'com.electronwill.night-config:toml:3.6.7'

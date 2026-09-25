@@ -1,20 +1,43 @@
 /**
- * 将 zstd-jni / lz4-java shade 进 loader jar，并按主流平台裁剪 native。
+ * 原生压缩库依赖处理。
  *
- * zstd-jni 保留：
- * - Windows: amd64 / aarch64
- * - Linux: amd64 / aarch64 / arm
- * - macOS: darwin x86_64 / aarch64
- *
- * 去掉：IA-32、armv6、FreeBSD、Android、Musl、ppc/riscv/s390x/mips/loongarch 等。
+ * zstd-jni（全部版本 / 全部加载器）——不再 shade，改整 jar 嵌入 + 运行时隔离加载：
+ * - shade 曾把 zstd class 合并进 mod jar → ModLauncher 模块层中 hassium 模块与其它
+ *   mod 携带的 zstd-jni 模块（AMN=com.github.luben.zstd_jni）导出同名包
+ *   （com.github.luben.zstd.util 等）→ ResolutionException 启动即崩（玩家整合包实报，
+ *   指纹同 1.21+ lz4 的 "Modules hassium and org.lz4.java export package ..."）。
+ * - 现构建期把 zstd-jni 整 jar 复制进 META-INF/hassium/libs/zstd-jni.jar；
+ *   运行时由 compression/ZstdRuntimeBridge 解到进程独立临时目录，用
+ *   parent=platformClassLoader 的隔离 URLClassLoader 加载 —— zstd 类不进游戏模块层，
+ *   split-package 结构上不可能。
+ * - 嵌入文件名固定无版本号：升级 zstd 只改 gradle.properties 的 zstd_jni_version
+ *   （common/build.gradle 的测试嵌入同源），Java 侧常量
+ *   （ZstdRuntimeBridge.EMBEDDED_LIB_RESOURCE）不随版本变。
+ * - 本模块业务源码零 zstd 编译期依赖（minecraft.gradle/common 不声明 zstd），
+ *   编译器会阻止任何直接引用回归。
  *
  * lz4-java（仅 MC < 1.21 shade）：
  * - 1.21+ vanilla 已带 org.lz4:lz4-java（AMN=org.lz4.java，Export-Package 含
- *   net.jpountz.util）。再 shade 进 mod jar → ModLauncher 模块层
- *   "Modules hassium and org.lz4.java export package net.jpountz.util" 崩溃。
+ *   net.jpountz.util）。再 shade 进 mod jar → 模块层同名包冲突崩溃。
  * - 1.20.1 等无游戏侧 lz4 的段仍必须 shade：xxHash 供
  *   ChunkContentHashUtil / SectionPlaneSyndrome；缺类 → NoClassDefFoundError。
+ *   （1.20.1 段其它 mod 携带真 lz4-java 模块时仍有同款冲突风险，历史遗留，
+ *   待 xxHash 消费方桥接化后可一并改嵌入。）
  */
+
+// 版本唯一源：gradle.properties 的 zstd_jni_version
+configurations {
+    hassiumEmbeddedRuntimeLibs {
+        canBeConsumed = false
+        canBeResolved = true
+        transitive = false
+    }
+}
+
+dependencies {
+    hassiumEmbeddedRuntimeLibs "com.github.luben:zstd-jni:${zstd_jni_version}"
+}
+
 def hassiumShadeLz4 = {
     def mcVer = gradle.ext.has('minecraft_version') ? gradle.ext.minecraft_version as String
             : (gradle.ext.has('mc_ver') ? gradle.ext.mc_ver as String : '')
@@ -24,23 +47,73 @@ def hassiumShadeLz4 = {
     return !(major > 1 || (major == 1 && minor >= 21))
 }()
 
+def hassiumEmbeddedLibsDir = layout.buildDirectory.dir('generated/hassiumEmbeddedLibs')
+// 目的地 = 根目录，META-INF/hassium/libs 子路径写在 copy spec 内：
+// srcDir(task) 以任务输出根为源目录（内容平铺复制），子路径放 into() 会被拍平
+tasks.register('prepareHassiumEmbeddedLibs', Copy) {
+    from(configurations.hassiumEmbeddedRuntimeLibs) {
+        rename { 'zstd-jni.jar' }
+        into 'META-INF/hassium/libs'
+    }
+    into(hassiumEmbeddedLibsDir)
+}
+// 传任务而非目录路径：Gradle 自动为消费任务挂依赖；dev 运行 classpath 亦可见该资源
+sourceSets.main.resources.srcDir(tasks.named('prepareHassiumEmbeddedLibs'))
+tasks.named('processResources').configure {
+    dependsOn tasks.named('prepareHassiumEmbeddedLibs')
+}
+
 jar {
     from({
         configurations.runtimeClasspath.filter { f ->
-            f.name.contains('zstd-jni') || (hassiumShadeLz4 && f.name.contains('lz4-java'))
+            hassiumShadeLz4 && f.name.contains('lz4-java')
         }.collect { zipTree(it) }
     }) {
         exclude 'META-INF/**'
-
-        // —— zstd-jni ——
-        exclude 'freebsd/**'
-        exclude 'win/x86/**'
-        exclude 'linux/i386/**'
-        exclude 'linux/loongarch64/**'
-        exclude 'linux/mips64/**'
-        exclude 'linux/ppc64/**'
-        exclude 'linux/ppc64le/**'
-        exclude 'linux/riscv64/**'
-        exclude 'linux/s390x/**'
     }
+}
+
+// 发布 jar 双保险：mod jar 不得含 zstd class（split-package 崩溃源），嵌入 jar 必须在位。
+// loom 的发布产物是 remapJar 输出，优先校验它（无 remapJar 时退回 jar）。
+def hassiumRemapJar = tasks.findByName('remapJar')
+tasks.register('verifyHassiumNativeLibPackaging') {
+    group = 'verification'
+    description = 'Verify mod jar has no shaded zstd classes and the embedded zstd-jni jar is present.'
+    dependsOn hassiumRemapJar != null ? hassiumRemapJar : tasks.named('jar')
+    doLast {
+        File jarFile = hassiumRemapJar != null
+                ? hassiumRemapJar.archiveFile.get().asFile
+                : tasks.named('jar', Jar).get().archiveFile.get().asFile
+        List<String> problems = []
+        new java.util.zip.ZipFile(jarFile).withCloseable { zip ->
+            List<String> shaded = []
+            zip.entries().each { entry ->
+                def name = entry.name
+                if (name.startsWith('com/github/luben/')) {
+                    shaded << name
+                }
+                if (!hassiumShadeLz4 && (name.startsWith('net/jpountz/') || name.startsWith('org/lz4/'))) {
+                    shaded << name
+                }
+            }
+            boolean hasEmbedded = zip.entries().any {
+                it.name == 'META-INF/hassium/libs/zstd-jni.jar'
+            }
+            if (!shaded.isEmpty()) {
+                problems << "unexpected shaded classes in mod jar: ${shaded.take(8).join(', ')}"
+                        + (shaded.size() > 8 ? " (+${shaded.size() - 8} more)" : '')
+            }
+            if (!hasEmbedded) {
+                problems << 'missing embedded lib META-INF/hassium/libs/zstd-jni.jar'
+            }
+        }
+        if (!problems.isEmpty()) {
+            throw new GradleException("Hassium native lib packaging check failed:\n  - "
+                    + problems.join('\n  - '))
+        }
+        println "Hassium native lib packaging OK: ${jarFile.name} (embedded zstd-jni ${zstd_jni_version})"
+    }
+}
+tasks.named('check').configure {
+    dependsOn tasks.named('verifyHassiumNativeLibPackaging')
 }

@@ -1,7 +1,7 @@
 package io.github.limuqy.mc.hassium.benchmark;
 
-import com.github.luben.zstd.Zstd;
-import com.github.luben.zstd.ZstdDictTrainer;
+import io.github.limuqy.mc.hassium.compression.ZstdRuntimeBridge;
+
 
 import java.io.*;
 import java.nio.ByteBuffer;
@@ -347,7 +347,7 @@ public class DictionaryTrainer {
         }
 
         long startTime = System.currentTimeMillis();
-        ZstdDictTrainer trainer = new ZstdDictTrainer((int) Math.min(totalSampleSize, Integer.MAX_VALUE), dictionarySize);
+        ZstdRuntimeBridge.DictTrainer trainer = ZstdRuntimeBridge.newDictTrainer((int) Math.min(totalSampleSize, Integer.MAX_VALUE), dictionarySize);
         for (byte[] sample : sampleList) {
             trainer.addSample(sample);
         }
@@ -379,7 +379,7 @@ public class DictionaryTrainer {
 
         for (byte[] sample : samples) {
             try {
-                byte[] compressed = Zstd.compress(sample, 3);
+                byte[] compressed = ZstdRuntimeBridge.compress(sample, 3);
                 totalOriginal += sample.length;
                 totalCompressed += compressed.length;
             } catch (Exception e) {
@@ -400,7 +400,7 @@ public class DictionaryTrainer {
         for (byte[] sample : samples) {
             try {
                 // 使用字典压缩
-                byte[] compressed = Zstd.compressUsingDict(sample, dictionary, 3);
+                byte[] compressed = ZstdRuntimeBridge.compressUsingDict(sample, dictionary, 3);
                 if (compressed != null) {
                     totalOriginal += sample.length;
                     totalCompressed += compressed.length;

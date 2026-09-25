@@ -1,6 +1,7 @@
 package io.github.limuqy.mc.hassium.metrics;
 
-import com.github.luben.zstd.Zstd;
+import io.github.limuqy.mc.hassium.compression.ZstdRuntimeBridge;
+
 import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
@@ -111,7 +112,7 @@ class VanillaZlibVsZstdBenchmarkTest {
         if (raw.length < MC_COMPRESSION_THRESHOLD) {
             return varIntBytes(0) + raw.length;
         }
-        byte[] c = Zstd.compress(raw, ZSTD_LEVEL);
+        byte[] c = ZstdRuntimeBridge.compress(raw, ZSTD_LEVEL);
         return varIntBytes(raw.length) + c.length;
     }
 

@@ -1,11 +1,10 @@
 package io.github.limuqy.mc.hassium.protocol;
 
-import com.github.luben.zstd.ZstdCompressCtx;
-import com.github.luben.zstd.ZstdDecompressCtx;
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.compat.PacketCodecCompat;
 import io.github.limuqy.mc.hassium.compat.PacketId;
 import io.github.limuqy.mc.hassium.compat.PacketPayloadCompat;
+import io.github.limuqy.mc.hassium.compression.ZstdRuntimeBridge;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.metrics.VanillaZlibEstimator;
@@ -80,7 +79,7 @@ public class HassiumAggregationPacket {
             if (compress) {
                 // 使用 ZSTD 压缩（支持聚合包字典）
                 int level = config.getCompressionLevel();
-                ZstdCompressCtx compressCtx = new ZstdCompressCtx();
+                ZstdRuntimeBridge.CompressCtx compressCtx = ZstdRuntimeBridge.newCompressCtx();
                 compressCtx.setLevel(level);
                 compressCtx.setMagicless(true);
 
@@ -137,7 +136,7 @@ public class HassiumAggregationPacket {
             byte[] compressed = new byte[compressedLength];
             buf.readBytes(compressed);
 
-            ZstdDecompressCtx decompressCtx = new ZstdDecompressCtx();
+            ZstdRuntimeBridge.DecompressCtx decompressCtx = ZstdRuntimeBridge.newDecompressCtx();
             decompressCtx.setMagicless(true);
 
             // 只有当标志位指示使用了字典时，才加载字典

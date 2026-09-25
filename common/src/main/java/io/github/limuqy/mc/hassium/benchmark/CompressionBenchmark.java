@@ -1,6 +1,7 @@
 package io.github.limuqy.mc.hassium.benchmark;
 
-import com.github.luben.zstd.Zstd;
+import io.github.limuqy.mc.hassium.compression.ZstdRuntimeBridge;
+
 
 import java.util.Random;
 
@@ -43,21 +44,21 @@ public final class CompressionBenchmark {
                 int level = LEVELS[li];
                 // 预热
                 for (int i = 0; i < WARMUP; i++) {
-                    Zstd.compress(data, level);
+                    ZstdRuntimeBridge.compress(data, level);
                 }
 
                 // 测试压缩
                 long compressStart = System.nanoTime();
                 byte[] compressed = null;
                 for (int i = 0; i < ITERATIONS; i++) {
-                    compressed = Zstd.compress(data, level);
+                    compressed = ZstdRuntimeBridge.compress(data, level);
                 }
                 long compressTime = System.nanoTime() - compressStart;
 
                 // 测试解压
                 long decompressStart = System.nanoTime();
                 for (int i = 0; i < ITERATIONS; i++) {
-                    Zstd.decompress(compressed, (int) Zstd.getFrameContentSize(compressed));
+                    ZstdRuntimeBridge.decompress(compressed, (int) ZstdRuntimeBridge.getFrameContentSize(compressed));
                 }
                 long decompressTime = System.nanoTime() - decompressStart;
 
