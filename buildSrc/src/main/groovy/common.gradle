@@ -79,7 +79,6 @@ processResources {
                        'neoforge_dependency_mod_id'   : neoDepModId,
                        'dependency_required_field'    : depRequiredField,
                        'forge_loader'                 : gradle.ext.has('forge_loader') ? gradle.ext.forge_loader : '',
-                       'forge_version'                : gradle.ext.has('forge_loader') ? gradle.ext.forge_loader : '',
                        'forge_loader_version_range'   : gradle.ext.has('forge_loader_version_range') ? gradle.ext.forge_loader_version_range : '[47,)',
                        'credits'                      : credits,
                        'java_version'                 : gradle.ext.java_version]
