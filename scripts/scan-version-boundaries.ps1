@@ -19,7 +19,7 @@ if (-not (Test-Path (Join-Path $Root 'versionProperties'))) {
 $Pattern = [regex]'MC_1_\d+_\d+'
 $Illegal = @()
 
-$Dirs = @('common', 'fabric', 'forge', 'neoforge') | ForEach-Object { Join-Path $Root $_ }
+$Dirs = @('common', 'fabric', 'neoforge') | ForEach-Object { Join-Path $Root $_ }
 foreach ($dir in $Dirs) {
     if (-not (Test-Path $dir)) { continue }
     Get-ChildItem -Path $dir -Recurse -Filter '*.java' | ForEach-Object {

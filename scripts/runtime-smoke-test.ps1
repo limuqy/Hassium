@@ -1,6 +1,5 @@
 # 运行时冒烟测试 — 单次会话脚本（两轮连服版）
 # 用法: .\scripts\runtime-smoke-test.ps1 -Ver 1.20.1 -Loader fabric -Phase I -SessionId "1.20.1_fabric_I"
-#       .\scripts\runtime-smoke-test.ps1 -Ver 1.20.6 -Loader forge -Phase I -SessionId "1.20.6_forge_I"   # forge 支持范围见 versionProperties/{Ver}.properties 的 builds_for
 # 流程: 钉死客户端 options.txt renderDistance=32 → 服务端启动 VD=20 → 客户端连服 → 进世界后等 DelayMs → ROUND1 统计 → 主动断开 → 服务端切 VD=10 → 等 ReconnectDelayMs → 重连 → 进世界后等 DelayMs → ROUND2 统计 → 退出
 # 关键真相源：Loom runDir 在子项目目录下（fabric/run/client、neoforge/run/server 等），不是根目录 run/
 # 退出码: 0=PASS / 2=FAIL / 3=server_not_ready
@@ -8,7 +7,7 @@
 # 向后兼容: -SmokeHost 仍可用，但 -ServerPort 优先（若同时指定 -SmokeHost 则 -SmokeHost 完整地址优先）
 param(
     [Parameter(Mandatory=$true)][string]$Ver,
-    [Parameter(Mandatory=$true)][ValidateSet("fabric","forge","neoforge")][string]$Loader,
+    [Parameter(Mandatory=$true)][ValidateSet("fabric","neoforge")][string]$Loader,
     [Parameter(Mandatory=$true)][ValidateSet("I","R")][string]$Phase,
     [Parameter(Mandatory=$true)][string]$SessionId,
     # -CleanWorld：重置本 loader×ver 的隔离存档目录 $serverLevelName（parity_<loader>_<ver>，
@@ -135,96 +134,6 @@ New-Item -ItemType Directory -Force -Path $statsDir | Out-Null
 New-Item -ItemType Directory -Force -Path $resultsDir | Out-Null
 
 Set-Location $projectRoot
-
-# ===== 生产映射字段预检 =====
-# loom runServer/runClient 运行在 named（mojmap 可读名）环境，永远测不出生产
-# SRG/intermediary jar 下硬编码字段名反射失败的问题（1.20.1 Forge 世界不加载
-# 的根因：Connection.channel / ServerGamePacketListenerImpl.connection 等字段在
-# SRG 下叫 f_xxx_，按 mojmap 名 getDeclaredField 必抛 NoSuchFieldException）。
-# 这里直接对 loom 缓存中的生产映射 jar（forge: minecraft-merged-srg.jar）做 javap
-# 结构检查，验证 Hassium "按类型找字段"（common/compat/ReflectionCompat）反射点
-# 在混淆名环境下可命中，防回归。预检失败即 FAIL 会话。
-# 检查项：
-#   Connection 存在 io.netty.channel.Channel 类型字段      → ConnectionChannelAccess.getConnectionChannel
-#   ServerGamePacketListenerImpl(1.20.1) / ServerCommonPacketListenerImpl(1.20.2+)
-#     存在 net.minecraft.network.Connection 类型字段       → PlayerCompat.findConnectionField
-#   ClientChunkCache 存在 $Storage 成员类字段              → ViewDistanceExtensionService drop fallback
-#   IdDispatchCodec(1.20.2+) 存在 java.util.List 类型字段  → PacketCodecCompat.byId
-function Invoke-MappingFieldPrecheck {
-    param([string]$PreVer, [string]$PreLoader)
-    $check = [ordered]@{
-        Version = $PreVer; Loader = $PreLoader; Checked = $false; Ok = $true
-        Skipped = $false; Detail = ""; Failures = @()
-    }
-    # fabric 运行时为 intermediary：loom 缓存无生产 jar，且 intermediary 只改字段名
-    # 不改类型，类型匹配天然免疫；SRG 检查已覆盖同一查找逻辑。跳过 fabric。
-    if ($PreLoader -eq "fabric") {
-        $check.Skipped = $true
-        $check.Detail = "fabric=intermediary 仅改字段名，类型匹配免疫（SRG 已覆盖）"
-        return [pscustomobject]$check
-    }
-    $cacheRoot = Join-Path $env:USERPROFILE ".gradle\caches\fabric-loom\$PreVer\forge"
-    if (-not (Test-Path $cacheRoot)) {
-        $check.Skipped = $true
-        $check.Detail = "未找到 loom forge 缓存: $cacheRoot"
-        return [pscustomobject]$check
-    }
-    $srgJar = Get-ChildItem -Path $cacheRoot -Recurse -Filter "minecraft-merged-srg.jar" |
-        Sort-Object LastWriteTime -Descending | Select-Object -First 1
-    if (-not $srgJar) {
-        $check.Skipped = $true
-        $check.Detail = "未找到 minecraft-merged-srg.jar: $cacheRoot"
-        return [pscustomobject]$check
-    }
-    $check.Checked = $true
-    $check.Detail = $srgJar.FullName
-    function Get-JavapOutput([string]$Class) {
-        (& javap -p -classpath $srgJar.FullName $Class 2>&1) -join "`n"
-    }
-    # 1. Connection.channel（ConnectionChannelAccess.getConnectionChannel）
-    $connOut = Get-JavapOutput "net.minecraft.network.Connection"
-    if ($connOut -notmatch "io\.netty\.channel\.Channel") {
-        $check.Ok = $false
-        $check.Failures += "Connection 无 Channel 类型字段（getConnectionChannel 会 NoSuchField）"
-    }
-    # 2. player connection 字段所在类：1.20.2+ 上移到 ServerCommonPacketListenerImpl
-    $listenerClass = if ([version]$PreVer -ge [version]"1.20.2") { "net.minecraft.server.network.ServerCommonPacketListenerImpl" } else { "net.minecraft.server.network.ServerGamePacketListenerImpl" }
-    $listenerOut = Get-JavapOutput $listenerClass
-    if ($listenerOut -notmatch "net\.minecraft\.network\.Connection") {
-        $check.Ok = $false
-        $check.Failures += "$listenerClass 无 Connection 类型字段（findConnectionField 会 NoSuchField）"
-    }
-    # 3. ClientChunkCache.storage（成员类字段，ViewDistanceExtensionService drop fallback）
-    $cccOut = Get-JavapOutput "net.minecraft.client.multiplayer.ClientChunkCache"
-    if ($cccOut -notmatch 'ClientChunkCache\$Storage') {
-        $check.Ok = $false
-        $check.Failures += 'ClientChunkCache 无 $Storage 成员类字段（drop fallback 会 NoSuchField）'
-    }
-    # 4. IdDispatchCodec.byId（1.20.5+ 引入；1.20.1–1.20.4 无此类，跳过）
-    if ([version]$PreVer -ge [version]"1.20.5") {
-        $idcOut = Get-JavapOutput "net.minecraft.network.codec.IdDispatchCodec"
-        if ($idcOut -notmatch "java\.util\.List") {
-            $check.Ok = $false
-            $check.Failures += "IdDispatchCodec 无 List 类型字段（PacketCodecCompat.byId 会 NoSuchField）"
-        }
-    }
-    return [pscustomobject]$check
-}
-
-$precheck = Invoke-MappingFieldPrecheck -PreVer $Ver -PreLoader $Loader
-if (-not $precheck.Skipped) {
-    $precheckFile = Join-Path $logDir "precheck_${SessionId}.json"
-    $precheck | ConvertTo-Json -Depth 3 | Out-File $precheckFile -Encoding UTF8
-    if ($precheck.Ok) {
-        Write-Host "[$SessionId] 生产映射预检 PASS（SRG 字段结构可命中全部反射点）"
-    } else {
-        Write-Host "[$SessionId] 生产映射预检 FAIL:" -ForegroundColor Red
-        $precheck.Failures | ForEach-Object { Write-Host "  - $_" -ForegroundColor Red }
-        $resultObj = @{ SessionId = $SessionId; Ver = $Ver; Loader = $Loader; Phase = $Phase; Result = "FAIL"; Reason = "mapping_precheck: $($precheck.Failures -join '; ')"; ClientExitCode = -1 }
-        $resultObj | ConvertTo-Json -Depth 3 | Out-File (Join-Path $resultsDir "result_${SessionId}.json")
-        exit 2
-    }
-}
 
 # 写服务端 server.properties（§2 配置 + §4.1 自动避让改端口后同步重写共用）。
 # level-name 指向 $serverLevelName（loader×ver 隔离存档目录，见路径推导段）。
@@ -511,12 +420,12 @@ Write-Host "[$SessionId] [2/9] 配置服务端 ($Loader/run/server/)..."
 New-Item -ItemType Directory -Force -Path $serverRunDir -ErrorAction SilentlyContinue | Out-Null
 Write-SmokeServerProperties -Dir $serverRunDir -Port $ServerPort -LevelName $serverLevelName -ViewDistance $Vd1
 
-# 创建 <level>\serverconfig 目录（部分 neoforge / forge 50 版本不会自动创建）
+# 创建 <level>\serverconfig 目录（部分 neoforge 版本不会自动创建）
 New-Item -ItemType Directory -Force -Path (Join-Path $serverLevelDir "serverconfig") -ErrorAction SilentlyContinue | Out-Null
 # 防御性清理（仅旧存档）：Hassium 服务端配置早已迁移 COMMON 级（config/hassium/，不写 world/serverconfig/），
 # 但历史存档可能残留 world/serverconfig/hassium/*.toml.bak——FML ConfigTracker 会把整套 parent 路径
 # 重复拼到 tmp 文件名前导致起服崩溃。此处仅清理旧存档残留，新存档不会触发。
-$needConfigTrackerClean = ($Loader -eq "neoforge") -or ($Loader -eq "forge" -and $Ver -ge "1.20.6")
+$needConfigTrackerClean = ($Loader -eq "neoforge")
 if ($needConfigTrackerClean) {
     $hassiumServerConfig = Join-Path $serverLevelDir "serverconfig\hassium"
     if (Test-Path $hassiumServerConfig) {

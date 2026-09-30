@@ -3,10 +3,9 @@
 #   .\scripts\runtime-smoke-test-batch.ps1 -Phase I                              # 全量初始轮（串行）
 #   .\scripts\runtime-smoke-test-batch.ps1 -Phase I -Versions @("1.20.1","1.21.1")
 #   .\scripts\runtime-smoke-test-batch.ps1 -Phase R                              # 回归轮
-#   .\scripts\runtime-smoke-test-batch.ps1 -Phase I -Loaders fabric,forge,neoforge  # 含 Forge（仅 1.20.1/1.21.1+ 部分版本有 builds_for=forge，其它版本自动 SKIP）
 # 每个版本×加载器 1 个会话（客户端自动两轮：VD=20 + VD=10）
 # T8 场景加载: -Scenarios classic,seedgen,dimension（默认仅 classic）。classic 走全矩阵
-# （-Versions × -Loaders）；非 classic 场景只在锚点集跑（硬编码：1.20.1 forge、
+# （-Versions × -Loaders）；非 classic 场景只在锚点集跑（硬编码：1.20.1 fabric、
 # 1.21.1 neoforge、1.21.11 fabric，再与 -Versions/-Loaders/versionProperties builds_for
 # 取交集）。非 classic 会话 sessionId 追加 _<scenario> 后缀避免 result JSON 冲突；
 # CSV 增 Scenario 列。
@@ -18,7 +17,7 @@
 param(
     [Parameter(Mandatory=$true)][ValidateSet("I","R")][string]$Phase,
     [string[]]$Versions,
-    [ValidateSet("fabric","forge","neoforge")][string[]]$Loaders = @("fabric","neoforge"),
+    [ValidateSet("fabric","neoforge")][string[]]$Loaders = @("fabric","neoforge"),
     # T8 场景列表（默认仅 classic，保持既有行为）：classic=全矩阵；非 classic 只跑锚点集
     [string[]]$Scenarios = @("classic"),
     [int]$MaxRetries = 3,  # 仅「游戏打不开」时重试；进过世界的业务失败不重跑
@@ -71,9 +70,9 @@ if ($Versions) {
 
 # T8 场景锚点集（硬编码）：非 classic 场景只在锚点 (Ver, Loader) 组合上跑，
 # 再与 -Versions / -Loaders / versionProperties builds_for 取交集。
-# 最简三锚点：三加载器各一，覆盖 1.20.1 / 1.21.1 / 1.21.11 版本段边界。
+# 最简锚点：覆盖 1.20.1 / 1.21.1 / 1.21.11 版本段边界（fabric ×2 + neoforge ×1）。
 $smokeScenarioAnchors = @(
-    @{ Ver = "1.20.1";  Loader = "forge" },
+    @{ Ver = "1.20.1";  Loader = "fabric" },
     @{ Ver = "1.21.1";  Loader = "neoforge" },
     @{ Ver = "1.21.11"; Loader = "fabric" }
 )
@@ -281,9 +280,9 @@ foreach ($entry in $scenarioPlan) {
     Write-Host "=== Testing: $ver (scenario: $scenario, loaders: $loaderHint)"
     Write-Host "============================================"
 
-    # Forge 仅部分版本有 builds_for（1.20.1、1.21.1、1.21.3+ 等）；其它版本强行跑 :forge:runServer
-    # 会因 settings.gradle 未 include forge 子项目而直接失败。读 versionProperties/<ver>.properties
-    # 的 builds_for，按它过滤 -Loaders，只跑该版本真正构建的 loader。
+    # 并非每个版本都构建全部 loader（builds_for 决定）；强行跑未 include 的子项目会直接失败。
+    # 读 versionProperties/<ver>.properties 的 builds_for，按它过滤 -Loaders，
+    # 只跑该版本真正构建的 loader。
     $propsPath = Join-Path $projectRoot "versionProperties\${ver}.properties"
     $supportedLoaders = @()
     if (Test-Path $propsPath) {
@@ -304,7 +303,7 @@ foreach ($entry in $scenarioPlan) {
         $activeLoadersForVer = @($requestedLoaders)
         $skippedLoaders = @()
     }
-    # 端口分配仍按原 -Loaders 顺序取下标，保证 fabric=BasePort, forge/neoforge 按位偏移
+    # 端口分配仍按原 -Loaders 顺序取下标，保证 fabric=BasePort, neoforge 按位偏移
     $loaderPortIndex = @{}
     for ($li = 0; $li -lt $Loaders.Count; $li++) { $loaderPortIndex[$Loaders[$li]] = $li }
     foreach ($sk in $skippedLoaders) {

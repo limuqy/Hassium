@@ -2,6 +2,8 @@
 
 本文档是 Hassium 多版本适配的**唯一真相源**。工作单位不是「12 个 MC 版本 × 3 加载器」，而是 **7 个有效代码段 × `builds_for` 中的加载器**。
 
+> **2026-09-30 起：Forge 加载器已移除**（`forge/` 子项目删除，全部 `builds_for` 不再含 forge；1.20.1 仅构建 fabric）。本文中 forge 列与 Forge 附录均为**历史记录**；加载器矩阵的运行时真相源 = `versionProperties/*.properties` 的 `builds_for`。分叉与 26.x 升级的统筹计划见 [`mc26-upgrade-plan.md`](mc26-upgrade-plan.md)。
+
 相关：Manifold `#if MC_VER`（多版本源码预处理，见 AGENTS.md 与 [`.omp/skills/hassium-manifold/SKILL.md`](../.omp/skills/hassium-manifold/SKILL.md)）、`versionProperties/*.properties`。
 
 ---

@@ -19,7 +19,6 @@ repositories {
         url = uri('https://maven.aliyun.com/repository/public')
     }
     maven { url 'https://maven.fabricmc.net/' }
-    maven { url 'https://maven.minecraftforge.net/' }
     // ForgeCDN 镜像，替代 https://maven.neoforged.net/releases（布局一致，见 settings.gradle 注释）
     maven { url 'https://neoforged.forgecdn.net/releases' }
     maven { url 'https://api.modrinth.com/maven' }
@@ -78,12 +77,10 @@ processResources {
                        'javafml_loader_version_range'  : javafmlRange,
                        'neoforge_dependency_mod_id'   : neoDepModId,
                        'dependency_required_field'    : depRequiredField,
-                       'forge_loader'                 : gradle.ext.has('forge_loader') ? gradle.ext.forge_loader : '',
-                       'forge_loader_version_range'   : gradle.ext.has('forge_loader_version_range') ? gradle.ext.forge_loader_version_range : '[47,)',
                        'credits'                      : credits,
                        'java_version'                 : gradle.ext.java_version]
 
-    filesMatching(['pack.mcmeta', 'fabric.mod.json', 'META-INF/mods.toml', 'META-INF/neoforge.mods.toml', '*.mixins.json']) {
+    filesMatching(['pack.mcmeta', 'fabric.mod.json', 'META-INF/neoforge.mods.toml', '*.mixins.json']) {
         expand expandProps
     }
     inputs.properties(expandProps)

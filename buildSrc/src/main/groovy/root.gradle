@@ -32,7 +32,7 @@ tasks.register('scanVersionBoundaries') {
     doLast {
         def pattern = ~/MC_1_\d+_\d+/
         def illegal = []
-        ['common', 'fabric', 'forge', 'neoforge'].each { mod ->
+        ['common', 'fabric', 'neoforge'].each { mod ->
             def dir = file(mod)
             if (!dir.exists()) return
             fileTree(dir: dir, include: '**/*.java').each { f ->
@@ -70,7 +70,7 @@ tasks.register('publishModrinth') {
 }
 
 afterEvaluate {
-    def includedLoaders = ['fabric', 'forge', 'neoforge'].findAll { findProject(":${it}") != null }
+    def includedLoaders = ['fabric', 'neoforge'].findAll { findProject(":${it}") != null }
     tasks.named('publishCurseForge').configure {
         dependsOn includedLoaders.collect { "${it}:publishCurseForge" }
     }

@@ -17,7 +17,7 @@ while IFS= read -r -d '' file; do
       illegal=1
     fi
   done < <(grep -nE 'MC_1_[0-9]+_[0-9]+' "$file" || true)
-done < <(find "$ROOT/common" "$ROOT/fabric" "$ROOT/forge" "$ROOT/neoforge" -name '*.java' -print0 2>/dev/null)
+done < <(find "$ROOT/common" "$ROOT/fabric" "$ROOT/neoforge" -name '*.java' -print0 2>/dev/null)
 
 if [[ "$illegal" -ne 0 ]]; then
   echo "Illegal version boundaries found (not in docs/version-segments.md whitelist)" >&2

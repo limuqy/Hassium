@@ -4,7 +4,7 @@ AI Agent 速查。多版本真相源见 [`docs/version-segments.md`](docs/versio
 
 ## 项目身份
 
-Minecraft 1.20.1 / 1.21.1–1.21.11 多加载器模组（Fabric / Forge / NeoForge），ZSTD 优化存档与网络。Forge 支持 **1.20.1 / 1.21.1 / 1.21.3–1.21.10**（1.21.2 无 Forge userdev；**1.21.11 起 sunset**，该段用 NeoForge）。**1.20.1 不构建 neoforge**（NeoForge 用户用 forge 子项目产物）。**回归直连拓扑**：客户端↔服务端唯一 vanilla TCP（登录期能力握手 + Play 期 `play_init_s2c` 激活）；网络核心/UDP 数据面/续流迁移已裁剪，不复活。
+Minecraft 1.20.1 / 1.21.1–1.21.11 多加载器模组（**Fabric / NeoForge**），ZSTD 优化存档与网络。**Forge 加载器已移除**（2026-09-30，分叉升级计划见 [`docs/mc26-upgrade-plan.md`](docs/mc26-upgrade-plan.md)）；**1.20.1 仅构建 fabric**。**回归直连拓扑**：客户端↔服务端唯一 vanilla TCP（登录期能力握手 + Play 期 `play_init_s2c` 激活）；网络核心/UDP 数据面/续流迁移已裁剪，不复活。
 
 ## 关键构建命令
 
@@ -16,7 +16,7 @@ Minecraft 1.20.1 / 1.21.1–1.21.11 多加载器模组（Fabric / Forge / NeoFor
 | 冒烟 | `.\scripts\runtime-smoke-test.ps1 ...` | `pwsh -File ./scripts/runtime-smoke-test.ps1 ...`（**无 .sh**） |
 | `-Pmc_ver` | **必须** `"-Pmc_ver=1.20.1"`（引号，否则拆成 `1`） | `-Pmc_ver=1.20.1` 即可 |
 
-常用任务：`common:decompile` / `common:compileJava` / `fabric|forge|neoforge:compileJava` / `build` / `common:test` / `scanVersionBoundaries`。
+常用任务：`common:decompile` / `common:compileJava` / `fabric|neoforge:compileJava` / `build` / `common:test` / `scanVersionBoundaries`。
 
 **禁止套壳**：不要 `cmd /c "gradlew.bat ..."`、不要包 `pwsh -NoProfile`、不要 Git Bash 再转 `cmd.exe /c`。冒烟/写 toml 走 **pwsh 7**（5.1 的 `utf8` 带 BOM；night-config 对 BOM 敏感 → 配置静默回落默认）。代理命令**不要加 `-NoProfile`**（会跳过 profile 的 UTF-8 初始化 → 中文乱码）。
 
@@ -43,9 +43,9 @@ Minecraft 1.20.1 / 1.21.1–1.21.11 多加载器模组（Fabric / Forge / NeoFor
 ## 模块与包地图
 
 ```
-common/  ← 无 fabric/forge/neoforge import
+common/  ← 无 fabric/neoforge import
   ↑
-fabric/ | forge/ | neoforge/
+fabric/ | neoforge/
 ```
 
 业务逻辑进 `common`；加载器 API 进对应模块；跨版本差异进 `common/.../compat/`，禁止业务散落新 `#if MC_VER`。
@@ -60,14 +60,14 @@ fabric/ | forge/ | neoforge/
 
 ## ServiceLoader
 
-接口 `common/.../platform/services/IXxxHelper.java` → 访问 `Services.XXX` → 实现三端各一份 → 注册 `META-INF/services/<接口 FQN>`（三端都要）。漏注册 → 运行时 `NoSuchElementException`，编译不过滤。
+接口 `common/.../platform/services/IXxxHelper.java` → 访问 `Services.XXX` → 实现各加载器一份（fabric/neoforge）→ 注册 `META-INF/services/<接口 FQN>`（各端都要）。漏注册 → 运行时 `NoSuchElementException`，编译不过滤。
 
 ## Mixin（仅 common）
 
 - 命名：`@Unique` + `hassium$` 前缀；优先 `@Inject` cancellable，避免 `@Overwrite`
 - 存储相关入口先查 `isStorageEnabled()`；网络相关先查网络开关 + 握手状态
 - 登记：`common/src/main/resources/hassium.mixins.json`
-- **三方兼容 mixin**：`hassium.modcompat.mixins.json`（`required:false` + 按外部 mod gating），代码在 `mixin/modcompat/` 与 `compat/mods/`；三端元数据各登记一份。详见 [`docs/mod-compat.md`](docs/mod-compat.md) §7/§7b
+- **三方兼容 mixin**：`hassium.modcompat.mixins.json`（`required:false` + 按外部 mod gating），代码在 `mixin/modcompat/` 与 `compat/mods/`；各端元数据各登记一份。详见 [`docs/mod-compat.md`](docs/mod-compat.md) §7/§7b
 
 ## 算光红线（钉死）
 
@@ -91,7 +91,7 @@ fabric/ | forge/ | neoforge/
 
 ## 配置红线
 
-键集真相源：`ConfigSchema`；审计表见 [`docs/config-audit.md`](docs/config-audit.md)。Fabric 双文件 `hassium-client.toml` / `hassium-server.toml`（物理客户端双文件合并；专用服仅 server）。Forge/NeoForge 物理客户端双注册（CLIENT+COMMON），专用服仅 COMMON。
+键集真相源：`ConfigSchema`；审计表见 [`docs/config-audit.md`](docs/config-audit.md)。Fabric 双文件 `hassium-client.toml` / `hassium-server.toml`（物理客户端双文件合并；专用服仅 server）。NeoForge 物理客户端双注册（CLIENT+COMMON），专用服仅 COMMON。
 
 | 项 | 默认 | 注意 |
 |----|------|------|
@@ -155,3 +155,4 @@ Manifold / 七段 / `#if MC_VER` / `PacketId` / `Identifier` 改代码时自动�
 - [`docs/runtime-smoke-test.md`](docs/runtime-smoke-test.md) — 运行时冒烟（L0–L2、场景引擎）
 - [`docs/config-audit.md`](docs/config-audit.md) — 配置项审计（含 `master.entity*` 全键）
 - [`docs/client-chunk-flow-handover.md`](docs/client-chunk-flow-handover.md) — **进行中**：统一 Compare+Pull 交接
+- [`docs/mc26-upgrade-plan.md`](docs/mc26-upgrade-plan.md) — **进行中**：MC 26.x 升级 + 移除 Forge + 分支分叉统筹（多会话任务真相源：已定决策 / 调研结论 / 四阶段提交阶梯 / 进度表，**开工前必读 §1/§9，收工必更 §8/§9**）
