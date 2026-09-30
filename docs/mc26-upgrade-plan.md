@@ -22,6 +22,7 @@
 | D4 | **1.20.1–1.21.10 整体 sunset**：不为其建维护分支，已发布产物继续在 Modrinth/CurseForge 可用；以 `archive/pre-baseline` git 引用保留完整历史后手 | D2 的连带决策（基线 = 1.21.11-only，fork 点不再携带更老版本） |
 | D5 | **legacy = `legacy-1.21` 分支，从基线提交切出**：冻结功能，仅收 crash/安全修复；修复只从 master 单向 cherry-pick 落地，禁止反向合并 | 基线已坍缩为零版本块代码，cherry-pick 冲突最小化 |
 | D6（待确认） | legacy 支持窗口 **6 个月**（或 26 线稳定即 EOL，先到为准）；26 线版本号从 **3.0.0** 起 | 待用户最终确认，不阻塞阶段①②③ |
+| D7 | **取消 NeoForge 测试版本支持**：26.2/26.3 仅 fabric（`builds_for=fabric`），NeoForge 仅 26.1.2；NeoForge 兼容代码与编译保留，不发布、不进冒烟矩阵 | 用户拍板 2026-09-30：非正式版本下 NeoForge 启动弹窗警告挡住自动进服（26.2/26.3 neoforge 冒烟六连 FAIL 实证：客户端停在弹窗、`ConnectScreen` 从不出现；26.1.2 neoforge 正常）。上游 NeoForge 正式版解除弹窗后可恢复 |
 
 ---
 
@@ -212,8 +213,8 @@ archive/pre-baseline = 当前 HEAD 的引用（1.20.1–1.21.10 完整历史后�
 
 ### 7.4 验证门
 
-- 每锚点：`fabric:compileJava` + `neoforge:compileJava`（`-Pmc_ver=26.1.2 / 26.2 / 26.3`；Git Bash 不加引号，pwsh 必须加引号）。
-- 每锚点冒烟：`pwsh -File ./scripts/runtime-smoke-test.ps1 -Ver 26.1.2 -Loader fabric -Phase I -SessionId "26.1.2_fabric_I"`（neoforge 同理）；L2 场景 `seedgen,dimension` 走 batch。
+- 每锚点：`fabric:compileJava` + `neoforge:compileJava`（`-Pmc_ver=26.1.2 / 26.2 / 26.3`；Git Bash 不加引号，pwsh 必须加引号）。编译门含 neoforge 全锚点（D7 取消的只是发布/冒烟，代码兼容保留）。
+- 每锚点冒烟：`pwsh -File ./scripts/runtime-smoke-test.ps1 -Ver 26.1.2 -Loader fabric -Phase I -SessionId "26.1.2_fabric_I"`；L2 场景 `seedgen,dimension` 走 batch。**冒烟矩阵按 D7**：26.1.2 fabric+neoforge、26.2/26.3 仅 fabric。
 - **光照红线验收必做**：移动屋檐/洞口场景（AGENTS.md 算光红线），冒烟绿不豁免。
 - `common:test` + `scanVersionBoundaries`。
 - 版本号 3.0.0（D6），发布走既有 publish 脚本。
@@ -232,6 +233,7 @@ archive/pre-baseline = 当前 HEAD 的引用（1.20.1–1.21.10 完整历史后�
 | 2026-09-30 | 阶段④接线落地（poc 分支）：构建链工程化 + 三段 properties + 机械清扫完成（ChunkPos record 1092+ 等，编译器兜底）；**教训两条**：① loom 类插件必须走 `plugins{}` 声明，晚置 `apply plugin:` 缺 ClassLoaderScope 直接崩；② javac 默认 100 错误上限，阶段④一开始就要 `-Xmaxerrs` 放开，否则目录严重失真 | poc/mc26-build@`e3414a6d` |
 | 2026-09-30 | 阶段④编译门收官（poc 分支）：① 结构断点 29 处清零（MinecraftServer 族 ctor+抽象方法、LevelSettings/PrimaryLevelData/WorldStem 链、光包 record、replaceWithPacketData、write/readCollection、Gui/Hud chat-screen 迁移、GameProtocols.Context、authlib）→ 26.3 三模块编译绿（`83558c64`/`5c333110`/`6bd85c73`）；② 跨锚点实测 **26.1.2↔26.2↔26.3 漂移 13 类**——§7.2「差异集中在客户端渲染/输入域」估计偏乐观，实际含三包 record、MinecraftServer ctor 尾参（NotificationManager 26.2+ 才有）、Gui/Hud 屏幕聊天迁移（K 过线）、authlib 包（yggdrasil→services）、FML 12 枚举（COMMON→LOCAL）、PositionPath 插值；③ 按 hassium-manifold 收口：compat 门面（ChunkLightPacketCompat/ClientHudCompat/EntityInterpCompat/ChunkPacketDataCompat.applyToChunk/ShadowServerCompat.datapackWorldGen）+ Mixin 目标 #if（Vec3↔PositionPath、setScreen 分家）+ NeoForge FML 枚举 #if + spam 抽象方法去 @Override 零 #if 跨 J；④ **三锚点编译全绿**（26.1.2/26.2/26.3 × fabric/neoforge，`db54fa18`）+ scanVersionBoundaries OK + common:test 绿（测试源补扫 135 处 pos.x→x()、asLong→pack）；⑤ 测试源漏扫教训：机械清扫要含 `src/test` | poc/mc26-build@`db54fa18` |
 | 2026-09-30 | 阶段④运行时波折（poc 分支）：① fabric.mod.json `depends.fabric`→`fabric-api`（26.x umbrella 移除 `provides:['fabric']`）+ java 下限 25；② **mixin 注入目标/描述符/字段是编译盲区**——冒烟逐个揭：`LevelRenderer.addRecentlyCompiledSection` 26.3 移除（编译完成通知迁 `RenderSection.setSectionMesh`，MixinLevelRenderer 按段分家）、`MixinLightDataWrite.write` 随 record 化消失（STREAM_CODEC lambda 不可注入 ⇒ 指标停采门控 <MC_26_3，ESTIMATED_LIGHT_BYTES 兜底）、`setSectionMesh` 非 void 要 `CallbackInfoReturnable`、`ServerEntity.updateInterval` 26.3 变 `UpdateInterval` 对象（实体降帧门条件单点重定向 `test()` = 旧 tickCount 相位 + interval 除数双替换，`EntityUpdatePacing.pacedGateTest` 复用既有路径）；③ **教训**：@Shadow/@Accessor 字段名与注入目标名必须对照反编译源核 DECLARATION（宽松正则会被参数/局部名骗过），上锚点前批量审计 mixin 名单；④ 修复后 **26.3 fabric Phase I PASS**（bootcheck4，两轮 round 全过 + ServerSwitched） | poc/mc26-build@`4088a656` |
+| 2026-09-30 | **D7 拍板：取消 NeoForge 测试版本支持**（26.2/26.3 `builds_for=fabric`，NeoForge 仅 26.1.2）：L2 批跑揭出 26.2/26.3 neoforge 六连 FAIL 共同根因——**非正式版本 NeoForge 启动弹窗警告挡自动进服**（客户端停在弹窗、`ConnectScreen` 从不出现、JOIN_WAIT 120s 超时；26.1.2 neoforge 无弹窗双场景 PASS）；NeoForge 兼容代码/编译保留（`neoforge:compileJava` 三锚点仍绿），仅收窄发布与冒烟矩阵。batch 锚点表同步（4 组合：26.1.2×2 + 26.2/26.3 fabric） | 用户拍板；poc 分支随冒烟修复提交 |
 
 ## 9. 进度表（滚动更新，收工必更）
 
@@ -252,7 +254,7 @@ archive/pre-baseline = 当前 HEAD 的引用（1.20.1–1.21.10 完整历史后�
 | ④ | 构建链接线到 26.x（buildSrc 双插件 + 三段 properties + 代理/JDK25） | ✅ 完成（poc 分支） | `poc/mc26-build`@`e3414a6d`；loom 门控（common/fabric）+ MDG（neoforge，含 runs 烟测接线移植）；注意事项见 §7.1 |
 | ④ | 26.3 API 机械清扫 + 结构断点修复 + 跨锚点 #if 矩阵 | ✅ 完成 | 机械 ~1350 + 结构 29 + 跨锚点 13 类收口；poc `83558c64`/`5c333110`/`6bd85c73`/`db54fa18` |
 | ④ | 三锚点编译门（compileJava ×3 锚点 ×2 loader + scan + test） | ✅ 完成 | 26.1.2/26.2/26.3 全绿；scanVersionBoundaries OK；common:test 绿 |
-| ④ | 冒烟 + 光照红线验收 | ☐ 未开始 | batch 锚点待换 26.x 三锚点 × 双 loader；§7.4 每锚点 seedgen,dimension；光照红线移动屋檐/洞口逐锚点做 |
+| ④ | 冒烟 + 光照红线验收 | ◐ 进行中 | L2 batch `seedgen,dimension` 跑批中：seedgen 4 PASS（26.1.2×2、26.2/26.3 fabric）/ 26.2/26.3 neoforge FAIL→**D7 取消**；dimension 26.1.2 neoforge+26.2 fabric PASS、26.1.2 fabric 客户端崩溃待查；矩阵=D7 四组合；光照红线移动屋檐/洞口逐锚点做 |
 | ④ | 文档修订（version-segments ✅ / AGENTS / mod-compat）+ 合入 master + 3.0.0 发布 | ◐ 进行中 | version-segments.md 已重写为 26.x 三段矩阵；AGENTS/mod-compat/合入/发布待收尾 |
 
 ## 10. 风险与回退
