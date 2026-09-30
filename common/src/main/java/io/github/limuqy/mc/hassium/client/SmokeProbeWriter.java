@@ -168,7 +168,7 @@ public final class SmokeProbeWriter {
                 java.util.ArrayList<net.minecraft.world.level.ChunkPos> present =
                         new java.util.ArrayList<>(candidates.size());
                 for (net.minecraft.world.level.ChunkPos pos : candidates) {
-                    if (cache.getChunk(pos.x, pos.z, false) != null) {
+                    if (cache.getChunk(pos.x(), pos.z(), false) != null) {
                         present.add(pos);
                     }
                 }
@@ -534,7 +534,7 @@ public final class SmokeProbeWriter {
             if (i > 0) {
                 sb.append(", ");
             }
-            sb.append('[').append(pos.x).append(", ").append(pos.z).append(']');
+            sb.append('[').append(pos.x()).append(", ").append(pos.z()).append(']');
         }
         sb.append("]}");
         if (trailingComma) {

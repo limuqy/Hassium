@@ -64,13 +64,13 @@ public final class SeedGenChunkCodec {
             if (sky == null && block == null) {
                 return;
             }
-            net.minecraft.network.protocol.game.ClientboundLightUpdatePacketData ld = packet.getLightData();
+            net.minecraft.network.protocol.game.ClientboundLightUpdatePacketData ld = packet.lightData();
             int sections = engine.getLightSectionCount();
             if (sky != null) {
-                fillLight(ld.getSkyYMask(), ld.getEmptySkyYMask(), ld.getSkyUpdates(), sky, sections);
+                fillLight(ld.skyYMask(), ld.emptySkyYMask(), ld.skyUpdates(), sky, sections);
             }
             if (block != null) {
-                fillLight(ld.getBlockYMask(), ld.getEmptyBlockYMask(), ld.getBlockUpdates(), block, sections);
+                fillLight(ld.blockYMask(), ld.emptyBlockYMask(), ld.blockUpdates(), block, sections);
             }
         } catch (Throwable t) {
             Constants.LOG.warn("Hassium: writeForeignLight failed {}", chunk.getPos(), t);

@@ -35,7 +35,7 @@ public class MixinThreadedLevelLightEngine {
         ChunkPos pos = chunk.getPos();
         DebugLogger.info(DebugLogger.LogType.LIGHT,
                 "[LIGHT_CALL] pos=({},{}) lit={} class={} thread={}",
-                pos.x, pos.z, lit, chunk.getClass().getSimpleName(),
+                pos.x(), pos.z(), lit, chunk.getClass().getSimpleName(),
                 Thread.currentThread().getName());
     }
 }

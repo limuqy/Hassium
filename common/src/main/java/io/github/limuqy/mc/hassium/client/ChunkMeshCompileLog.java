@@ -39,7 +39,7 @@ public final class ChunkMeshCompileLog {
         int cx = originX >> 4;
         int cz = originZ >> 4;
         int sectionY = originY >> 4;
-        boolean firstColumn = FIRST_COLUMN.add(ChunkPos.asLong(cx, cz));
+        boolean firstColumn = FIRST_COLUMN.add(ChunkPos.pack(cx, cz));
         Minecraft mc = Minecraft.getInstance();
         if (firstColumn) {
             io.github.limuqy.mc.hassium.shadow.light.SmokeChunkTrace.recordMeshCompiled(
@@ -65,7 +65,7 @@ public final class ChunkMeshCompileLog {
             log("first_column", eventMs, cx, cz, sectionY, cheb, havePlayer, pcx, pcz, 1);
         }
         if (eye) {
-            long eyeKey = ChunkPos.asLong(cx, cz);
+            long eyeKey = ChunkPos.pack(cx, cz);
             int seq = EYE_SEQ.computeIfAbsent(eyeKey, k -> new AtomicInteger()).incrementAndGet();
             log("eye_section", eventMs, cx, cz, sectionY, cheb, true, pcx, pcz, seq);
         }

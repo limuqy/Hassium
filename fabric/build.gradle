@@ -2,13 +2,15 @@ plugins {
     id 'loom-fabric'
 }
 
-sourceSets {
-    main {
-        java {
-            srcDir rootProject.file('cloth-ui/src/main/java')
-        }
-    }
-}
+// 26.x：cloth-config 暂无对应构建，cloth-ui（硬 import cloth API）暂不编入；
+// HassiumModMenuIntegration 的 cloth 分支已降级返回 null。cloth 26.x 构建就绪后恢复此 srcDir。
+// sourceSets {
+//     main {
+//         java {
+//             srcDir rootProject.file('cloth-ui/src/main/java')
+//         }
+//     }
+// }
 
 
 dependencies {
@@ -25,11 +27,12 @@ dependencies {
     include "com.electronwill.night-config:toml:3.6.7"
 
 
-    // Mod Menu：仅编译期；玩家可选安装（26.3 暂无 modmenu/cloth 构建，PoC 期注释）
-    // if (gradle.ext.has('modmenu_version')) {
-    //     modCompileOnly "maven.modrinth:modmenu:${gradle.ext.modmenu_version}"
-    //     modLocalRuntime "maven.modrinth:modmenu:${gradle.ext.modmenu_version}"
-    // }
+    // Mod Menu：仅编译期；玩家可选安装。26.x 暂用 1.21.11 代 API 编译（ModMenuApi#getModConfigScreenFactory
+    // 接口稳定）；26.3 专用 modmenu 构建发布后切换坐标。
+    // 源用 Modrinth Maven（CDN，快且稳）：坐标 maven.modrinth:modmenu:<ver>。
+    if (gradle.ext.has('modmenu_version')) {
+        compileOnly "maven.modrinth:modmenu:${gradle.ext.modmenu_version}"
+    }
 
     // Cloth Config：编译期需要（HassiumClothConfigScreen）；可选依赖，不 jiJ
     // if (gradle.ext.has('cloth_config_version')) {

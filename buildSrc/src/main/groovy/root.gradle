@@ -19,16 +19,16 @@ def writePreprocessorDefinitions() {
 }
 writePreprocessorDefinitions()
 
-// 合法 #if 分界（与 docs/version-segments.md 同步；1.21.11-only 基线，26.x 段见 mc26-upgrade-plan.md）
+// 合法 #if 分界（与 docs/version-segments.md 同步；26.x 段自本起，1.21.11 见 legacy-1.21 分支）
 def ALLOWED_MC_BOUNDARIES = [
-        'MC_1_21_11'
+        'MC_26_1_2', 'MC_26_2', 'MC_26_3'
 ] as Set
 
 tasks.register('scanVersionBoundaries') {
     group = 'verification'
-    description = 'Reject #if MC_1_*_* tokens outside docs/version-segments.md whitelist'
+    description = 'Reject #if MC_*_* tokens outside docs/version-segments.md whitelist'
     doLast {
-        def pattern = ~/MC_1_\d+_\d+/
+        def pattern = ~/MC_\d+(?:_\d+)+/
         def illegal = []
         ['common', 'fabric', 'neoforge'].each { mod ->
             def dir = file(mod)
@@ -132,7 +132,8 @@ tasks.register('publishState') {
                 println "PUBLISH_STATE ${mcVer} ${loader} cf=unknown(no-project) mr=unknown(no-project) jar=? mrver=?"
                 return
             }
-            def jarName = loaderProject.tasks.named('remapJar').get().archiveFile.get().asFile.name
+            def remapTask = loaderProject.tasks.findByName('remapJar') ?: loaderProject.tasks.findByName('jar')
+            def jarName = remapTask.archiveFile.get().asFile.name
             def mrVersionNumber = "${mod_version}+${mcVer}-${loader}"
             def cfState = PublishState.curseforgeFileState(cfToken, cfProject, jarName)
             def mrState = PublishState.modrinthVersionState(mrToken, mrProject, mrVersionNumber)

@@ -212,7 +212,7 @@ public final class LightNeighborhoodGate {
         });
         DebugLogger.info(DebugLogger.LogType.LIGHT,
                 "[LIGHT_GATE] Enqueue ({}, {}) dim={} pending={}",
-                pos.x, pos.z, dimension, awaiting.size());
+                pos.x(), pos.z(), dimension, awaiting.size());
     }
 
     /** 取消待齐套（区块卸载 / 断连 / 投递被覆盖）。 */
@@ -242,7 +242,7 @@ public final class LightNeighborhoodGate {
         if (dimension == null || pos == null) {
             return false;
         }
-        return promoted.contains(DimensionKey.key(dimension, pos.x, pos.z));
+        return promoted.contains(DimensionKey.key(dimension, pos.x(), pos.z()));
     }
 
     /** 本会话是否**干净**齐套放行（I2 判据的 self 项；单调）。见 {@link #promotedClean}。 */
@@ -299,8 +299,8 @@ public final class LightNeighborhoodGate {
                 if (dx == 0 && dz == 0) {
                     continue;
                 }
-                int nx = pos.x + dx;
-                int nz = pos.z + dz;
+                int nx = pos.x() + dx;
+                int nz = pos.z() + dz;
                 if (!isInNeighborhoodWindow(nx, nz)) {
                     continue; // 窗外邻柱不参与：永远不会被 acquire，等它没意义
                 }
@@ -332,8 +332,8 @@ public final class LightNeighborhoodGate {
                 if (dx == 0 && dz == 0) {
                     continue;
                 }
-                int nx = pos.x + dx;
-                int nz = pos.z + dz;
+                int nx = pos.x() + dx;
+                int nz = pos.z() + dz;
                 if (!isInNeighborhoodWindow(nx, nz)) {
                     continue;
                 }
@@ -373,8 +373,8 @@ public final class LightNeighborhoodGate {
                 if (dx == 0 && dz == 0) {
                     continue;
                 }
-                int nx = pos.x + dx;
-                int nz = pos.z + dz;
+                int nx = pos.x() + dx;
+                int nz = pos.z() + dz;
                 if (!isInNeighborhoodWindow(nx, nz)) {
                     return false; // 窗外缺邻也算缺（与 promotedClean 同口径）
                 }
@@ -447,8 +447,8 @@ public final class LightNeighborhoodGate {
                 if (dx == 0 && dz == 0) {
                     continue; // 本柱已注入
                 }
-                int nx = pos.x + dx;
-                int nz = pos.z + dz;
+                int nx = pos.x() + dx;
+                int nz = pos.z() + dz;
                 long nKey = DimensionKey.key(dimension, nx, nz);
                 if (ShadowLightCompute.isLightInitPassed(nKey)) {
                     neighbors.append('.'); // 曾过 INITIALIZE_LIGHT：就绪（单调，不会被 LIGHT 起跑撤掉）
@@ -483,13 +483,13 @@ public final class LightNeighborhoodGate {
                     "[LIGHT_GATE] Promote ({}, {}) dim={} missingInWindow={} outsideWindow={} "
                             + "timedOut={} waited={}ms sinceProgress={}ms (no placeholders) "
                             + "injectedNotInit={}",
-                    pos.x, pos.z, dimension, notInjected, outsideWindow,
+                    pos.x(), pos.z(), dimension, notInjected, outsideWindow,
                     timedOut, waitedMs, sinceProgressMs, injectedNotInit);
         } else {
             DebugLogger.info(DebugLogger.LogType.LIGHT,
                     "[LIGHT_GATE] Promote ({}, {}) dim={} neighborhood ready "
                             + "(timedOut={} waited={}ms sinceProgress={}ms) injectedNotInit={}",
-                    pos.x, pos.z, dimension, timedOut, waitedMs, sinceProgressMs, injectedNotInit);
+                    pos.x(), pos.z(), dimension, timedOut, waitedMs, sinceProgressMs, injectedNotInit);
         }
         // 条件移除：并发 cancel / REPLACE 时放弃本次 promote
         if (!awaiting.remove(key, entry)) {
@@ -523,7 +523,7 @@ public final class LightNeighborhoodGate {
         DebugLogger.info(DebugLogger.LogType.LIGHT,
                 "[LIGHT_GATE] Blocked ({}, {}) dim={} waited={}ms neighbors=[{}] "
                         + "injectedNotInit={} notInjected={}",
-                pos.x, pos.z, dimension, waitedMs, neighbors,
+                pos.x(), pos.z(), dimension, waitedMs, neighbors,
                 injectedNotInit, notInjected);
     }
 

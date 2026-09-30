@@ -61,8 +61,8 @@ public final class VanillaAlignedChunkProvider implements ShadowChunkProvider {
 
     @Override
     public boolean hasInFlight(String dimension, ChunkPos pos) {
-        return pos != null && (inflight.containsKey(DimensionKey.key(dimension, pos.x, pos.z))
-                || pendingPulls.containsKey(DimensionKey.key(dimension, pos.x, pos.z)));
+        return pos != null && (inflight.containsKey(DimensionKey.key(dimension, pos.x(), pos.z()))
+                || pendingPulls.containsKey(DimensionKey.key(dimension, pos.x(), pos.z())));
     }
 
     /**
@@ -74,7 +74,7 @@ public final class VanillaAlignedChunkProvider implements ShadowChunkProvider {
         if (dimension == null || pos == null) {
             return CompletableFuture.failedFuture(new IllegalArgumentException("acquire args"));
         }
-        long key = DimensionKey.key(dimension, pos.x, pos.z);
+        long key = DimensionKey.key(dimension, pos.x(), pos.z());
         CompletableFuture<LevelChunk> existing = inflight.get(key);
         if (existing != null && !existing.isDone()) {
             return existing;
@@ -100,7 +100,7 @@ public final class VanillaAlignedChunkProvider implements ShadowChunkProvider {
         }
         ShadowSeedServer existingServer = ShadowServerRegistry.getInstance().get();
         if (existingServer != null) {
-            LevelChunk material = existingServer.injectedChunk(dimension, pos.x, pos.z);
+            LevelChunk material = existingServer.injectedChunk(dimension, pos.x(), pos.z());
             if (material != null) {
                 completeAcquire(dimension, pos, material);
                 return CompletableFuture.completedFuture(material);
@@ -114,13 +114,13 @@ public final class VanillaAlignedChunkProvider implements ShadowChunkProvider {
                     new IllegalStateException("seedgen-local: skip network pull " + pos));
         }
         ShadowTrackingSession session = ShadowTrackingSession.getInstance();
-        if (session != null && !session.isInComputeDomain(pos.x, pos.z)) {
+        if (session != null && !session.isInComputeDomain(pos.x(), pos.z())) {
             io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat
                     .failSuspendedLoad(dimension, pos);
             pendingPulls.remove(key);
             DebugLogger.info(DebugLogger.LogType.NETWORK,
                     "[SHADOW_PROVIDER] skip acquire outside authority window ({}, {}) dim={}",
-                    pos.x, pos.z, dimension);
+                    pos.x(), pos.z(), dimension);
             return CompletableFuture.failedFuture(
                     new IllegalStateException("acquire outside authority window: " + pos));
         }
@@ -136,7 +136,7 @@ public final class VanillaAlignedChunkProvider implements ShadowChunkProvider {
         pendingPulls.put(key, new PendingPull(dimension, pos));
         DebugLogger.info(DebugLogger.LogType.NETWORK,
                 "[SHADOW_PROVIDER] enqueue pull ({}, {}) dim={} reason={} pending={}",
-                pos.x, pos.z, dimension, reason, pendingPulls.size());
+                pos.x(), pos.z(), dimension, reason, pendingPulls.size());
         return future;
     }
 
@@ -165,7 +165,7 @@ public final class VanillaAlignedChunkProvider implements ShadowChunkProvider {
                 positions.add(pending.pos);
             }
             batch.sort(Comparator.comparing(p -> p.pos,
-                    ShadowTrackingSession.domainComparator(positions, c.x, c.z)));
+                    ShadowTrackingSession.domainComparator(positions, c.x(), c.z())));
         }
         int sent = 0;
         int dropped = 0;
@@ -174,9 +174,9 @@ public final class VanillaAlignedChunkProvider implements ShadowChunkProvider {
             if (sent >= PULL_SENDS_PER_DRAIN) {
                 break;
             }
-            long key = DimensionKey.key(pending.dimension, pending.pos.x, pending.pos.z);
+            long key = DimensionKey.key(pending.dimension, pending.pos.x(), pending.pos.z());
             // 远距离：已出权威窗 → 丢弃，不再 C2S
-            if (session != null && !session.isInComputeDomain(pending.pos.x, pending.pos.z)) {
+            if (session != null && !session.isInComputeDomain(pending.pos.x(), pending.pos.z())) {
                 if (pendingPulls.remove(key, pending)) {
                     dropped++;
                     failSuspendedOnly(pending.dimension, pending.pos);
@@ -199,7 +199,7 @@ public final class VanillaAlignedChunkProvider implements ShadowChunkProvider {
             ShadowSeedServer server = ShadowServerRegistry.getInstance().get();
             if (server != null) {
                 LevelChunk material =
-                        server.injectedChunk(pending.dimension, pending.pos.x, pending.pos.z);
+                        server.injectedChunk(pending.dimension, pending.pos.x(), pending.pos.z());
                 if (material != null) {
                     pendingPulls.remove(key, pending);
                     completeAcquire(pending.dimension, pending.pos, material);
@@ -272,7 +272,7 @@ public final class VanillaAlignedChunkProvider implements ShadowChunkProvider {
         if (dimension == null || pos == null) {
             return;
         }
-        long key = DimensionKey.key(dimension, pos.x, pos.z);
+        long key = DimensionKey.key(dimension, pos.x(), pos.z());
         INSTANCE.pendingPulls.remove(key);
         CompletableFuture<LevelChunk> future = INSTANCE.inflight.remove(key);
         INSTANCE.inflightStartMs.remove(key);
@@ -293,7 +293,7 @@ public final class VanillaAlignedChunkProvider implements ShadowChunkProvider {
         if (dimension == null || pos == null) {
             return;
         }
-        long key = DimensionKey.key(dimension, pos.x, pos.z);
+        long key = DimensionKey.key(dimension, pos.x(), pos.z());
         INSTANCE.pendingPulls.remove(key);
         INSTANCE.inflight.remove(key);
         INSTANCE.inflightStartMs.remove(key);

@@ -20,6 +20,8 @@ repositories {
 dependencies {
     // PoC 26.x：新 fabric-loom（unobf 线，插件 id net.fabricmc.fabric-loom）替代 architectury-loom
     implementation "net.fabricmc:fabric-loom:1.17.21"
+    // neoforge 线构建插件（26.x）：MDG 自带 maven.neoforged.net 解析，本机需代理（gradle.properties systemProp）
+    implementation "net.neoforged:moddev-gradle:2.0.148"
     implementation "xyz.wagyourtail:manifold-gradle:1.0.0-SNAPSHOT"
     // 本地 / CI 推送 CurseForge（1.2+ 需 JVM 25；本仓库构建用 21 → 钉 1.1.28）
     implementation "net.darkhax.curseforgegradle:CurseForgeGradle:1.1.28"

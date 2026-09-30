@@ -48,7 +48,7 @@ public final class RegionCache {
     }
 
     public static long regionKey(int chunkX, int chunkZ) {
-        return ChunkPos.asLong(Math.floorDiv(chunkX, 32), Math.floorDiv(chunkZ, 32));
+        return ChunkPos.pack(Math.floorDiv(chunkX, 32), Math.floorDiv(chunkZ, 32));
     }
 
     public static Path regionFile(Path regionDir, int chunkX, int chunkZ) {
@@ -88,7 +88,7 @@ public final class RegionCache {
             return null;
         }
         try {
-            return ChunkPos.asLong(Integer.parseInt(matcher.group(1)), Integer.parseInt(matcher.group(2)));
+            return ChunkPos.pack(Integer.parseInt(matcher.group(1)), Integer.parseInt(matcher.group(2)));
         } catch (NumberFormatException e) {
             return null;
         }

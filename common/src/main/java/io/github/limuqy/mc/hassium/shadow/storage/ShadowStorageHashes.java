@@ -52,7 +52,7 @@ public final class ShadowStorageHashes {
 
     /** 记录指定维度区块 hash（任意线程；注入完成时调用）。 */
     public static void put(String dimension, ChunkPos pos, long hash) {
-        HASHES.put(DimensionKey.key(dimension, pos.x, pos.z), hash);
+        HASHES.put(DimensionKey.key(dimension, pos.x(), pos.z()), hash);
     }
 
     /** 取区块 hash（无记录返回 null；写盘时调用）。 */
@@ -62,7 +62,7 @@ public final class ShadowStorageHashes {
 
     /** 取指定维度区块 hash（无记录返回 null；写盘时调用）。 */
     public static Long get(String dimension, ChunkPos pos) {
-        return HASHES.get(DimensionKey.key(dimension, pos.x, pos.z));
+        return HASHES.get(DimensionKey.key(dimension, pos.x(), pos.z()));
     }
 
     /**
@@ -76,7 +76,7 @@ public final class ShadowStorageHashes {
 
     /** 指定维度的远程权威 hash 比对，语义同 {@link #matchesRemote(ChunkPos, long)}。 */
     public static Boolean matchesRemote(String dimension, ChunkPos pos, long remoteHash) {
-        Long tableHash = HASHES.get(DimensionKey.key(dimension, pos.x, pos.z));
+        Long tableHash = HASHES.get(DimensionKey.key(dimension, pos.x(), pos.z()));
         if (tableHash == null) {
             return null;
         }
@@ -100,7 +100,7 @@ public final class ShadowStorageHashes {
 
     /** 指定维度全量区块落地：只标 content 脏，不分配 NBT。 */
     public static void markContentDirty(String dimension, ChunkPos pos) {
-        markContentDirty(DimensionKey.key(dimension, pos.x, pos.z));
+        markContentDirty(DimensionKey.key(dimension, pos.x(), pos.z()));
     }
 
     public static void markContentDirty(long key) {
@@ -122,7 +122,7 @@ public final class ShadowStorageHashes {
 
     /** 指定维度全量光收敛：标 light 脏 + lightReady。 */
     public static void markLightReady(String dimension, ChunkPos pos) {
-        markLightReady(DimensionKey.key(dimension, pos.x, pos.z));
+        markLightReady(DimensionKey.key(dimension, pos.x(), pos.z()));
     }
 
     public static void markLightReady(long key) {
@@ -138,7 +138,7 @@ public final class ShadowStorageHashes {
 
     /** 指定维度欠光/半成品：标 light 脏，清 lightReady。 */
     public static void markLightDirty(String dimension, ChunkPos pos) {
-        markLightDirty(DimensionKey.key(dimension, pos.x, pos.z));
+        markLightDirty(DimensionKey.key(dimension, pos.x(), pos.z()));
     }
 
     public static void markLightDirty(long key) {
@@ -157,7 +157,7 @@ public final class ShadowStorageHashes {
     }
 
     public static void markPersisted(String dimension, ChunkPos pos) {
-        markPersisted(DimensionKey.key(dimension, pos.x, pos.z));
+        markPersisted(DimensionKey.key(dimension, pos.x(), pos.z()));
     }
 
     public static boolean isContentDirty(ChunkPos pos) {
@@ -166,7 +166,7 @@ public final class ShadowStorageHashes {
 
     /** 指定维度 content 脏位查询。 */
     public static boolean isContentDirty(String dimension, ChunkPos pos) {
-        return isContentDirty(DimensionKey.key(dimension, pos.x, pos.z));
+        return isContentDirty(DimensionKey.key(dimension, pos.x(), pos.z()));
     }
 
     public static boolean isContentDirty(long key) {
@@ -180,7 +180,7 @@ public final class ShadowStorageHashes {
 
     /** 指定维度 light 脏位查询。 */
     public static boolean isLightDirty(String dimension, ChunkPos pos) {
-        return isLightDirty(DimensionKey.key(dimension, pos.x, pos.z));
+        return isLightDirty(DimensionKey.key(dimension, pos.x(), pos.z()));
     }
 
     public static boolean isLightDirty(long key) {
@@ -214,7 +214,7 @@ public final class ShadowStorageHashes {
 
     /** 指定维度任意脏位查询。 */
     public static boolean isDirty(String dimension, ChunkPos pos) {
-        return isDirty(DimensionKey.key(dimension, pos.x, pos.z));
+        return isDirty(DimensionKey.key(dimension, pos.x(), pos.z()));
     }
 
     /**
@@ -307,7 +307,7 @@ public final class ShadowStorageHashes {
 
     /** 删除指定维度区块的 hash 与脏位。 */
     public static void remove(String dimension, ChunkPos pos) {
-        long key = DimensionKey.key(dimension, pos.x, pos.z);
+        long key = DimensionKey.key(dimension, pos.x(), pos.z());
         HASHES.remove(key);
         FLAGS.remove(key);
     }

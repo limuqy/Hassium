@@ -52,7 +52,7 @@ public final class ShadowRegionHeat {
 
     /** 记录一次访问（注入 / 读盘命中）；落到所属 region 文件。 */
     public static void recordAccess(String dimension, ChunkPos pos) {
-        long key = heatKeyForChunk(dimension, pos.x, pos.z);
+        long key = heatKeyForChunk(dimension, pos.x(), pos.z());
         long now = System.currentTimeMillis();
         HEAT.compute(key, (k, h) -> new HotEntry(
                 h == null ? 1 : h.accessCount + 1,
@@ -81,7 +81,7 @@ public final class ShadowRegionHeat {
 
     /** 删除区块所属 region 的热度（整文件淘汰时用）。 */
     public static void remove(String dimension, ChunkPos pos) {
-        removeRegion(dimension, Math.floorDiv(pos.x, 32), Math.floorDiv(pos.z, 32));
+        removeRegion(dimension, Math.floorDiv(pos.x(), 32), Math.floorDiv(pos.z(), 32));
     }
 
     public static void remove(ChunkPos pos) {
@@ -159,7 +159,7 @@ public final class ShadowRegionHeat {
     }
 
     public static int accessCountOf(String dimension, ChunkPos pos) {
-        HotEntry h = HEAT.get(heatKeyForChunk(dimension, pos.x, pos.z));
+        HotEntry h = HEAT.get(heatKeyForChunk(dimension, pos.x(), pos.z()));
         return h == null ? 0 : h.accessCount();
     }
 

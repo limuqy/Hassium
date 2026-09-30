@@ -85,7 +85,7 @@ public class MixinChunkMap {
         } catch (Throwable t) {
             io.github.limuqy.mc.hassium.Constants.LOG.error(
                     "[SHADOW_TRACK] onChunkMaterialized failed ({}, {})",
-                    chunk.getPos().x, chunk.getPos().z, t);
+                    chunk.getPos().x(), chunk.getPos().z(), t);
         }
     }
 

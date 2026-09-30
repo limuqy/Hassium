@@ -63,7 +63,7 @@ public final class ChunkFlowTiming {
         if (FLOW.size() >= MAX_TRACKED) {
             FLOW.clear(); // 非影子路径泄漏兜底（诊断数据，容忍清空）
         }
-        FLOW.put(ChunkPos.asLong(x, z), new long[]{System.nanoTime(), 0L, 0L, 0L});
+        FLOW.put(ChunkPos.pack(x, z), new long[]{System.nanoTime(), 0L, 0L, 0L});
     }
 
     /** consumeLoop 取到该 chunk 时刻（影子后台线程；批量装配点，消费前每轮覆写）。 */

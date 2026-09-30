@@ -189,7 +189,7 @@ public class NetworkStats {
      */
     public static void recordChunkApplied(int chunkX, int chunkZ) {
         if (!enabled) return;
-        metrics.recordClientChunkApplied(net.minecraft.world.level.ChunkPos.asLong(chunkX, chunkZ));
+        metrics.recordClientChunkApplied(net.minecraft.world.level.ChunkPos.pack(chunkX, chunkZ));
     }
 
     /**
@@ -198,7 +198,7 @@ public class NetworkStats {
      */
     public static void recordServerPushApplied(int chunkX, int chunkZ) {
         if (!enabled) return;
-        metrics.recordServerPushApplied(net.minecraft.world.level.ChunkPos.asLong(chunkX, chunkZ));
+        metrics.recordServerPushApplied(net.minecraft.world.level.ChunkPos.pack(chunkX, chunkZ));
     }
 
     /**

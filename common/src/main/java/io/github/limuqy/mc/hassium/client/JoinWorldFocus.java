@@ -44,7 +44,7 @@ public final class JoinWorldFocus {
             return;
         }
         ChunkPos pos = player.chunkPosition();
-        setFocusChunk(pos.x, pos.z);
+        setFocusChunk(pos.x(), pos.z());
     }
 
     public static void clear() {

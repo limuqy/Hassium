@@ -56,7 +56,7 @@ public final class ShadowVanillaLightPipeline {
         // 完整层 → publishCachedChunk；仅 isLightCorrect 但层未齐 → 只补光屏障，
         // 禁止 inject（清光）或 REUSE 空包（整柱抹光）。
         net.minecraft.world.level.chunk.LevelChunk existing =
-                server.injectedChunk(resolvedDimension, pos.x, pos.z);
+                server.injectedChunk(resolvedDimension, pos.x(), pos.z());
         if (existing != null && existing.isLightCorrect()) {
             // 回归原版：有引擎光且可复用则直接 publish；不再等齐套 promote。
             if (ShadowLightCompute.isLightReusable(server, pos, existing)) {
@@ -96,7 +96,7 @@ public final class ShadowVanillaLightPipeline {
         if (!server.injectPreLight(resolvedDimension, pos, packet, source)) {
             io.github.limuqy.mc.hassium.Constants.LOG.warn(
                     "[SHADOW_INJECT] pre-light failed ({}, {}) dim={}",
-                    pos.x, pos.z, resolvedDimension);
+                    pos.x(), pos.z(), resolvedDimension);
             if (shouldFailShadowOnInjectFailure()) {
                 ShadowServerRegistry.getInstance().failShadowServer();
             }

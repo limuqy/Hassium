@@ -124,14 +124,14 @@ public final class ChunkAuthorityNotifier {
                     }
                     return;
                 }
-                long packed = ChunkPos.asLong(pos.x, pos.z);
+                long packed = ChunkPos.pack(pos.x(), pos.z());
                 state.pending.add(packed);
                 if (state.declared.size() < MAX_PENDING_PER_PLAYER) {
                     state.declared.add(packed);
                 }
             }
         } catch (Throwable t) {
-            Constants.LOG.debug("Hassium: authority enter notify skipped ({}, {})", pos.x, pos.z, t);
+            Constants.LOG.debug("Hassium: authority enter notify skipped ({}, {})", pos.x(), pos.z(), t);
         }
     }
 
@@ -189,7 +189,7 @@ public final class ChunkAuthorityNotifier {
             while (iterator.hasNext()) {
                 long packed = iterator.next();
                 if (io.github.limuqy.mc.hassium.compat.ChunkShapeCompat.contains(
-                        center.x, center.z, range, ChunkPos.getX(packed), ChunkPos.getZ(packed))) {
+                        center.x(), center.z(), range, ChunkPos.getX(packed), ChunkPos.getZ(packed))) {
                     state.pending.add(packed);
                 } else {
                     iterator.remove();

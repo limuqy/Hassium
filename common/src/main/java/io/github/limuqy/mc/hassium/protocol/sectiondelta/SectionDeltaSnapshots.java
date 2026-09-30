@@ -23,7 +23,7 @@ public final class SectionDeltaSnapshots {
 
     /** 指定维度取用或捕获影子基线；维度来自统一 ShadowPull 请求上下文。 */
     public static SectionDeltaSnapshot getOrCapture(String dimension, ChunkPos pos, LevelChunk chunk) {
-        long key = DimensionKey.key(dimension, pos.x, pos.z);
+        long key = DimensionKey.key(dimension, pos.x(), pos.z());
         SectionDeltaSnapshot existing = MEMO.get(key);
         if (existing != null) {
             return existing;
@@ -42,19 +42,19 @@ public final class SectionDeltaSnapshots {
         if (pos == null || snapshot == null || dimension == null) {
             return;
         }
-        MEMO.put(DimensionKey.key(dimension, pos.x, pos.z), snapshot);
+        MEMO.put(DimensionKey.key(dimension, pos.x(), pos.z()), snapshot);
     }
 
     public static void invalidate(ChunkPos pos) {
         if (pos != null) {
-            MEMO.remove(DimensionKey.key(DimensionKey.OVERWORLD, pos.x, pos.z));
+            MEMO.remove(DimensionKey.key(DimensionKey.OVERWORLD, pos.x(), pos.z()));
         }
     }
 
     /** 指定维度失效（applySectionDelta 失败路径 / 内容失效扫描调用）。 */
     public static void invalidate(String dimension, ChunkPos pos) {
         if (pos != null && dimension != null) {
-            MEMO.remove(DimensionKey.key(dimension, pos.x, pos.z));
+            MEMO.remove(DimensionKey.key(dimension, pos.x(), pos.z()));
         }
     }
 

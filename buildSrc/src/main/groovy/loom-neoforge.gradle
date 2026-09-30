@@ -1,97 +1,88 @@
 plugins {
     id 'minecraft'
+    id 'net.neoforged.moddev'
     id 'native-dep-shade'
     id 'publish-curseforge'
     id 'publish-modrinth'
 }
 
-loom {
-    // mixin 由 neoforge.mods.toml 的 [[mixins]] 声明（1.20.1 的 forge mixinConfig 兼容已随 NeoForge 1.20.1 支持退役）
-    neoForge {
-    }
-}
+// 26.x：neoforge 线 = ModDevGradle（minecraft.gradle 已对本模块跳过 loom）
 
-def resolveNeoForgeDependency() {
-    def loader = gradle.ext.neoforge_loader as String
-    return "net.neoforged:neoforge:${loader}"
-}
+neoForge {
+    version = gradle.ext.neoforge_loader as String
 
-dependencies {
-    neoForge resolveNeoForgeDependency()
-}
-
-loom {
-    runConfigs.configureEach {
-        ideConfigGenerated = true
-        if (name == 'client') {
-            runDir = 'run/client'
+    runs {
+        client {
+            client()
+            gameDirectory = file('run/client')
+            // 冒烟：脚本通过 -PhassiumSmokeTest=true 注入 JVM 属性 + quickPlay
+            // （loom runConfig 移植；MDG DSL：systemProperty k,v / programArguments）
             if (project.hasProperty('hassiumSmokeTest') && project.property('hassiumSmokeTest').toString() == 'true') {
                 def host = project.findProperty('hassiumSmokeHost') ?: '127.0.0.1:25565'
                 def delayMs = project.findProperty('hassiumSmokeDelayMs') ?: '10000'
                 def reconnectDelayMs = project.findProperty('hassiumSmokeReconnectDelayMs') ?: '3000'
                 def joinTimeoutMs = project.findProperty('hassiumSmokeJoinTimeoutMs') ?: '120000'
+                def moveSeconds = project.findProperty('hassiumSmokeMoveSeconds') ?: '0'
                 def phases = project.findProperty('hassiumSmokePhases') ?: 'classic'
                 def manualLogout = project.findProperty('hassiumSmokeManualLogout')
-                // loom 1.17+: RunConfiguration 用 ListProperty<String>；旧版裸 List getter 已 @Deprecated 且
-                // getJvmArguments().get() 在配置阶段未 finalize 抛 UnsupportedOperationException。改用
-                // ListProperty 原生 addAll/add。
-                jvmArguments.addAll([
-                        "-Dhassium.smokeTest=true",
-                        "-Dhassium.smokeTest.delayMs=${delayMs}",
-                        "-Dhassium.smokeTest.reconnectDelayMs=${reconnectDelayMs}",
-                        "-Dhassium.smokeTest.joinTimeoutMs=${joinTimeoutMs}",
-                        "-Dhassium.smokeTest.host=${host}",
-                        "-Dhassium.smokePhases=${phases}"
-                ])
-                // T2 PROBE JSON v1：harness 传 -PhassiumSmokeProbeDir 时映射为客户端
-                // JVM 属性 hassium.smokeTest.probeDir（ClientSmokeTest 每轮写 roundN.json）
+                def username = project.findProperty('hassiumSmokeUsername')
+                systemProperty 'hassium.smokeTest', 'true'
+                systemProperty 'hassium.smokeTest.delayMs', "${delayMs}"
+                systemProperty 'hassium.smokeTest.reconnectDelayMs', "${reconnectDelayMs}"
+                systemProperty 'hassium.smokeTest.joinTimeoutMs', "${joinTimeoutMs}"
+                systemProperty 'hassium.smokeTest.moveSeconds', "${moveSeconds}"
+                systemProperty 'hassium.smokeTest.host', "${host}"
+                systemProperty 'hassium.smokePhases', "${phases}"
                 def probeDir = project.findProperty('hassiumSmokeProbeDir')
                 if (probeDir != null && !probeDir.toString().isBlank()) {
-                    jvmArguments.add("-Dhassium.smokeTest.probeDir=${probeDir}")
+                    systemProperty 'hassium.smokeTest.probeDir', probeDir.toString()
                 }
-                // T8 场景引擎：harness 传 -PhassiumSmokeScenario=<name> 时映射为客户端
-                // JVM 属性 hassium.smokeScenario（ScenarioEngine 加载 scenario/<name>.scenario）
                 def smokeScenario = project.findProperty('hassiumSmokeScenario')
                 if (smokeScenario != null && !smokeScenario.toString().isBlank()) {
-                    jvmArguments.add("-Dhassium.smokeScenario=${smokeScenario}")
+                    systemProperty 'hassium.smokeScenario', smokeScenario.toString()
                 }
-                // FULL compare 取证：harness 传 -PhassiumCompareFullDumpDir 时映射为客户端
-                // JVM 属性 hassium.compareFullDumpDir（CompareFullDump 对每个 FULL 落盘
-                // 服务端解压包 + 影子端本地基线，同 vanilla codec 编码）
                 def compareFullDumpDir = project.findProperty('hassiumCompareFullDumpDir')
                 if (compareFullDumpDir != null && !compareFullDumpDir.toString().isBlank()) {
-                    jvmArguments.add("-Dhassium.compareFullDumpDir=${compareFullDumpDir}")
+                    systemProperty 'hassium.compareFullDumpDir', compareFullDumpDir.toString()
                 }
                 if (manualLogout != null && manualLogout.toString() == 'true') {
-                    jvmArguments.add("-Dhassium.smokeTest.manualLogout=true")
+                    systemProperty 'hassium.smokeTest.manualLogout', 'true'
                 }
-                programArguments.addAll([
-                        '--quickPlayMultiplayer', host.toString()
-                ])
+                // T10 迁移演练：固定客户端用户名（loom dev 默认随机用户名，跨会话 UUID 不一致）
+                if (username != null && !username.toString().isBlank()) {
+                    programArguments.addAll('--username', username.toString())
+                }
+                programArguments.addAll('--quickPlayMultiplayer', host.toString())
             }
-        } else if (name == 'server') {
-            runDir = 'run/server'
+        }
+        server {
+            server()
+            gameDirectory = file('run/server')
             if (project.hasProperty('hassiumSmokeTest') && project.property('hassiumSmokeTest').toString() == 'true') {
                 programArguments.add('nogui')
                 def phases = project.findProperty('hassiumSmokePhases') ?: 'classic'
-                // 服务端冒烟：启动 VD=20，玩家退出后切 VD=8
-                jvmArguments.addAll([
-                        "-Dhassium.serverSmokeTest=true",
-                        "-Dhassium.smokePhases=${phases}"
-                ])
-                // T7/T8 场景引擎服务端侧：harness 传 -PhassiumServerSmokeScenario=<name> 时
-                // 映射为 JVM 属性 hassium.serverSmokeScenario（ScenarioEngine 服务端 op 逻辑）
+                def vd1 = project.findProperty('hassiumSmokeVd1') ?: '20'
+                def vd2 = project.findProperty('hassiumSmokeVd2') ?: '10'
+                systemProperty 'hassium.serverSmokeTest', 'true'
+                systemProperty 'hassium.serverSmokeTest.vd1', "${vd1}"
+                systemProperty 'hassium.serverSmokeTest.vd2', "${vd2}"
+                systemProperty 'hassium.smokePhases', "${phases}"
                 def serverSmokeScenario = project.findProperty('hassiumServerSmokeScenario')
                 if (serverSmokeScenario != null && !serverSmokeScenario.toString().isBlank()) {
-                    jvmArguments.add("-Dhassium.serverSmokeScenario=${serverSmokeScenario}")
+                    systemProperty 'hassium.serverSmokeScenario', serverSmokeScenario.toString()
                 }
             }
         }
     }
+
+    mods {
+        "${mod_id}" {
+            sourceSet(sourceSets.main)
+        }
+    }
 }
 
-// NeoForge ≥1.21.1 只认 META-INF/neoforge.mods.toml（<1.20.5 的 mods.toml 兼容已随 1.20.1 支持退役）。
-// 两者不能同时打进 jar。
+// mixin 由 neoforge.mods.toml 的 [[mixins]] 声明
 processResources {
     exclude 'META-INF/mods.toml'
 }

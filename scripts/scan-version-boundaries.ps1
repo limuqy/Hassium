@@ -1,7 +1,9 @@
 # 合法 #if 分界常量（与 docs/version-segments.md 同步）
 # 修改白名单时必须同步更新该文档。
 $AllowedBoundaries = @(
-    'MC_1_21_11'
+    'MC_26_1_2',
+    'MC_26_2',
+    'MC_26_3'
 )
 
 $Root = Split-Path -Parent $PSScriptRoot
@@ -10,7 +12,7 @@ if (-not (Test-Path (Join-Path $Root 'versionProperties'))) {
     exit 1
 }
 
-$Pattern = [regex]'MC_1_\d+_\d+'
+$Pattern = [regex]'MC_\d+(?:_\d+)+'
 $Illegal = @()
 
 $Dirs = @('common', 'fabric', 'neoforge') | ForEach-Object { Join-Path $Root $_ }

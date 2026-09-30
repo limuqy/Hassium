@@ -55,12 +55,12 @@ public class MixinClientPacketListener {
             // pull FULL 响应落地（影子 tracking 采集）以 REMOTE_PULL 归因，区别于服务端自主推送
             io.github.limuqy.mc.hassium.platform.client.TraceOrigin origin =
                     io.github.limuqy.mc.hassium.client.ClientChunkHandler.consumePullApplyOrigin(
-                            packet.getX(), packet.getZ())
+                            packet.x(), packet.z())
                             ? io.github.limuqy.mc.hassium.platform.client.TraceOrigin.REMOTE_PULL
                             : io.github.limuqy.mc.hassium.platform.client.TraceOrigin.SERVER_PUSH;
             io.github.limuqy.mc.hassium.shadow.light.ShadowVanillaLightPipeline.submitVisible(
                     io.github.limuqy.mc.hassium.shadow.light.ShadowVanillaLightPipeline.currentDimension(),
-                    new net.minecraft.world.level.ChunkPos(packet.getX(), packet.getZ()), packet,
+                    new net.minecraft.world.level.ChunkPos(packet.x(), packet.z()), packet,
                     origin);
             this.hassium$recordNativeChunk = false;
             ci.cancel();
@@ -71,9 +71,9 @@ public class MixinClientPacketListener {
         if (!this.hassium$recordNativeChunk) {
             return;
         }
-        this.hassium$nativeChunkX = packet.getX();
-        this.hassium$nativeChunkZ = packet.getZ();
-        this.hassium$nativeChunkPayloadBytes = packet.getChunkData().getReadBuffer().readableBytes();
+        this.hassium$nativeChunkX = packet.x();
+        this.hassium$nativeChunkZ = packet.z();
+        this.hassium$nativeChunkPayloadBytes = packet.chunkData().getReadBuffer().readableBytes();
     }
 
     /** 仅原版 replaceWithPacketData 成功返回后，才把完整区块计入真实接收/落地指标。 */
