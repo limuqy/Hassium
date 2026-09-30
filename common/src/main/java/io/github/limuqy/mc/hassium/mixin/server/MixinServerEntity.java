@@ -13,15 +13,19 @@ import org.spongepowered.asm.mixin.injection.Redirect;
 /**
  * 实体降帧/错峰注入点（逐级降帧 / 热点降帧 / 帧率压力 / 错峰推送的落点）。
  * <p>
- * 只替换 {@code sendChanges()} 门条件里的字段读取，不改方法结构与调用时机：
+ * 只替换 {@code sendChanges()} 门条件里的取值，不改方法结构与调用时机：
  * <ul>
  *   <li>门条件里的 {@code this.tickCount}（{@code ordinal = 0}，在 updateInterval 读取之前）→
  *       {@code tickCount + phase}，实现 UUID 相位错峰（总量不变、摊平齐发尖峰）；</li>
  *   <li>{@code this.updateInterval}（门条件里的除数）→ 引擎计算的间隔，永不小于原版；</li>
- *   <li>门条件里的 {@code entity.hasImpulse}（1.21.11 起 {@code needsSync}）→ 受控实体置 false，
- *       使其发包节拍完全由间隔决定。{@code ordinal = 0} 即门条件那一处，方法内后一处读取
- *       （决定是否补发速度包）保持原版语义。</li>
+ *   <li>门条件里的 {@code entity.needsSync}（{@code ordinal = 0}）→ 受控实体置 false，
+ *       使其发包节拍完全由间隔决定。</li>
  * </ul>
+ * 26.3：门条件从 {@code tickCount % updateInterval == 0} 改为
+ * {@code updateInterval.test(tickCount)}（{@code UpdateInterval} 对象化）——单点重定向
+ * {@code test()} 等价旧「tickCount 相位 + interval 除数」双替换，见
+ * {@link EntityUpdatePacing#pacedGateTest}。
+ * <p>
  * 不用 {@code @Inject(HEAD, cancel)} 的原因见 {@link EntityUpdatePacing} 类注释
  * （会冻结 {@code tickCount} 并跳过尾部 {@code hurtMarked} 分支）。
  * <p>
@@ -35,6 +39,31 @@ public abstract class MixinServerEntity {
     @Final
     private Entity entity;
 
+    /**
+     * 门条件里的 {@code entity.needsSync}（{@code ordinal = 0}）：受控实体置 false。
+     * 方法内后一处读取（决定是否补发速度包）与尾部写 {@code = false} 保持原版语义。
+     */
+    @Redirect(method = "sendChanges", at = @At(value = "FIELD",
+            target = "Lnet/minecraft/world/entity/Entity;needsSync:Z", opcode = Opcodes.GETFIELD, ordinal = 0))
+    private boolean hassium$gateImpulse(Entity owner) {
+        return EntityUpdatePacing.gateImpulse(owner, owner.needsSync);
+    }
+
+#if MC_VER >= MC_26_3
+    /**
+     * 26.3 门条件 {@code updateInterval.test(this.tickCount)}：单点替换。
+     * NEVER 保持永不周期发；periodic(N) 经 {@code nextInterval(0)} 还原原版周期 N 作引擎下限。
+     */
+    @Redirect(method = "sendChanges", at = @At(value = "INVOKE",
+            target = "Lnet/minecraft/world/entity/UpdateInterval;test(I)Z"))
+    private boolean hassium$pacedIntervalTest(net.minecraft.world.entity.UpdateInterval interval, int tickCount) {
+        if (interval == net.minecraft.world.entity.UpdateInterval.NEVER) {
+            return false;
+        }
+        int vanillaPeriod = Math.max(1, interval.nextInterval(0));
+        return EntityUpdatePacing.pacedGateTest(entity, vanillaPeriod, tickCount, interval.test(tickCount));
+    }
+#else
     @Shadow
     @Final
     private int updateInterval;
@@ -57,10 +86,5 @@ public abstract class MixinServerEntity {
     private int hassium$effectiveUpdateInterval(ServerEntity owner) {
         return EntityUpdatePacing.effectiveInterval(entity, updateInterval);
     }
-
-    @Redirect(method = "sendChanges", at = @At(value = "FIELD",
-            target = "Lnet/minecraft/world/entity/Entity;needsSync:Z", opcode = Opcodes.GETFIELD, ordinal = 0))
-    private boolean hassium$gateImpulse(Entity owner) {
-        return EntityUpdatePacing.gateImpulse(owner, owner.needsSync);
-    }
+#endif
 }

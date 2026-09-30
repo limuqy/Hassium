@@ -4,7 +4,7 @@ AI Agent 速查。多版本真相源见 [`docs/version-segments.md`](docs/versio
 
 ## 项目身份
 
-Minecraft **1.21.11** 多加载器模组（**Fabric / NeoForge**），ZSTD 优化存档与网络。**Forge 加载器已移除**（2026-09-30）；**同日起源码收缩为 1.21.11 单版本基线**（1.20.1–1.21.10 退役、全部 `#if` 剥离，分叉与 26.x 升级计划见 [`docs/mc26-upgrade-plan.md`](docs/mc26-upgrade-plan.md)）。**回归直连拓扑**：客户端↔服务端唯一 vanilla TCP（登录期能力握手 + Play 期 `play_init_s2c` 激活）；网络核心/UDP 数据面/续流迁移已裁剪，不复活。
+Minecraft **26.1.2 / 26.2 / 26.3** 多加载器模组（**Fabric / NeoForge**），ZSTD 优化存档与网络。**Forge 加载器已移除**（2026-09-30）；**同日起26.x 三锚点基线（J=26.1.2 / K=26.2 / L=26.3，legacy-1.21 分支维护 1.21.11）**（1.20.1–1.21.10 退役、全部 `#if` 剥离，分叉与 26.x 升级计划见 [`docs/mc26-upgrade-plan.md`](docs/mc26-upgrade-plan.md)）。**回归直连拓扑**：客户端↔服务端唯一 vanilla TCP（登录期能力握手 + Play 期 `play_init_s2c` 激活）；网络核心/UDP 数据面/续流迁移已裁剪，不复活。
 
 ## 关键构建命令
 
@@ -14,7 +14,7 @@ Minecraft **1.21.11** 多加载器模组（**Fabric / NeoForge**），ZSTD 优�
 |--|------------|--------------|
 | Gradle | `.\gradlew.bat common:compileJava` | `./gradlew common:compileJava` |
 | 冒烟 | `.\scripts\runtime-smoke-test.ps1 ...` | `pwsh -File ./scripts/runtime-smoke-test.ps1 ...`（**无 .sh**） |
-| `-Pmc_ver` | **必须** `"-Pmc_ver=1.20.1"`（引号，否则拆成 `1`） | `-Pmc_ver=1.20.1` 即可 |
+| `-Pmc_ver` | **必须** `"-Pmc_ver=26.3"`（引号，否则拆成 `1`） | `-Pmc_ver=26.3` 即可 |
 
 常用任务：`common:decompile` / `common:compileJava` / `fabric|neoforge:compileJava` / `build` / `common:test` / `scanVersionBoundaries`。
 
@@ -127,14 +127,14 @@ Mod 客户端 ←──唯一 vanilla TCP（登录期握手 + Play 期自定义 
 
 ```powershell
 # pwsh
-.\scripts\runtime-smoke-test.ps1 -Ver 1.21.11 -Loader fabric -Phase I -SessionId "1.21.11_fabric_I"
+.\scripts\runtime-smoke-test.ps1 -Ver 26.3 -Loader fabric -Phase I -SessionId "26.3_fabric_I"
 .\scripts\runtime-smoke-test-batch.ps1 -Phase I -Scenarios seedgen,dimension   # L2 锚点
 ```
 
 ```bash
 # Git Bash：多场景必须 -Command（-File 不拆逗号）
 pwsh -Command '& "./scripts/runtime-smoke-test-batch.ps1" -Phase I -Scenarios seedgen,dimension'
-pwsh -File ./scripts/runtime-smoke-test.ps1 -Ver 1.21.11 -Loader fabric -Phase I -SessionId "1.21.11_fabric_I"
+pwsh -File ./scripts/runtime-smoke-test.ps1 -Ver 26.3 -Loader fabric -Phase I -SessionId "26.3_fabric_I"
 ```
 
 **脚本会自己结束**并印 `=== RESULT: PASS|FAIL ===`（典型 4–12 min）。前台 `block_until_ms ≥ 600000`，后台 Await **本次 ps1 job** + pattern `=== RESULT:`；结果读 `build/smoke-test/results/result_<SessionId>.json`，日志 `logs/server|client_<id>.log`。不要另开端口会话，不要 `gradlew --stop`。

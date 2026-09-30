@@ -20,7 +20,8 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public class MixinLevelRenderer {
 
     @Inject(method = "setSectionMesh", at = @At("HEAD"))
-    private void hassium$onCompiled(net.minecraft.client.renderer.chunk.SectionMesh mesh, CallbackInfo ci) {
+    private void hassium$onCompiled(net.minecraft.client.renderer.chunk.SectionMesh mesh,
+            org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable<net.minecraft.client.renderer.chunk.SectionMesh> cir) {
         BlockPos origin = ((SectionRenderDispatcher.RenderSection) (Object) this).getRenderOrigin();
         ChunkMeshCompileLog.onCompiled(origin.getX(), origin.getY(), origin.getZ());
     }
