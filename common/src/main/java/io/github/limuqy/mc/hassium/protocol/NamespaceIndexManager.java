@@ -150,44 +150,6 @@ public class NamespaceIndexManager {
 
     @SuppressWarnings("unchecked")
     private void initVanillaForSide(PacketFlow side) {
-#if MC_VER < MC_1_21_1
-        var map = (Int2ObjectMap<Class<? extends Packet<?>>>) (Int2ObjectMap<?>)
-                ConnectionProtocol.PLAY.getPacketsByIds(side);
-
-        // 按 ID 排序确保确定性顺序
-        var entries = new ArrayList<>(map.int2ObjectEntrySet());
-        entries.sort(Comparator.comparingInt(Int2ObjectMap.Entry::getIntKey));
-
-        for (var entry : entries) {
-            Class<?> clazz = entry.getValue();
-            int packetId = entry.getIntKey();
-
-            // 如果已经从另一侧映射过，只记录 ID
-            if (vanillaClassToIdentifier.containsKey(clazz)) {
-                PacketId existingId = vanillaClassToIdentifier.get(clazz);
-                if (side == PacketFlow.CLIENTBOUND) {
-                    vanillaIdS2C.put(existingId, packetId);
-                } else {
-                    vanillaIdC2S.put(existingId, packetId);
-                }
-                continue;
-            }
-
-            // 类名转 snake_case
-            String path = toSnakeCase(clazz.getSimpleName());
-            PacketId id = new PacketId("minecraft", path);
-
-            // 注册到索引
-            register(id.fullId());
-            vanillaClassToIdentifier.put(clazz, id);
-
-            if (side == PacketFlow.CLIENTBOUND) {
-                vanillaIdS2C.put(id, packetId);
-            } else {
-                vanillaIdC2S.put(id, packetId);
-            }
-        }
-#else
         // 1.20.5+: 通过 GameProtocols / IdDispatchCodec 枚举 PacketType
         for (PacketCodecCompat.PlayPacketEntry entry : PacketCodecCompat.enumeratePlayPackets(side)) {
             PacketId id = entry.id();
@@ -199,7 +161,6 @@ public class NamespaceIndexManager {
                 vanillaIdC2S.put(id, packetId);
             }
         }
-#endif
     }
 
     /**

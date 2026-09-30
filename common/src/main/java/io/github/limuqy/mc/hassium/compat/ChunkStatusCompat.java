@@ -1,10 +1,6 @@
 package io.github.limuqy.mc.hassium.compat;
 
-#if MC_VER < MC_1_21_1
-import net.minecraft.world.level.chunk.ChunkStatus;
-#else
 import net.minecraft.world.level.chunk.status.ChunkStatus;
-#endif
 
 /**
  * 跨版本 {@code ChunkStatus} 名称查询：判断一条区块列 NBT 的 {@code Status} 是否已到

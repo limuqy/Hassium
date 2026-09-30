@@ -25,9 +25,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  * 钩子选 {@code setBlockState} 的 RETURN（vanilla 全部方块变更的收口：玩家放置/破坏、方块
  * 实体 tick、结构/特征生成、爆炸等），返回 null 表示内容未变，跳过。
  * <p>
- * <b>描述符按段分叉</b>：1.21.5 起第三个参数由 {@code boolean isMoving} 改为 {@code int flags}
- * （{@code LevelChunk#setBlockState}），故以 {@code MC_1_21_5} 为界；两段共用同一实现体
- * {@code hassium$invalidateAuthorityHash0}。
+ * <b>描述符</b>：1.21.5 起第三个参数由 {@code boolean isMoving} 改为 {@code int flags}
+ * （{@code LevelChunk#setBlockState}），现采用 1.21.5+ 的 {@code int flags} 形态；
+ * 实现体为 {@code hassium$invalidateAuthorityHash0}。
  * <p>
  * 热路径保护：先查 {@link ChunkAuthorityHashes#hasEntries()}（volatile 免锁短路）——未协商
  * 权威位（原版客户端 / 单人 / 影子端）时缓存恒空，每次方块变更只多一次 volatile 读。影子端
@@ -36,21 +36,12 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 @Mixin(LevelChunk.class)
 public class MixinLevelChunk {
 
-#if MC_VER < MC_1_21_5
-    @Inject(method = "setBlockState(Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;Z)Lnet/minecraft/world/level/block/state/BlockState;",
-            at = @At("RETURN"))
-    private void hassium$invalidateAuthorityHash(BlockPos pos, BlockState state, boolean isMoving,
-                                                 CallbackInfoReturnable<BlockState> cir) {
-        hassium$invalidateAuthorityHash0(cir);
-    }
-#else
     @Inject(method = "setBlockState(Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;I)Lnet/minecraft/world/level/block/state/BlockState;",
             at = @At("RETURN"))
     private void hassium$invalidateAuthorityHash(BlockPos pos, BlockState state, int flags,
                                                  CallbackInfoReturnable<BlockState> cir) {
         hassium$invalidateAuthorityHash0(cir);
     }
-#endif
 
     @Unique
     private void hassium$invalidateAuthorityHash0(CallbackInfoReturnable<BlockState> cir) {

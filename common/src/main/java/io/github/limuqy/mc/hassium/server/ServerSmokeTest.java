@@ -8,11 +8,7 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.server.level.ServerPlayer;
-#if MC_VER < MC_1_21_1
-import net.minecraft.world.level.chunk.ChunkStatus;
-#else
 import net.minecraft.world.level.chunk.status.ChunkStatus;
-#endif
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -132,20 +128,12 @@ public final class ServerSmokeTest {
                 return;
             }
             for (ServerPlayer p : playerList.getPlayers()) {
-#if MC_VER < MC_1_21_9
-                if (!playerList.isOp(p.getGameProfile())) {
-                    playerList.op(p.getGameProfile());
-                    LOGGER.info("{} op'd smoke player {} (scenario needs level 2 commands)",
-                            MARKER, p.getGameProfile().getName());
-                }
-#else
                 // 1.21.9+ PlayerList op/isOp 改收 NameAndId（GameProfile 退役）
                 if (!playerList.isOp(p.nameAndId())) {
                     playerList.op(p.nameAndId());
                     LOGGER.info("{} op'd smoke player {} (scenario needs level 2 commands)",
                             MARKER, p.nameAndId().name());
                 }
-#endif
             }
         } catch (Throwable t) {
             LOGGER.warn("{} op smoke players failed", MARKER, t);

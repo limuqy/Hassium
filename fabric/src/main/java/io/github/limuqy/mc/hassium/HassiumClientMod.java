@@ -9,10 +9,8 @@ import io.github.limuqy.mc.hassium.protocol.DictionaryManager;
 import io.github.limuqy.mc.hassium.protocol.PayloadHandlers;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents;
-#if MC_VER >= MC_1_21_1
 import net.fabricmc.fabric.api.client.networking.v1.ClientConfigurationConnectionEvents;
 import net.fabricmc.fabric.api.client.networking.v1.ClientConfigurationNetworking;
-#endif
 import net.fabricmc.fabric.api.client.networking.v1.ClientPlayNetworking;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,11 +29,9 @@ public class HassiumClientMod implements ClientModInitializer {
         // 客户端断开事件：清理 + 最终清理（幂等）。
         // 预握手（能力位声明）：1.21.1+ 在配置阶段主动上报（login/认证后的原生 C2S 载体）；
         // 1.20.1 login query 应答由 common mixin（MixinClientPacketListener）处理，loader 无需注册。
-#if MC_VER >= MC_1_21_1
         ClientConfigurationConnectionEvents.START.register((handler, client) ->
                 ClientConfigurationNetworking.send(
                         io.github.limuqy.mc.hassium.protocol.PreHandshakePayload.create()));
-#endif
         ClientPlayConnectionEvents.DISCONNECT.register((handler, client) -> {
             ClientLifecycleHelper.cleanupOnDisconnect();
             // 延后到下一 tick：等 Minecraft.disconnect / clearLevel 拆除完成；与 Mixin TAIL 幂等
@@ -55,78 +51,29 @@ public class HassiumClientMod implements ClientModInitializer {
         LOGGER.info("Hassium: Fabric client registers direct-play S2C receivers (SHADOW_PULL_RESPONSE_S2C / PLAY_INIT_S2C / DICTIONARY_SYNC_S2C / INDEX_SYNC_S2C / AGGREGATION_S2C).");
 
         // shadowPullV1 FULL 回退：服务端返回的原版 chunk+light 线格式统一交给 ShadowPullClient 注入。
-#if MC_VER < MC_1_21_1
-        ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricNetworkManager.SHADOW_PULL_RESPONSE_S2C,
-                (client, handler, buf, responseSender) -> {
-                    byte[] data = PayloadHandlers.readAll(buf);
-                    client.execute(() -> PayloadHandlers.handleShadowPullResponse(data));
-                });
-#else
         ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricPayloadRegistry.SHADOW_PULL_RESPONSE_S2C_TYPE,
                 (payload, context) -> PayloadHandlers.handleShadowPullResponse(payload.data()));
-#endif
         // 权威边沿 enter 通知（服务端声明权威集合 + 权威 chunkHash）→ 三分支解析：
         // hash 已知且本地相同 → 零请求本地交付 + 记缓存全命中；否则带基线比较 / 空基线 FULL。
-#if MC_VER < MC_1_21_1
-        ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricNetworkManager.CHUNK_AUTHORITY_S2C,
-                (client, handler, buf, responseSender) -> {
-                    byte[] data = PayloadHandlers.readAll(buf);
-                    client.execute(() -> PayloadHandlers.handleChunkAuthority(data));
-                });
-#else
         ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricPayloadRegistry.CHUNK_AUTHORITY_S2C_TYPE,
                 (payload, context) -> context.client().execute(() ->
                         PayloadHandlers.handleChunkAuthority(payload.data())));
-#endif
         // PLAY_INIT_S2C 客户端 receiver：Play 期激活直收（登录协商结果 + SeedGen 种子）→
         // common PlayInitClient.handle（协商位登记 + 影子端种子初始化；管线级压缩已退役）。
-#if MC_VER < MC_1_21_1
-        ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricNetworkManager.PLAY_INIT_S2C,
-                (client, handler, buf, responseSender) -> {
-                    byte[] data = PayloadHandlers.readAll(buf);
-                    client.execute(() -> PayloadHandlers.handlePlayInit(data));
-                });
-#else
         ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricPayloadRegistry.PLAY_INIT_S2C_TYPE,
                 (payload, context) -> context.client().execute(() ->
                         PayloadHandlers.handlePlayInit(payload.data())));
-#endif
         // DICTIONARY_SYNC_S2C 客户端 receiver：聚合字典直收（聚合包解码前置条件）。
-#if MC_VER < MC_1_21_1
-        ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricNetworkManager.DICTIONARY_SYNC_S2C,
-                (client, handler, buf, responseSender) -> {
-                    byte[] data = PayloadHandlers.readAll(buf);
-                    client.execute(() -> PayloadHandlers.handleDictionarySync(data));
-                });
-#else
         ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricPayloadRegistry.DICTIONARY_SYNC_S2C_TYPE,
                 (payload, context) -> context.client().execute(() ->
                         PayloadHandlers.handleDictionarySync(payload.data())));
-#endif
         // INDEX_SYNC_S2C 客户端 receiver：包索引登记 → 聚合激活 ACK（aggregation_ready）。
-#if MC_VER < MC_1_21_1
-        ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricNetworkManager.INDEX_SYNC_S2C,
-                (client, handler, buf, responseSender) -> {
-                    byte[] data = PayloadHandlers.readAll(buf);
-                    client.execute(() -> ClientActivation.handleIndexSync(data));
-                });
-#else
         ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricPayloadRegistry.INDEX_SYNC_S2C_TYPE,
                 (payload, context) -> context.client().execute(() ->
                         ClientActivation.handleIndexSync(payload.data())));
-#endif
         // AGGREGATION_S2C 客户端 receiver：聚合帧拆包分发（原版子包重建 + 自定义 payload 回灌）。
-#if MC_VER < MC_1_21_1
-        ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricNetworkManager.AGGREGATION_S2C,
-                (client, handler, buf, responseSender) -> {
-                    byte[] data = PayloadHandlers.readAll(buf);
-                    var connection = handler.getConnection();
-                    AggregationDecodeQueue.enqueue(connection, data);
-                });
-#else
         ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricPayloadRegistry.AGGREGATION_S2C_TYPE,
                 (payload, context) -> AggregationDecodeQueue.enqueueClient(payload.data()));
-#endif
 
         LOGGER.info("Hassium: Fabric client-side initialization complete");
     }

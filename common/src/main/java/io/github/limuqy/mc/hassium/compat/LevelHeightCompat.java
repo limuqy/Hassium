@@ -13,29 +13,17 @@ public final class LevelHeightCompat {
 
     /** 最低 section Y（inclusive）。 */
     public static int getMinSection(LevelHeightAccessor accessor) {
-#if MC_VER < MC_1_21_2
-        return accessor.getMinSection();
-#else
         return accessor.getMinSectionY();
-#endif
     }
 
     /** 最高 section Y 上界（exclusive），适合 {@code for (y = min; y < max; y++)}。 */
     public static int getMaxSectionExclusive(LevelHeightAccessor accessor) {
-#if MC_VER < MC_1_21_2
-        return accessor.getMaxSection();
-#else
         return accessor.getMaxSectionY() + 1;
-#endif
     }
 
     /** 世界最低格 Y（inclusive）。 */
     public static int getMinBlockY(LevelHeightAccessor accessor) {
-#if MC_VER < MC_1_21_2
-        return accessor.getMinBuildHeight();
-#else
         return accessor.getMinY();
-#endif
     }
 
     /** 世界最高格 Y 上界（exclusive）= 最高可放置方块 Y + 1（section Y × 16）。 */

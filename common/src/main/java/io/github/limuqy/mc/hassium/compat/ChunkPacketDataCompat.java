@@ -2,11 +2,9 @@ package io.github.limuqy.mc.hassium.compat;
 
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.core.registries.BuiltInRegistries;
-#if MC_VER >= MC_1_21_1
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.RegistryFriendlyByteBuf;
 import net.minecraft.network.codec.ByteBufCodecs;
-#endif
 import net.minecraft.nbt.ByteArrayTag;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
@@ -43,14 +41,9 @@ public final class ChunkPacketDataCompat {
      */
     public static ChunkPos forgetChunkPos(
             net.minecraft.network.protocol.game.ClientboundForgetLevelChunkPacket packet) {
-#if MC_VER < MC_1_21_1
-        return new ChunkPos(packet.getX(), packet.getZ());
-#else
         return packet.pos();
-#endif
     }
 
-#if MC_VER >= MC_1_21_5
     private static final net.minecraft.network.codec.StreamCodec<io.netty.buffer.ByteBuf,
             java.util.Map<net.minecraft.world.level.levelgen.Heightmap.Types, long[]>> HEIGHTMAPS_STREAM_CODEC =
             net.minecraft.network.codec.ByteBufCodecs.map(
@@ -58,28 +51,19 @@ public final class ChunkPacketDataCompat {
                     net.minecraft.world.level.levelgen.Heightmap.Types.STREAM_CODEC,
                     net.minecraft.network.codec.ByteBufCodecs.LONG_ARRAY
             );
-#endif
 
     /**
      * 跳过 chunkData 中的 heightmaps 字段（readerIndex 前进到 sections varint）。
      */
     public static void skipHeightmaps(FriendlyByteBuf buf) {
-#if MC_VER < MC_1_21_5
-        buf.readNbt();
-#else
         HEIGHTMAPS_STREAM_CODEC.decode(buf);
-#endif
     }
 
     /**
      * 将 heightmaps 字段从 {@code src} 原样复制到 {@code dst}。
      */
     public static void copyHeightmaps(FriendlyByteBuf src, FriendlyByteBuf dst) {
-#if MC_VER < MC_1_21_5
-        dst.writeNbt(src.readNbt());
-#else
         HEIGHTMAPS_STREAM_CODEC.encode(dst, HEIGHTMAPS_STREAM_CODEC.decode(src));
-#endif
     }
 
     /**
@@ -89,25 +73,18 @@ public final class ChunkPacketDataCompat {
      * 1.21.5+: Map&lt;Heightmap.Types, long[]&gt; 转为 CompoundTag（每个 entry 一个 LongArrayTag）。
      */
     public static CompoundTag readHeightmapsAsNbt(FriendlyByteBuf src) {
-#if MC_VER < MC_1_21_5
-        return src.readNbt();
-#else
         Map<Heightmap.Types, long[]> map = HEIGHTMAPS_STREAM_CODEC.decode(src);
         CompoundTag tag = new CompoundTag();
         for (var entry : map.entrySet()) {
             tag.put(entry.getKey().getSerializedName(), new net.minecraft.nbt.LongArrayTag(entry.getValue()));
         }
         return tag;
-#endif
     }
 
     /**
      * 将 heightmaps {@link CompoundTag} 写入 {@code dst}（与 {@link #readHeightmapsAsNbt} 对偶）。
      */
     public static void writeHeightmapsFromNbt(FriendlyByteBuf dst, CompoundTag heightmaps) {
-#if MC_VER < MC_1_21_5
-        dst.writeNbt(heightmaps);
-#else
         Map<Heightmap.Types, long[]> map = new java.util.EnumMap<>(Heightmap.Types.class);
         for (String key : heightmaps.keySet()) {
             Heightmap.Types type = lookupHeightmapType(key);
@@ -117,7 +94,6 @@ public final class ChunkPacketDataCompat {
             map.put(type, lat.getAsLongArray());
         }
         HEIGHTMAPS_STREAM_CODEC.encode(dst, map);
-#endif
     }
 
     /** 按序列化名反向查找 {@link Heightmap.Types}（跨版本无 byName API）。 */
@@ -218,19 +194,6 @@ public final class ChunkPacketDataCompat {
             return list;
         }
         try {
-#if MC_VER < MC_1_21_1
-            int count = buf.readVarInt();
-            for (int i = 0; i < count; i++) {
-                int packedXZ = buf.readUnsignedByte();
-                int y = buf.readShort();
-                BlockEntityType<?> type = buf.readById(BuiltInRegistries.BLOCK_ENTITY_TYPE);
-                CompoundTag tag = buf.readNbt();
-                CompoundTag be = toBlockEntityNbt(packedXZ, y, type, tag, chunkX, chunkZ);
-                if (be != null) {
-                    list.add(be);
-                }
-            }
-#else
             RegistryFriendlyByteBuf regBuf = buf instanceof RegistryFriendlyByteBuf rfb
                     ? rfb
                     : new RegistryFriendlyByteBuf(buf, registryAccess);
@@ -246,7 +209,6 @@ public final class ChunkPacketDataCompat {
                     list.add(be);
                 }
             }
-#endif
         } catch (Exception e) {
             // BE 解析失败不阻断 sections；已解析的保留
             LOGGER.debug("Hassium: readBlockEntitiesAsNbt partial failure at [{}, {}]", chunkX, chunkZ, e);

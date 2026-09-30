@@ -28,7 +28,6 @@ public final class PreHandshakeProtocol {
     private PreHandshakeProtocol() {
     }
 
-#if MC_VER >= MC_1_21_1
     /**
      * 配置阶段 payload 入口（fabric 1.20.5+ / forge / neoforge）。
      * 校验（协议版本范围 + mod 版本格式，防日志注入）通过后按位协商并登记。
@@ -84,5 +83,4 @@ public final class PreHandshakeProtocol {
         Constants.LOG.info("[PRE_HANDSHAKE] Negotiated {} for {}",
                 LoginHandshake.describeCaps(negotiated), playerId);
     }
-#endif
 }

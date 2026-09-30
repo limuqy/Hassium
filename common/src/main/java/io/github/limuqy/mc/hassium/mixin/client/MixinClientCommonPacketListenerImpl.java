@@ -16,14 +16,9 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  * 清理逻辑在 {@link ClientLifecycleHelper#cleanupOnDisconnect()}（非 Mixin 类），
  * 因 Mixin 0.8.7 不允许 Mixin 类中存在非 private 的静态方法。
  */
-#if MC_VER >= MC_1_21_1
 @Mixin(net.minecraft.client.multiplayer.ClientCommonPacketListenerImpl.class)
-#else
-@Mixin(net.minecraft.client.Minecraft.class)
-#endif
 public class MixinClientCommonPacketListenerImpl {
 
-#if MC_VER >= MC_1_21_1
     /**
      * 断开连接时清理（1.20.2+）
      * <p>
@@ -32,13 +27,8 @@ public class MixinClientCommonPacketListenerImpl {
      */
     @Inject(method = "onDisconnect", at = @At("HEAD"))
     private void hassium$onDisconnect(
-#if MC_VER < MC_1_21_1
-            net.minecraft.network.chat.Component reason,
-#else
             net.minecraft.network.DisconnectionDetails details,
-#endif
             CallbackInfo ci) {
         ClientLifecycleHelper.cleanupOnDisconnect();
     }
-#endif
 }

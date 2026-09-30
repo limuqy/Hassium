@@ -12,11 +12,7 @@ import org.spongepowered.asm.mixin.gen.Accessor;
  * 用途：跨会话并发场景下刷新 region 文件缓存（影子端
  * {@code ShadowSeedServer.refreshRegionFiles}）。
  */
-#if MC_VER >= MC_1_21_2
 @Mixin(net.minecraft.world.level.chunk.storage.SimpleRegionStorage.class)
-#else
-@Mixin(net.minecraft.world.level.chunk.storage.ChunkStorage.class)
-#endif
 public interface SimpleRegionStorageAccessor {
 
     @Accessor("worker")

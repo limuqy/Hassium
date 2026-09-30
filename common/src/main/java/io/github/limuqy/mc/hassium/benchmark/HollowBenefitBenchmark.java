@@ -92,11 +92,7 @@ public final class HollowBenefitBenchmark {
         // 1.20.x 的 MappedRegistry <clinit 需要 bootstrap；bootstrap 后注册表就绪。
         // 1.21.11 的 BLOCK_STATE_REGISTRY 是 IdMapper（无 getValue），按名查用 BuiltInRegistries.BLOCK。
         // getValue(ResourceLocation) 仅 1.21.2+（Registry 接口更名）；1.20.x/1.21.1 用 get()。
-#if MC_VER < MC_1_21_2
-        AIR_STATE = BuiltInRegistries.BLOCK.get(ResourceLocationCompat.create("minecraft:air")).defaultBlockState();
-#else
         AIR_STATE = BuiltInRegistries.BLOCK.getValue(ResourceLocationCompat.create("minecraft:air")).defaultBlockState();
-#endif
         registrySize = Block.BLOCK_STATE_REGISTRY.size();
 
         String worldDir = args.length > 0 && !args[0].isEmpty()
@@ -332,51 +328,27 @@ public final class HollowBenefitBenchmark {
     // ---- NBT 读取兼容（1.21.5+ Optional API）----
 
     private static ListTag getListTag(CompoundTag t, String key) {
-#if MC_VER < MC_1_21_5
-        return t.getList(key, 10);
-#else
         return t.getList(key).orElseGet(ListTag::new);
-#endif
     }
 
     private static int getByte(CompoundTag t, String key) {
-#if MC_VER < MC_1_21_5
-        return t.getByte(key);
-#else
         return t.getByteOr(key, (byte) 0);
-#endif
     }
 
     private static CompoundTag getCompoundOrNull(CompoundTag t, String key) {
-#if MC_VER < MC_1_21_5
-        return t.contains(key, 10) ? t.getCompound(key) : null;
-#else
         return t.getCompound(key).orElse(null);
-#endif
     }
 
     private static CompoundTag listCompoundOrNull(ListTag l, int i) {
-#if MC_VER < MC_1_21_5
-        return l.getCompound(i);
-#else
         return l.getCompound(i).orElse(null);
-#endif
     }
 
     private static String getString(CompoundTag t, String key) {
-#if MC_VER < MC_1_21_5
-        return t.getString(key);
-#else
         return t.getString(key).orElse("");
-#endif
     }
 
     private static long[] getLongArray(CompoundTag t, String key) {
-#if MC_VER < MC_1_21_5
-        return t.getLongArray(key);
-#else
         return t.getLongArray(key).orElse(new long[0]);
-#endif
     }
 
     // ------------------------------------------------------------------
@@ -454,11 +426,7 @@ public final class HollowBenefitBenchmark {
         return STATE_CACHE.computeIfAbsent(name, n -> {
             try {
                 Block b;
-#if MC_VER < MC_1_21_2
-                b = BuiltInRegistries.BLOCK.get(ResourceLocationCompat.create(n));
-#else
                 b = BuiltInRegistries.BLOCK.getValue(ResourceLocationCompat.create(n));
-#endif
                 if (b != null) {
                     return b.defaultBlockState();
                 }

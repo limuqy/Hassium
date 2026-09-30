@@ -18,11 +18,7 @@ public final class ClientLoadingScreenCompat {
         if (screen == null) {
             return false;
         }
-#if MC_VER < MC_1_21_9
-        return screen instanceof net.minecraft.client.gui.screens.ReceivingLevelScreen;
-#else
         return screen instanceof net.minecraft.client.gui.screens.LevelLoadingScreen;
-#endif
     }
 
     /** 当前客户端是否仍停在进服地形加载屏。 */

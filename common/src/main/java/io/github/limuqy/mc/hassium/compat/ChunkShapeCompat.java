@@ -22,13 +22,9 @@ public final class ChunkShapeCompat {
 
     /** 原版视距形状判定：(x,z) 是否在 (cx,cz) 的 range 圆角方形内。 */
     public static boolean contains(int cx, int cz, int range, int x, int z) {
-#if MC_VER < MC_1_21_1
-        return ChunkMap.isChunkInRange(x, z, cx, cz, range);
-#else
         return net.minecraft.server.level.ChunkTrackingView
                 .of(new net.minecraft.world.level.ChunkPos(cx, cz), range)
                 .contains(x, z);
-#endif
     }
 
     /**
@@ -58,7 +54,7 @@ public final class ChunkShapeCompat {
      * {@code k=max(0,max(i,j)-1)}，1.20.1–1.21.3）与 1.21.4+ 新公式（纯欧氏
      * {@code max(0,|d| - 2)² 求和}，{@code ChunkTrackingView.isWithinDistance} 的 includeBorder
      * 折算为 offset 2）不是同一公式，VD=20 形状从 1529 柱变为 1573 柱。抄公式就得按版本分段，而
-     * 1.21.4 不是编译锚点、白名单没有对应 token（写 {@code < MC_1_21_5} 会把 1.21.4 错分进旧段）；
+     * 1.21.4 不是编译锚点（历史分段按锚点切，1.21.4 只能并入相邻锚点段，无法单独成段）；
      * 委托则让膨胀自动跟随 {@link #contains} 的版本分支（含未来原版再变）。1.21.4 实证：硬编码
      * 旧公式时计算域（旧形状膨胀，1705）≠ 新形状膨胀（1749），新权威形状 44 柱 3×3 缺邻 →
      * 缺邻柱被按 Bedrock 挡天光（红线 failure mode）；委托后 {@code ChunkShapeDilationTest} 全绿。

@@ -24,11 +24,7 @@ public class MixinServerGamePacketListenerImpl {
     // review-fix: T7-59: handler 统一加 hassium$ 前缀
     @Inject(method = "onDisconnect", at = @At("HEAD"))
     private void hassium$onPlayerDisconnect(
-#if MC_VER < MC_1_21_1
-            net.minecraft.network.chat.Component reason,
-#else
             net.minecraft.network.DisconnectionDetails details,
-#endif
             CallbackInfo ci) {
         Constants.LOG.info("Hassium: Player {} disconnected, push queue cleaned up", player.getName().getString());
         PlayerCompressionTracker.removePlayer(player);

@@ -3,9 +3,6 @@ package io.github.limuqy.mc.hassium.compat;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
-#if MC_VER < MC_1_21_11
-import net.minecraft.core.Holder;
-#endif
 import net.minecraft.core.Registry;
 import net.minecraft.core.RegistryAccess;
 import net.minecraft.network.FriendlyByteBuf;
@@ -13,14 +10,9 @@ import net.minecraft.world.level.biome.Biome;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.LevelChunkSection;
-#if MC_VER < MC_1_21_11
-import net.minecraft.world.level.chunk.PalettedContainer;
-#endif
 import net.minecraft.world.level.chunk.PalettedContainerRO;
-#if MC_VER >= MC_1_21_9
 import net.minecraft.world.level.chunk.PalettedContainerFactory;
 import net.minecraft.world.level.chunk.Strategy;
-#endif
 
 /**
  * LevelChunkSection 构造兼容层。
@@ -31,7 +23,6 @@ import net.minecraft.world.level.chunk.Strategy;
 public final class LevelChunkSectionCompat {
     private LevelChunkSectionCompat() {}
 
-#if MC_VER >= MC_1_21_9
     /**
      * review-fix: T8-28: Strategy 只依赖全局内置注册表 {@link Block#BLOCK_STATE_REGISTRY}，
      * 与调用方 registryAccess 无关——原实现每次 writeSectionForHash 重建（哈希计算高频），
@@ -39,18 +30,12 @@ public final class LevelChunkSectionCompat {
      */
     private static final Strategy<BlockState> BLOCK_STATES_STRATEGY =
             Strategy.createForBlockStates(Block.BLOCK_STATE_REGISTRY);
-#endif
 
     /**
      * 创建用于读写 section 字节流的临时 LevelChunkSection。
      */
     public static LevelChunkSection create(RegistryAccess registryAccess) {
-#if MC_VER < MC_1_21_9
-        Registry<Biome> biomeRegistry = RegistryCompat.getBiomeRegistry(registryAccess);
-        return new LevelChunkSection(biomeRegistry);
-#else
         return new LevelChunkSection(PalettedContainerFactory.create(registryAccess));
-#endif
     }
 
     /**
@@ -59,19 +44,7 @@ public final class LevelChunkSectionCompat {
      */
     @SuppressWarnings("unchecked")
     public static LevelChunkSection copyDetached(LevelChunkSection live) {
-#if MC_VER >= MC_1_21_11
         return live.copy();
-#else
-        PalettedContainer<BlockState> states = live.getStates().copy();
-        PalettedContainerRO<Holder<Biome>> biomes;
-        PalettedContainerRO<Holder<Biome>> src = live.getBiomes();
-        if (src instanceof PalettedContainer<?> paletted) {
-            biomes = (PalettedContainerRO<Holder<Biome>>) (Object) paletted.copy();
-        } else {
-            biomes = src.recreate();
-        }
-        return new LevelChunkSection(states, biomes);
-#endif
     }
 
     /**
@@ -89,7 +62,6 @@ public final class LevelChunkSectionCompat {
      * 规范化与 palette 表示无关，磁盘/内存/packet 三条 hash 路径全部一致。
      */
     public static void writeSectionForHash(LevelChunkSection section, OutputStream out) throws IOException {
-#if MC_VER >= MC_1_21_9
         // 1.21.9+: pack(Strategy) 规范化
         PalettedContainerRO.PackedData<BlockState> packed = section.getStates().pack(BLOCK_STATES_STRATEGY);
         DataOutputStream dout = new DataOutputStream(out);
@@ -104,18 +76,6 @@ public final class LevelChunkSectionCompat {
                 dout.writeLong(it.nextLong());
             }
         }
-#else
-        // 1.20.1–1.21.8: 逐位置写完整 BlockState ID（规范化；与 palette 排列无关）。
-        // 不可写成 BLOCK.getId(state.getBlock())：会丢掉 facing/waterlogged/age 等属性。
-        DataOutputStream dout = new DataOutputStream(out);
-        for (int y = 0; y < 16; y++) {
-            for (int z = 0; z < 16; z++) {
-                for (int x = 0; x < 16; x++) {
-                    dout.writeInt(Block.getId(section.getBlockState(x, y, z)));
-                }
-            }
-        }
-#endif
     }
 
     /**
@@ -123,11 +83,7 @@ public final class LevelChunkSectionCompat {
      * {@link #writeSectionForHash} 的 {@code Block.getId} 口径一致。
      */
     public static int blockStateId(BlockState state) {
-#if MC_VER >= MC_1_21_9
         return Block.BLOCK_STATE_REGISTRY.getId(state);
-#else
-        return Block.getId(state);
-#endif
     }
 
     /** 方块列表 apply：由数值 ID 还原 BlockState（非法 ID 返回 null）。 */

@@ -14,11 +14,7 @@ import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.chunk.ImposterProtoChunk;
 import net.minecraft.world.level.chunk.LevelChunk;
-#if MC_VER < MC_1_21_1
-import net.minecraft.world.level.chunk.ChunkStatus;
-#else
 import net.minecraft.world.level.chunk.status.ChunkStatus;
-#endif
 
 /**
  * 影子端 ChunkMap 票/holder 跨版本适配。
@@ -88,12 +84,7 @@ public final class ShadowChunkMapCompat {
             return false;
         }
         ImposterProtoChunk imposter = asImposter(chunk);
-#if MC_VER < MC_1_21_1
-        ((java.util.concurrent.CompletableFuture) future)
-                .complete(com.mojang.datafixers.util.Either.left((ChunkAccess) imposter));
-#else
         ((java.util.concurrent.CompletableFuture) future).complete((ChunkAccess) imposter);
-#endif
         io.github.limuqy.mc.hassium.shadow.track.VanillaAlignedChunkProvider
                 .completeAcquire(dimension, pos, chunk);
         return true;
@@ -207,12 +198,7 @@ public final class ShadowChunkMapCompat {
             if (holder == null) {
                 return null;
             }
-#if MC_VER < MC_1_21_1
-            ChunkAccess access = holder.getFutureIfPresentUnchecked(ChunkStatus.FULL)
-                    .getNow(ChunkHolder.UNLOADED_CHUNK).left().orElse(null);
-#else
             ChunkAccess access = holder.getChunkIfPresentUnchecked(ChunkStatus.FULL);
-#endif
             return unwrapLevelChunk(access);
         } catch (Throwable ignored) {
             return null;

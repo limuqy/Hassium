@@ -212,9 +212,6 @@ public class ServerChunkPushManager {
         if (refs != 1) {
             return;
         }
-#if MC_VER < MC_1_21_5
-        pending.level().getChunkSource().addRegionTicket(net.minecraft.server.level.TicketType.FORCED, pos, 0, pos);
-#else
         try {
             ((io.github.limuqy.mc.hassium.mixin.shadow.ServerChunkCacheAccessor) (Object) pending.level().getChunkSource())
                     .hassium$getTicketStorage()
@@ -222,7 +219,6 @@ public class ServerChunkPushManager {
         } catch (Throwable ignored) {
             // ticketStorage 不可达时按无票处理（world 启动期 / 异常关闭）
         }
-#endif
     }
 
     private void releaseDemandTicket(PendingPull pending) {
@@ -240,13 +236,9 @@ public class ServerChunkPushManager {
         if (refs <= 1) {
             demandTicketRefs.remove(key);
             try {
-#if MC_VER < MC_1_21_5
-                pending.level().getChunkSource().removeRegionTicket(net.minecraft.server.level.TicketType.FORCED, pos, 0, pos);
-#else
                 ((io.github.limuqy.mc.hassium.mixin.shadow.ServerChunkCacheAccessor) (Object) pending.level().getChunkSource())
                         .hassium$getTicketStorage()
                         .removeTicketWithRadius(net.minecraft.server.level.TicketType.FORCED, pos, 0);
-#endif
             } catch (Throwable ignored) {
                 // world 已停：票随实例销毁
             }
@@ -819,11 +811,7 @@ public class ServerChunkPushManager {
             // 自定义 chunk/delta 通道与 vanilla 初始区块包语义一致：只发送客户端
             // update NBT。saveWithoutMetadata 会携带 TrialSpawnerLogic 的服务器 worldgen
             // registry 引用；1.21.5+ 客户端并未同步 trial_spawner registry，load 即报错。
-#if MC_VER < MC_1_21_1
-            CompoundTag nbt = be.getUpdateTag();
-#else
             CompoundTag nbt = be.getUpdateTag(be.getLevel().registryAccess());
-#endif
             String type = String.valueOf(
                     net.minecraft.core.registries.BuiltInRegistries.BLOCK_ENTITY_TYPE.getKey(be.getType()));
             result.add(new SectionDeltaS2CPacket.BlockEntityData(pos, type, nbt));
@@ -897,21 +885,6 @@ public class ServerChunkPushManager {
     @SuppressWarnings("deprecation") // NeoForge 1.21.11+: RegistryFriendlyByteBuf(2-param) deprecated; 3-param 需 ConnectionType.OTHER(仅 NeoForge)
     private byte[] encodeChunkPacket(ClientboundLevelChunkWithLightPacket chunkPacket,
                                      RegistryAccess registryAccess) {
-#if MC_VER < MC_1_21_1
-        io.netty.buffer.ByteBuf tempBuf = io.netty.buffer.Unpooled.buffer();
-        try {
-            FriendlyByteBuf friendlyBuf = new FriendlyByteBuf(tempBuf);
-            chunkPacket.write(friendlyBuf);
-            byte[] data = new byte[tempBuf.readableBytes()];
-            tempBuf.getBytes(0, data);
-            return data;
-        } catch (Exception e) {
-            Constants.LOG.error("Hassium: Failed to encode chunk packet", e);
-            return null;
-        } finally {
-            tempBuf.release();
-        }
-#else
         net.minecraft.network.RegistryFriendlyByteBuf buf =
                 new net.minecraft.network.RegistryFriendlyByteBuf(
                         io.netty.buffer.Unpooled.buffer(), registryAccess);
@@ -926,7 +899,6 @@ public class ServerChunkPushManager {
         } finally {
             buf.release();
         }
-#endif
     }
 
 

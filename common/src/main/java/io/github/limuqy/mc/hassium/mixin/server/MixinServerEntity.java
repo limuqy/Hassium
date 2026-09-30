@@ -58,17 +58,9 @@ public abstract class MixinServerEntity {
         return EntityUpdatePacing.effectiveInterval(entity, updateInterval);
     }
 
-#if MC_VER < MC_1_21_11
-    @Redirect(method = "sendChanges", at = @At(value = "FIELD",
-            target = "Lnet/minecraft/world/entity/Entity;hasImpulse:Z", opcode = Opcodes.GETFIELD, ordinal = 0))
-    private boolean hassium$gateImpulse(Entity owner) {
-        return EntityUpdatePacing.gateImpulse(owner, owner.hasImpulse);
-    }
-#else
     @Redirect(method = "sendChanges", at = @At(value = "FIELD",
             target = "Lnet/minecraft/world/entity/Entity;needsSync:Z", opcode = Opcodes.GETFIELD, ordinal = 0))
     private boolean hassium$gateImpulse(Entity owner) {
         return EntityUpdatePacing.gateImpulse(owner, owner.needsSync);
     }
-#endif
 }

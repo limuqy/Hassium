@@ -1,12 +1,10 @@
 package io.github.limuqy.mc.hassium.protocol;
 
-#if MC_VER >= MC_1_21_1
 import io.github.limuqy.mc.hassium.compat.HassiumChannels;
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
-#endif
 
 /**
  * 预握手 hello（S2C，配置阶段）——服务端主导协商的触发载体（1.21.1+）。
@@ -20,7 +18,6 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
  * 载荷为空（hello 仅作触发信号，能力位在客户端应答中携带）；1.20.1 无配置阶段，
  * 走 vanilla login query（见 {@code MixinServerLoginPacketListenerImpl}）。
  */
-#if MC_VER >= MC_1_21_1
 public record PreHandshakeHelloPayload() implements CustomPacketPayload {
 
     public static final PreHandshakeHelloPayload INSTANCE = new PreHandshakeHelloPayload();
@@ -38,7 +35,3 @@ public record PreHandshakeHelloPayload() implements CustomPacketPayload {
         return TYPE;
     }
 }
-#else
-public class PreHandshakeHelloPayload { // 1.20.1：无配置阶段（login query 载体）；public 供 loader import 穿透 #if
-}
-#endif

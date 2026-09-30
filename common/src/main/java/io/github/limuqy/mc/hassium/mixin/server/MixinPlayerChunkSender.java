@@ -12,12 +12,10 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.Redirect;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
-#if MC_VER >= MC_1_21_1
 import net.minecraft.network.protocol.game.ClientboundBundlePacket;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
-#endif
 
 /**
  * 1.21.1+ 原版整柱下发口：源限速 + 对 Hassium 客户端停发整柱。
@@ -37,14 +35,9 @@ import org.spongepowered.asm.mixin.Unique;
  * 1.20.1 挂空壳到 {@code MinecraftServer} 以满足 mixins.json 的无条件登记
  * （同 {@link MixinServerPlayer}「登记不分版本、体内 {@code #if} 门控」的约定）。
  */
-#if MC_VER >= MC_1_21_1
 @Mixin(net.minecraft.server.network.PlayerChunkSender.class)
-#else
-@Mixin(net.minecraft.server.MinecraftServer.class)
-#endif
 public abstract class MixinPlayerChunkSender {
 
-#if MC_VER >= MC_1_21_1
     @Shadow
     private float desiredChunksPerTick;
 
@@ -121,5 +114,4 @@ public abstract class MixinPlayerChunkSender {
         }
         return false;
     }
-#endif
 }

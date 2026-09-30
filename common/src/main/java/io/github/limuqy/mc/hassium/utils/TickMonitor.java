@@ -55,13 +55,8 @@ public final class TickMonitor {
                 return;
             }
             long ns;
-#if MC_VER < MC_1_21_1
-            // 1.20.1~1.20.2：public long[] tickTimes（无公开 getter）
-            ns = server.tickTimes[tickCount % 100];
-#else
             // 1.20.3+：tickTimes 转私有（mojmap 无公开字段），公开 getTickTimesNanos()
             ns = server.getTickTimesNanos()[tickCount % 100];
-#endif
             if (ns <= 0) {
                 return;
             }

@@ -114,16 +114,6 @@ public class ClientChunkHandler {
     private static net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket
             decodeChunkPacket(byte[] packetBytes) {
         try {
-#if MC_VER < MC_1_21_1
-            io.netty.buffer.ByteBuf nettyBuf = io.netty.buffer.Unpooled.wrappedBuffer(packetBytes);
-            try {
-                net.minecraft.network.FriendlyByteBuf friendlyBuf =
-                        new net.minecraft.network.FriendlyByteBuf(nettyBuf);
-                return new net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket(friendlyBuf);
-            } finally {
-                nettyBuf.release();
-            }
-#else
             net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
             if (mc.level == null) {
                 return null;
@@ -136,7 +126,6 @@ public class ClientChunkHandler {
             } finally {
                 buf.release();
             }
-#endif
         } catch (Exception e) {
             DebugLogger.error("[DECODE_CHUNK] Failed to decode chunk packet", e);
             return null;

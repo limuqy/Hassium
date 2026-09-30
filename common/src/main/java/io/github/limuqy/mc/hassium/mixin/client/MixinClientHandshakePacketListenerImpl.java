@@ -29,43 +29,13 @@ public class MixinClientHandshakePacketListenerImpl {
     @Inject(method = "handleCustomQuery(Lnet/minecraft/network/protocol/login/ClientboundCustomQueryPacket;)V",
             at = @At("HEAD"), cancellable = true)
     private void hassium$onLoginCustomQuery(ClientboundCustomQueryPacket packet, CallbackInfo ci) {
-#if MC_VER >= MC_1_21_1
         // 1.20.2+ 原版 codec 丢弃 query 体（DiscardedQueryPayload），登录 query 载体失效；
         // 能力声明走配置阶段（服务端配置任务下发 hello → 客户端应答 PreHandshakePayload）。
         // 原样放行。
-#else
-        if (!LoginHandshake.HELLO_CHANNEL.equals(packet.getIdentifier().getPath())) {
-            return;
-        }
-        if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()) {
-            return; // vanilla 自动回空应答 → 服务端原版路径
-        }
-        Connection connection = (Connection) ReflectionCompat.getFieldByTypeOrNull(this, Connection.class, true);
-        if (connection == null || !connection.isConnected()) {
-            return;
-        }
-        int clientCaps = LoginCaps.buildClientCaps();
-        FriendlyByteBuf answer = new FriendlyByteBuf(Unpooled.buffer());
-        try {
-            new LoginHandshake.HelloAnswer(clientCaps, Constants.MOD_VERSION,
-                    Constants.CURRENT_PROTOCOL_VERSION).encode(answer);
-            connection.send(new net.minecraft.network.protocol.login.ServerboundCustomQueryPacket(
-                    packet.getTransactionId(), answer));
-            Constants.LOG.info("Hassium: login hello answered (clientCaps=0x{})",
-                    Integer.toHexString(clientCaps));
-        } catch (Exception e) {
-            answer.release();
-            Constants.LOG.warn("Hassium: Failed to answer login hello", e);
-            return;
-        }
-        ci.cancel();
-#endif
     }
 
-#if MC_VER >= MC_1_21_1
     /**
      * 1.20.2+ 登录 query 载体失效（见上），此类在 1.20.2+ 为空壳（mixins.json 注册位保留）。
      */
-#endif
 }
 

@@ -36,33 +36,14 @@ public final class SeedGenTail {
             RegistryAccess registryAccess = level.registryAccess();
             RegistryOps<net.minecraft.nbt.Tag> ops = RegistryOps.create(NbtOps.INSTANCE, registryAccess);
             Registry<LevelStem> stems;
-#if MC_VER < MC_1_21_2
-            stems = registryAccess.registryOrThrow(Registries.LEVEL_STEM);
-#else
             stems = (Registry<LevelStem>) registryAccess.lookupOrThrow(Registries.LEVEL_STEM);
-#endif
             LevelStem stem;
-#if MC_VER < MC_1_21_2
-            stem = stems.get(ResourceKey.create(Registries.LEVEL_STEM,
-                    level.dimension()
-#if MC_VER < MC_1_21_11
-                            .location()
-#else
-                            .identifier()
-#endif
-            ));
-#else
             java.util.Optional<net.minecraft.core.Holder.Reference<LevelStem>> stemRef =
                     stems.get(ResourceKey.create(Registries.LEVEL_STEM,
                             level.dimension()
-#if MC_VER < MC_1_21_11
-                                    .location()
-#else
                                     .identifier()
-#endif
                     ));
             stem = stemRef.map(net.minecraft.core.Holder.Reference::value).orElse(null);
-#endif
             if (stem == null) {
                 return null;
             }
@@ -96,11 +77,7 @@ public final class SeedGenTail {
             return null;
         }
         return level.dimension()
-#if MC_VER < MC_1_21_11
-                .location()
-#else
                 .identifier()
-#endif
                 .toString();
     }
 

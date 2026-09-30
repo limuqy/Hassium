@@ -51,11 +51,7 @@ public final class SmokeProbeWriter {
             if (joined) {
                 // 与 ClientSmokeTest MIGRATE_POS_* 同款跨版本取法（1.21.11 起 ResourceKey 改 identifier()）
                 dimension = mc.player.level().dimension()
-#if MC_VER < MC_1_21_11
-                        .location()
-#else
                         .identifier()
-#endif
                         .toString();
             }
             StringBuilder sb = new StringBuilder(4096);

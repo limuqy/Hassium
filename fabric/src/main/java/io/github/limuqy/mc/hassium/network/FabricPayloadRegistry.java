@@ -1,4 +1,3 @@
-#if MC_VER >= MC_1_21_1
 package io.github.limuqy.mc.hassium.network;
 
 import io.github.limuqy.mc.hassium.Constants;
@@ -12,7 +11,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Fabric 现代段（{@code MC_VER >= MC_1_21_1}）payload 类型注册表
+ * Fabric 现代（1.21.1+）payload 类型注册表
  * <p>
  * 现代 Fabric 网络 API（自 1.20.5 引入）要求：
  * 1. 使用 CustomPacketPayload + StreamCodec 替代旧的 Identifier + FriendlyByteBuf
@@ -128,4 +127,3 @@ public final class FabricPayloadRegistry {
     ) implements CustomPacketPayload {
     }
 }
-#endif

@@ -30,39 +30,27 @@ public final class PlayerCompat {
      * 获取玩家所在的服务端世界。
      */
     public static ServerLevel getServerLevel(ServerPlayer player) {
-#if MC_VER < MC_1_21_6
-        return player.serverLevel();
-#else
         return player.level();
-#endif
     }
 
     /**
      * 获取玩家所属的 MinecraftServer（可能为 null）。
      */
     public static MinecraftServer getMinecraftServer(ServerPlayer player) {
-#if MC_VER < MC_1_21_9
-        return player.getServer();
-#else
         // review-fix: T8-M2: level() 可为 null（玩家脱离世界/断连窗口），判空返回 null，
         // 与旧分支 getServer() 可空语义一致
         ServerLevel level = player.level();
         return level != null ? level.getServer() : null;
-#endif
     }
 
     /**
      * 获取当前服务器视距（区块）。
      */
     public static int getViewDistance(ServerPlayer player) {
-#if MC_VER < MC_1_21_6
-        return player.server.getPlayerList().getViewDistance();
-#else
         // review-fix: T8-M2: level()/getServer() 判空，null 返回 0（调用方按“未知视距”保守处理）
         ServerLevel level = player.level();
         MinecraftServer server = level != null ? level.getServer() : null;
         return server != null ? server.getPlayerList().getViewDistance() : 0;
-#endif
     }
 
     /**
@@ -77,11 +65,7 @@ public final class PlayerCompat {
         if (server == null) {
             return null;
         }
-#if MC_VER < MC_1_21_1
-        return server.getServerDirectory().toPath();
-#else
         return server.getServerDirectory();
-#endif
     }
 
     /**
@@ -139,11 +123,7 @@ public final class PlayerCompat {
         if (profile == null) {
             return null;
         }
-#if MC_VER < MC_1_21_9
-        return profile.getId();
-#else
         return profile.id();
-#endif
     }
 
     /**
@@ -153,10 +133,6 @@ public final class PlayerCompat {
         if (profile == null) {
             return null;
         }
-#if MC_VER < MC_1_21_9
-        return profile.getName();
-#else
         return profile.name();
-#endif
     }
 }

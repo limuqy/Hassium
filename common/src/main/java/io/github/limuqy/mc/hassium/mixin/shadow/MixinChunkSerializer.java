@@ -2,11 +2,7 @@ package io.github.limuqy.mc.hassium.mixin.shadow;
 
 import io.github.limuqy.mc.hassium.Constants;
 import net.minecraft.nbt.CompoundTag;
-#if MC_VER < MC_1_21_2
-import net.minecraft.world.level.chunk.storage.ChunkSerializer;
-#else
 import net.minecraft.world.level.chunk.storage.SerializableChunkData;
-#endif
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Unique;
 import org.spongepowered.asm.mixin.injection.At;
@@ -21,11 +17,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * 拦截区块序列化操作，用于统计序列化/反序列化操作。
  */
 @Mixin(
-#if MC_VER < MC_1_21_2
-    ChunkSerializer.class
-#else
     SerializableChunkData.class
-#endif
 )
 public class MixinChunkSerializer {
 
@@ -42,9 +34,6 @@ public class MixinChunkSerializer {
      */
     @Inject(method = "write", at = @At("RETURN"))
     private
-#if MC_VER < MC_1_21_2
-    static
-#endif
     void hassium$onWrite(CallbackInfoReturnable<CompoundTag> cir) {
         hassium$totalWriteOperations.incrementAndGet();
         // 只记计数：size 需整树 toString()（每块保存一次 O(N) 字符串化），仅服务 debug 日志，已移除
@@ -58,9 +47,6 @@ public class MixinChunkSerializer {
      */
     @Inject(method = "read", at = @At("HEAD"))
     private
-#if MC_VER < MC_1_21_2
-    static
-#endif
     void hassium$onRead(CallbackInfoReturnable<?> cir) {
         hassium$totalReadOperations.incrementAndGet();
         Constants.LOG.debug("Chunk deserialization started (total reads: {})",

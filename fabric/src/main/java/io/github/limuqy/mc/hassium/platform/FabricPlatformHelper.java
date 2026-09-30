@@ -49,14 +49,6 @@ public class FabricPlatformHelper implements IPlatformHelper {
     @Override
     public net.minecraft.server.packs.repository.RepositorySource[] serverPackSources(
             net.minecraft.server.packs.repository.RepositorySource vanilla) {
-#if MC_VER < MC_1_21_11
-        return new net.minecraft.server.packs.repository.RepositorySource[] {
-                vanilla,
-                new net.fabricmc.fabric.impl.resource.loader.ModResourcePackCreator(
-                        net.minecraft.server.packs.PackType.SERVER_DATA)
-        };
-#else
         return new net.minecraft.server.packs.repository.RepositorySource[] {vanilla};
-#endif
     }
 }

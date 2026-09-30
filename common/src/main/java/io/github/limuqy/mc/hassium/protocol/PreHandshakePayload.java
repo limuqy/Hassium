@@ -1,6 +1,5 @@
 package io.github.limuqy.mc.hassium.protocol;
 
-#if MC_VER >= MC_1_21_1
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.compat.HassiumChannels;
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
@@ -8,7 +7,6 @@ import io.github.limuqy.mc.hassium.protocol.handshake.LoginCaps;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
 import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
-#endif
 
 /**
  * 预握手 C2S payload（配置阶段声明 Hassium 能力；1.20.2+ 配置阶段协议原生支持）。
@@ -17,10 +15,9 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
  * 服务端按位与后 {@link LoginHandshakeManager#markNegotiated}（认证已完成，
  * {@code getOwner()} 可取 UUID）；Play 期 {@code play_init_s2c} 下发协商结果。
  * <p>
- * 仅 {@code MC_VER >= MC_1_21_1} 编译（1.20.1 无 common 包 CustomPacketPayload；
- * 1.20.1 走 vanilla login query，见 {@code MixinServerLoginPacketListenerImpl}）。
+ * （1.20.1 无 common 包 CustomPacketPayload，当年走 vanilla login query——
+ * 该路径已随 1.20.1 支持收缩退役）。
  */
-#if MC_VER >= MC_1_21_1
 public record PreHandshakePayload(
         int protocolVersion,
         String modVersion,
@@ -58,7 +55,3 @@ public record PreHandshakePayload(
         return TYPE;
     }
 }
-#else
-public class PreHandshakePayload { // 1.20.1：不使用 payload 形态（login query 载体）；public 供 loader import 穿透 #if
-}
-#endif

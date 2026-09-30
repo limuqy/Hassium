@@ -23,14 +23,12 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class ShadowDimensionCacheIsolationTest {
 
-#if MC_VER >= MC_1_21_2
     // 同 ShadowCacheEvictionTest：1.21.2+ ChunkPos.<clinit> 触碰 BuiltInRegistries 需先 bootstrap。
     @BeforeAll
     static void bootstrapRegistries() {
         net.minecraft.SharedConstants.setVersion(net.minecraft.DetectedVersion.BUILT_IN);
         net.minecraft.server.Bootstrap.bootStrap();
     }
-#endif
 
     @AfterEach
     void resetState() {

@@ -8,11 +8,7 @@ import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.PacketListener;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.PacketFlow;
-#if MC_VER < MC_1_21_11
-import net.minecraft.resources.ResourceLocation;
-#else
 import net.minecraft.resources.Identifier;
-#endif
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -32,7 +28,6 @@ import java.util.WeakHashMap;
 public final class PacketCodecCompat {
     private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/PacketCodecCompat");
 
-#if MC_VER >= MC_1_21_1
     private static volatile List<PlayPacketEntry> cachedClientbound;
     private static volatile List<PlayPacketEntry> cachedServerbound;
     /**
@@ -47,7 +42,6 @@ public final class PacketCodecCompat {
      */
     private static final Map<RegistryAccess, net.minecraft.network.ProtocolInfo<?>[]> PLAY_BOUND_CACHE =
             Collections.synchronizedMap(new WeakHashMap<>());
-#endif
 
     private PacketCodecCompat() {}
 
@@ -64,9 +58,6 @@ public final class PacketCodecCompat {
      * 从 Connection 解析 RegistryAccess（服务端 player / 客户端 ClientPacketListener）。
      */
     public static RegistryAccess resolveRegistryAccess(Connection connection) {
-#if MC_VER < MC_1_21_1
-        return null;
-#else
         if (connection == null) {
             return RegistryAccess.EMPTY;
         }
@@ -89,7 +80,6 @@ public final class PacketCodecCompat {
             LOGGER.debug("无法从客户端 PacketListener 获取 RegistryAccess: {}", e.toString());
         }
         return RegistryAccess.EMPTY;
-#endif
     }
 
     /**
@@ -97,11 +87,7 @@ public final class PacketCodecCompat {
      * {@code >=1.21.1} 返回 {@code server.registryAccess()}，server 为 null 时 EMPTY）。
      */
     public static RegistryAccess serverRegistryAccess(net.minecraft.server.MinecraftServer server) {
-#if MC_VER < MC_1_21_1
-        return RegistryAccess.EMPTY;
-#else
         return server != null ? server.registryAccess() : RegistryAccess.EMPTY;
-#endif
     }
 
     /**
@@ -110,11 +96,7 @@ public final class PacketCodecCompat {
      * 1.21.2 宏分界的单一判定入口，登录/Play 阶段判定共用）。
      */
     public static boolean isLoginFinishedPacket(Packet<?> packet) {
-#if MC_VER < MC_1_21_2
-        return packet instanceof net.minecraft.network.protocol.login.ClientboundGameProfilePacket;
-#else
         return packet instanceof net.minecraft.network.protocol.login.ClientboundLoginFinishedPacket;
-#endif
     }
 
     /**
@@ -122,17 +104,6 @@ public final class PacketCodecCompat {
      */
     @SuppressWarnings({"unchecked", "rawtypes"})
     public static byte[] serializePacketBody(Packet<?> packet, RegistryAccess registryAccess) {
-#if MC_VER < MC_1_21_1
-        FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
-        try {
-            packet.write(buf);
-            byte[] data = new byte[buf.readableBytes()];
-            buf.readBytes(data);
-            return data;
-        } finally {
-            buf.release();
-        }
-#else
         if (registryAccess == null) {
             registryAccess = RegistryAccess.EMPTY;
         }
@@ -149,7 +120,6 @@ public final class PacketCodecCompat {
         } finally {
             buf.release();
         }
-#endif
     }
 
     /**
@@ -173,11 +143,6 @@ public final class PacketCodecCompat {
             byte[] body,
             RegistryAccess registryAccess
     ) {
-#if MC_VER < MC_1_21_1
-        FriendlyByteBuf pBuf = new FriendlyByteBuf(Unpooled.wrappedBuffer(body));
-        // 1.20.2–1.20.4 的 ConnectionProtocol.codec(flow) 中间层已随版本支持裁剪删除
-        return net.minecraft.network.ConnectionProtocol.PLAY.createPacket(flow, vanillaId, pBuf);
-#else
         if (registryAccess == null) {
             registryAccess = RegistryAccess.EMPTY;
         }
@@ -190,16 +155,12 @@ public final class PacketCodecCompat {
         } finally {
             buf.release();
         }
-#endif
     }
 
     /**
      * 枚举 PLAY 协议一侧的全部 PacketType（确定性顺序 = 协议 ID 顺序）。
      */
     public static List<PlayPacketEntry> enumeratePlayPackets(PacketFlow flow) {
-#if MC_VER < MC_1_21_1
-        return Collections.emptyList();
-#else
         if (flow == PacketFlow.CLIENTBOUND) {
             List<PlayPacketEntry> cached = cachedClientbound;
             if (cached != null) {
@@ -217,10 +178,8 @@ public final class PacketCodecCompat {
             cachedServerbound = cached;
             return cached;
         }
-#endif
     }
 
-#if MC_VER >= MC_1_21_1
     /**
      * 绑定 PLAY 协议编解码器（单源：原版路径与自有通道共用）。
      * <ul>
@@ -258,66 +217,36 @@ public final class PacketCodecCompat {
     ) {
         @SuppressWarnings("deprecation") // NeoForge 1.21.11+: decorator(1-param) deprecated; 2-param 需 ConnectionType.OTHER(仅 NeoForge classpath)
         var decorator = net.minecraft.network.RegistryFriendlyByteBuf.decorator(registryAccess);
-#if MC_VER < MC_1_21_5
-        return playUnbound(flow).bind(decorator);
-#else
         if (flow == PacketFlow.CLIENTBOUND) {
             return net.minecraft.network.protocol.game.GameProtocols.CLIENTBOUND_TEMPLATE.bind(decorator);
         }
         return net.minecraft.network.protocol.game.GameProtocols.SERVERBOUND_TEMPLATE.bind(
                 decorator,
                 () -> true);
-#endif
     }
 
-#if MC_VER >= MC_1_21_1 && MC_VER < MC_1_21_5
-    /**
-     * 1.21.1–1.21.4：{@code GameProtocols.CLIENTBOUND_TEMPLATE/SERVERBOUND_TEMPLATE}
-     * 仍通过 {@code ProtocolInfo.Unbound} 绑定。
-     */
-    @SuppressWarnings({"rawtypes", "unchecked"})
-    private static net.minecraft.network.ProtocolInfo.Unbound playUnbound(PacketFlow flow) {
-        return flow == PacketFlow.CLIENTBOUND
-                ? net.minecraft.network.protocol.game.GameProtocols.CLIENTBOUND_TEMPLATE
-                : net.minecraft.network.protocol.game.GameProtocols.SERVERBOUND_TEMPLATE;
-    }
-#endif
 
     /**
      * 登录协议已绑定信息（FriendlyByteBuf；登录包无注册表内容）。
      */
-#if MC_VER >= MC_1_21_1
     public static net.minecraft.network.ProtocolInfo<?> loginInfo(PacketFlow flow) {
         return flow == PacketFlow.CLIENTBOUND
                 ? net.minecraft.network.protocol.login.LoginProtocols.CLIENTBOUND
                 : net.minecraft.network.protocol.login.LoginProtocols.SERVERBOUND;
     }
-#endif
 
     /**
      * 配置协议已绑定信息（FriendlyByteBuf；配置含注册表数据包，但编解码不依赖本地注册表）。
      */
-#if MC_VER >= MC_1_21_1
     public static net.minecraft.network.ProtocolInfo<?> configInfo(PacketFlow flow) {
         return flow == PacketFlow.CLIENTBOUND
                 ? net.minecraft.network.protocol.configuration.ConfigurationProtocols.CLIENTBOUND
                 : net.minecraft.network.protocol.configuration.ConfigurationProtocols.SERVERBOUND;
     }
-#endif
 
     @SuppressWarnings("unchecked")
     private static List<PlayPacketEntry> loadPlayPackets(PacketFlow flow) {
         try {
-#if MC_VER < MC_1_21_5
-            // 1.21.1–1.21.4：Unbound 上有 listPackets
-            List<PlayPacketEntry> fromList = new ArrayList<>();
-            playUnbound(flow).listPackets((packetType, numericId) ->
-                    fromList.add(new PlayPacketEntry(ResourceLocationCompat.toPacketId(packetType.id()), numericId, flow)));
-            if (!fromList.isEmpty()) {
-                LOGGER.debug("枚举 PLAY {} 包类型: {} 个", flow, fromList.size());
-                return Collections.unmodifiableList(fromList);
-            }
-#else
             List<PlayPacketEntry> fromList = new ArrayList<>();
             net.minecraft.network.ProtocolInfo.Details details = flow == PacketFlow.CLIENTBOUND
                     ? net.minecraft.network.protocol.game.GameProtocols.CLIENTBOUND_TEMPLATE.details()
@@ -328,7 +257,6 @@ public final class PacketCodecCompat {
                 LOGGER.debug("枚举 PLAY {} 包类型: {} 个", flow, fromList.size());
                 return Collections.unmodifiableList(fromList);
             }
-#endif
             // 回退：反射 IdDispatchCodec.byId（旧路径）
             var info = playBound(flow, RegistryAccess.EMPTY);
             Object codec = info.codec();
@@ -365,9 +293,7 @@ public final class PacketCodecCompat {
             return Collections.emptyList();
         }
     }
-#endif
 
-#if MC_VER >= MC_1_21_1
     /**
      * 提取 CustomPacketPayload 字节（Raw / data() / StreamCodec 编码后剥 type 头）。
      */
@@ -399,11 +325,7 @@ public final class PacketCodecCompat {
         try {
             net.minecraft.network.protocol.common.ClientboundCustomPayloadPacket.GAMEPLAY_STREAM_CODEC
                     .encode(buf, new net.minecraft.network.protocol.common.ClientboundCustomPayloadPacket(payload));
-#if MC_VER < MC_1_21_11
-            buf.readResourceLocation(); // 跳过 type id
-#else
             buf.readIdentifier(); // 1.21.11+: ResourceLocation → Identifier
-#endif
             byte[] data = new byte[buf.readableBytes()];
             buf.readBytes(data);
             return data;
@@ -415,5 +337,4 @@ public final class PacketCodecCompat {
             buf.release();
         }
     }
-#endif
 }

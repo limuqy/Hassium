@@ -21,21 +21,13 @@ public final class RegistryCompat {
 
     @SuppressWarnings("unchecked")
     public static Registry<Biome> getBiomeRegistry(RegistryAccess access) {
-#if MC_VER < MC_1_21_2
-        return access.registryOrThrow(Registries.BIOME);
-#else
         return (Registry<Biome>) access.lookupOrThrow(Registries.BIOME);
-#endif
     }
 
     /**
      * 按 ResourceKey 取 Holder.Reference（1.21.2+ {@code getOrThrow}）。
      */
     public static <T> Holder.Reference<T> getHolderOrThrow(Registry<T> registry, ResourceKey<T> key) {
-#if MC_VER < MC_1_21_2
-        return registry.getHolderOrThrow(key);
-#else
         return registry.getOrThrow(key);
-#endif
     }
 }

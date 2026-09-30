@@ -5,10 +5,8 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
-#if MC_VER >= MC_1_21_6
 import net.minecraft.util.ProblemReporter;
 import net.minecraft.world.level.storage.TagValueInput;
-#endif
 
 /**
  * BlockEntity NBT 加载兼容层。
@@ -24,13 +22,7 @@ public final class BlockEntityCompat {
      * 用网络/缓存下发的 CompoundTag 加载已有 BlockEntity 数据。
      */
     public static void loadFromTag(BlockEntity be, CompoundTag tag, HolderLookup.Provider registries) {
-#if MC_VER < MC_1_21_1
-        be.load(tag);
-#elif MC_VER < MC_1_21_6
-        be.loadWithComponents(tag, registries);
-#else
         be.loadWithComponents(TagValueInput.create(ProblemReporter.DISCARDING, registries, tag));
-#endif
     }
 
     /**
@@ -65,10 +57,6 @@ public final class BlockEntityCompat {
 
     /** {@code CompoundTag.getString} 跨版本读取：1.21.5 起返回 {@code Optional<String>}。 */
     private static String getString(CompoundTag tag, String key) {
-#if MC_VER < MC_1_21_5
-        return tag.getString(key);
-#else
         return tag.getString(key).orElse("");
-#endif
     }
 }

@@ -21,29 +21,12 @@ import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.storage.PlayerDataStorage;
 import com.mojang.authlib.yggdrasil.ServicesKeySet;
-#if MC_VER >= MC_1_21_9
 import net.minecraft.world.level.chunk.PalettedContainerFactory;
-#endif
-#if MC_VER < MC_1_21_1
-import com.mojang.datafixers.util.Either;
-import net.minecraft.server.level.ChunkHolder;
-import net.minecraft.world.level.chunk.ChunkStatus;
-#else
 import net.minecraft.server.level.ChunkResult;
 import net.minecraft.world.level.chunk.status.ChunkStatus;
-#endif
-#if MC_VER >= MC_1_21_1
 import net.minecraft.ReportType;
-#endif
-#if MC_VER >= MC_1_21_1
 import net.minecraft.world.level.chunk.storage.RegionStorageInfo;
-#endif
-#if MC_VER < MC_1_21_2
-import net.minecraft.world.level.chunk.storage.ChunkSerializer;
-#else
 import net.minecraft.world.level.chunk.storage.SerializableChunkData;
-#endif
-#if MC_VER >= MC_1_21_9
 import com.mojang.authlib.GameProfile;
 import java.util.HashSet;
 import java.util.Optional;
@@ -53,7 +36,6 @@ import net.minecraft.server.notifications.EmptyNotificationService;
 import net.minecraft.server.players.NameAndId;
 import net.minecraft.server.players.ProfileResolver;
 import net.minecraft.server.players.UserNameToIdResolver;
-#endif
 
 /**
  * 影子服务端运行时 API 兼容层：构造/读盘/生成/落盘/编码的版本差异收口于此，
@@ -69,11 +51,7 @@ public final class ShadowServerCompat {
      * {@code ≥ 1.21.9}：末参改为 {@code EmptyNotificationService}（人数改由 {@code getMaxPlayers} 覆写）。
      */
     public static PlayerList createPlayerList(MinecraftServer server, PlayerDataStorage storage) {
-#if MC_VER < MC_1_21_9
-        return new PlayerList(server, server.registries(), storage, 1) {};
-#else
         return new PlayerList(server, server.registries(), storage, new EmptyNotificationService()) {};
-#endif
     }
 
     /**
@@ -87,13 +65,8 @@ public final class ShadowServerCompat {
     public static ChunkAccess awaitGeneratedChunk(
             ServerChunkCache cache, ChunkPos pos, boolean biomesOnly, long deadlineNanos) {
         ChunkStatus status = biomesOnly ? ChunkStatus.BIOMES : ChunkStatus.FULL;
-#if MC_VER < MC_1_21_1
-        CompletableFuture<Either<ChunkAccess, ChunkHolder.ChunkLoadingFailure>> future =
-                cache.getChunkFuture(pos.x, pos.z, status, true);
-#else
         CompletableFuture<ChunkResult<ChunkAccess>> future =
                 cache.getChunkFuture(pos.x, pos.z, status, true);
-#endif
         while (!future.isDone()) {
             if (System.nanoTime() > deadlineNanos) {
                 return null;
@@ -105,11 +78,7 @@ public final class ShadowServerCompat {
             }
         }
         try {
-#if MC_VER < MC_1_21_1
-            return future.join().left().orElse(null);
-#else
             return future.join().orElse(null);
-#endif
         } catch (Throwable t) {
             // 例如 "No chunk holder after ticket has been added"（票未钉稳时）：
             // 以失败回调，不得把 CompletionException 抛回 local-gen 池/主循环 pollTask。
@@ -124,13 +93,8 @@ public final class ShadowServerCompat {
     }
 
     private static CompletableFuture<ChunkAccess> requestSingleLight(ServerChunkCache cache, int x, int z) {
-#if MC_VER < MC_1_21_1
-        return cache.getChunkFuture(x, z, ChunkStatus.LIGHT, false)
-                .thenApply(result -> result.left().orElse(null));
-#else
         return cache.getChunkFuture(x, z, ChunkStatus.LIGHT, false)
                 .thenApply(result -> result.orElse(null));
-#endif
     }
 
 
@@ -141,11 +105,7 @@ public final class ShadowServerCompat {
      * 对齐旧版 {@code false}，禁止邻接更新 / scheduleTick。
      */
     public static BlockState setBlockState(LevelChunk chunk, BlockPos pos, BlockState state) {
-#if MC_VER < MC_1_21_5
-        return chunk.setBlockState(pos, state, false);
-#else
         return chunk.setBlockState(pos, state, 0);
-#endif
     }
 
     /**
@@ -163,24 +123,11 @@ public final class ShadowServerCompat {
             ChunkPos pos,
             long timeoutNanos) {
         long deadline = System.nanoTime() + timeoutNanos;
-#if MC_VER < MC_1_21_2
-        CompletableFuture<java.util.Optional<CompoundTag>> future = acc.hassium$readChunk(pos);
-        if (!awaitDone(future, deadline)) {
-            Constants.LOG.warn("Hassium: Shadow loadFromDisk timeout ({}, {})", pos.x, pos.z);
-            return null;
-        }
-        CompoundTag tag = future.join().orElse(null);
-        if (tag == null) {
-            return null;
-        }
-        return parseChunkNbt(level, levelId, pos, tag);
-#else
         CompletableFuture<?> future = acc.hassium$scheduleChunkLoad(pos);
         if (!awaitDone(future, deadline)) {
             return null;
         }
         return (ChunkAccess) future.join();
-#endif
     }
 
     /**
@@ -202,18 +149,6 @@ public final class ShadowServerCompat {
 
     private static ChunkAccess parseChunkNbtUnlocked(
             ServerLevel level, String levelId, ChunkPos pos, CompoundTag tag) {
-#if MC_VER < MC_1_21_1
-        // 读盘解码同样查该 BiMap（byNameCodec 解码方向）；撞上重建窗口会把未知
-        // 调色板项静默替换成 air（promotePartial 只记日志）。ShadowRegistryWindow 在窗口内
-        // **直接跳过**（返回 null ⇒ 本次 cache miss，走调用方既有 null 兜底）——
-        // 非阻塞，不与 flushLock/chunkLock 构成锁序（原读写锁曾致退出卡满 10s）。
-        return ShadowRegistryWindow.withAccess(() -> ChunkSerializer.read(
-                level, level.getPoiManager(), pos, tag));
-#elif MC_VER < MC_1_21_2
-        return ChunkSerializer.read(
-                level, level.getPoiManager(),
-                new RegionStorageInfo(levelId, level.dimension(), "chunk"), pos, tag);
-#else
         // 官方读链两步：parse(NBT→record) → read(record→ChunkAccess；FULL 柱 =
         // ImposterProtoChunk 包 LevelChunk，与 <1.21.2 ChunkSerializer.read 同语义，
         // ShadowSeedServer.toLevelChunk 两条分支都吃得下）。
@@ -223,15 +158,10 @@ public final class ShadowServerCompat {
         // 缓存读盘（ShadowSeedServer.parseNbtBytes → loadFromDisk）随之全 null
         // （1.21.3 classic R2 实测 schedLoadDiskNull=10074、diskBaselineOk=0）→
         // 本地缓存基线/回放全废 → R2 整柱重拉（fullReq=549、cacheRate 6.2%）。
-#if MC_VER < MC_1_21_9
-        SerializableChunkData data = SerializableChunkData.parse(level, level.registryAccess(), tag);
-#else
         SerializableChunkData data = SerializableChunkData.parse(level, level.palettedContainerFactory(), tag);
-#endif
         return data == null ? null
                 : data.read(level, level.getPoiManager(),
                         new RegionStorageInfo(levelId, level.dimension(), "chunk"), pos);
-#endif
     }
 
     /**
@@ -246,17 +176,7 @@ public final class ShadowServerCompat {
     }
 
     private static CompoundTag serializeChunkUnlocked(ServerLevel level, LevelChunk chunk) {
-#if MC_VER < MC_1_21_1
-        // handleClientLevelClosing 会同步执行 GameData.revertToFrozen，清空重灌
-        // ForgeRegistry 的 ids/names/keys BiMap（NamespacedWrapper.getResourceKey 直接
-        // 委托该 BiMap）。ShadowRegistryWindow 在窗口内**直接跳过**（返回 null ⇒
-        // writeBatch 还原脏位、柱保持待编，TAIL 主线程保存时补编）。
-        return ShadowRegistryWindow.withAccess(() -> ChunkSerializer.write(level, chunk));
-#elif MC_VER < MC_1_21_2
-        return ChunkSerializer.write(level, chunk);
-#else
         return SerializableChunkData.copyOf(level, chunk).write();
-#endif
     }
 
     /**
@@ -266,9 +186,6 @@ public final class ShadowServerCompat {
      * （断连保存路径）无需散落 {@code #if}。
      */
     public static void closeRegistryWindow() {
-#if MC_VER < MC_1_21_1
-        ShadowRegistryWindow.close();
-#endif
     }
 
     /**
@@ -276,13 +193,7 @@ public final class ShadowServerCompat {
      * 此时再向 IOWorker mailbox 提交会挂起或刷 {@code Cound not schedule mailbox}。
      */
     public static boolean isSharedIoPoolShutdown() {
-#if MC_VER >= MC_1_21_11
         return net.minecraft.util.Util.ioPool().service().isShutdown();
-#elif MC_VER >= MC_1_21_2
-        return net.minecraft.Util.ioPool().service().isShutdown();
-#else
-        return net.minecraft.Util.ioPool().isShutdown();
-#endif
     }
 
     /**
@@ -291,17 +202,9 @@ public final class ShadowServerCompat {
      */
     public static java.util.concurrent.Executor shadowWorldgenExecutor() {
         if (ShadowWorldgenExecutor.shouldIsolate(RuntimeServerContext.isShadowServerContext())) {
-#if MC_VER < MC_1_21_2
-            return ShadowWorldgenExecutor.service();
-#else
             return new net.minecraft.TracingExecutor(ShadowWorldgenExecutor.service());
-#endif
         }
-#if MC_VER >= MC_1_21_11
         return net.minecraft.util.Util.backgroundExecutor();
-#else
-        return net.minecraft.Util.backgroundExecutor();
-#endif
     }
 
     /**
@@ -314,11 +217,7 @@ public final class ShadowServerCompat {
         if (isSharedIoPoolShutdown()) {
             return;
         }
-#if MC_VER < MC_1_21_11
-        level.getChunkSource().chunkMap.flushWorker();
-#else
         level.getChunkSource().chunkMap.synchronize(true).join();
-#endif
     }
 
     /**
@@ -327,11 +226,7 @@ public final class ShadowServerCompat {
      * {@code ≥ 1.21.1}：{@code getFriendlyReport(ReportType.CRASH)}。
      */
     public static Object friendlyReport(CrashReport crashReport) {
-#if MC_VER < MC_1_21_1
-        return crashReport.getFriendlyReport();
-#else
         return crashReport.getFriendlyReport(ReportType.CRASH);
-#endif
     }
 
     /**
@@ -341,12 +236,8 @@ public final class ShadowServerCompat {
      * （PlayerList 构造期可能查询）。
      */
     public static Services noServices() {
-#if MC_VER < MC_1_21_9
-        return new Services(null, ServicesKeySet.EMPTY, null, null);
-#else
         return new Services(null, ServicesKeySet.EMPTY, null,
                 new MockUserNameToIdResolver(), new MockProfileResolver());
-#endif
     }
 
     /**
@@ -360,22 +251,6 @@ public final class ShadowServerCompat {
     @SuppressWarnings("deprecation") // NeoForge 1.21.11+: RegistryFriendlyByteBuf(2-param) deprecated
     public static byte[] encodeLevelChunkPacket(
             ClientboundLevelChunkWithLightPacket chunkPacket, RegistryAccess registryAccess) {
-#if MC_VER < MC_1_21_1
-        io.netty.buffer.ByteBuf tempBuf = io.netty.buffer.Unpooled.buffer();
-        try {
-            net.minecraft.network.FriendlyByteBuf friendlyBuf =
-                    new net.minecraft.network.FriendlyByteBuf(tempBuf);
-            chunkPacket.write(friendlyBuf);
-            byte[] data = new byte[tempBuf.readableBytes()];
-            tempBuf.getBytes(0, data);
-            return data;
-        } catch (Exception e) {
-            Constants.LOG.error("Hassium: SeedGen failed to encode chunk packet", e);
-            return null;
-        } finally {
-            tempBuf.release();
-        }
-#else
         net.minecraft.network.RegistryFriendlyByteBuf buf =
                 new net.minecraft.network.RegistryFriendlyByteBuf(
                         io.netty.buffer.Unpooled.buffer(), registryAccess);
@@ -390,90 +265,11 @@ public final class ShadowServerCompat {
         } finally {
             buf.release();
         }
-#endif
     }
 
-#if MC_VER < MC_1_21_1
-    /**
-     * 将已装载的区块 section 作为原版 pre-light ProtoChunk 视图使用。
-     * <p>
-     * 影子存储仍由 ShadowStorageManager 管理；此处只建立 native ChunkStatus
-     * 光照入口需要的 ProtoChunk，不接管 ChunkMap/IOWorker 存储生命周期。
-     */
-    public static net.minecraft.world.level.chunk.ProtoChunk createNativeLightChunk(
-            ServerLevel level, LevelChunk source, boolean lightCorrect) {
-        net.minecraft.world.level.chunk.ProtoChunk proto =
-                new net.minecraft.world.level.chunk.ProtoChunk(
-                        source.getPos(),
-                        net.minecraft.world.level.chunk.UpgradeData.EMPTY,
-                        source.getSections(),
-                        new net.minecraft.world.ticks.ProtoChunkTicks<>(),
-                        new net.minecraft.world.ticks.ProtoChunkTicks<>(),
-                        level,
-                        level.registryAccess().registryOrThrow(
-                                net.minecraft.core.registries.Registries.BIOME),
-                        source.getBlendingData());
-        proto.setStatus(lightCorrect
-                ? ChunkStatus.LIGHT
-                : ChunkStatus.INITIALIZE_LIGHT);
-        proto.setLightCorrect(lightCorrect);
-        return proto;
-    }
-
-    /** 使用原版 ChunkStatus.INITIALIZE_LIGHT loading task，而不是直接调用引擎方法。 */
-    public static CompletableFuture<ChunkAccess> initializeNativeLight(
-            ServerLevel level, ChunkAccess chunk) {
-        return ChunkStatus.INITIALIZE_LIGHT.load(
-                        level,
-                        level.getStructureManager(),
-                        (net.minecraft.server.level.ThreadedLevelLightEngine)
-                                level.getChunkSource().getLightEngine(),
-                        value -> CompletableFuture.completedFuture(Either.left(value)),
-                        chunk)
-                .thenApply(result -> result.left().orElseThrow(
-                        () -> new IllegalStateException("native INITIALIZE_LIGHT failed")));
-    }
-
-    /** 使用原版 ChunkStatus.LIGHT loading task，而不是直接调用引擎方法。 */
-    public static CompletableFuture<ChunkAccess> completeNativeLight(
-            ServerLevel level, ChunkAccess chunk) {
-        if (chunk instanceof net.minecraft.world.level.chunk.ProtoChunk proto
-                && !proto.getStatus().isOrAfter(ChunkStatus.LIGHT)) {
-            proto.setStatus(ChunkStatus.LIGHT);
-        }
-        return ChunkStatus.LIGHT.load(
-                        level,
-                        level.getStructureManager(),
-                        (net.minecraft.server.level.ThreadedLevelLightEngine)
-                                level.getChunkSource().getLightEngine(),
-                        value -> CompletableFuture.completedFuture(Either.left(value)),
-                        chunk)
-                .thenApply(result -> result.left().orElseThrow(
-                        () -> new IllegalStateException("native LIGHT failed")));
-    }
-#else
     /** Modern versions expose native light stages directly on ThreadedLevelLightEngine. */
     public static net.minecraft.world.level.chunk.ProtoChunk createNativeLightChunk(
             ServerLevel level, LevelChunk source, boolean lightCorrect) {
-#if MC_VER < MC_1_21_9
-        net.minecraft.world.level.chunk.ProtoChunk proto =
-                new net.minecraft.world.level.chunk.ProtoChunk(
-                        source.getPos(),
-                        net.minecraft.world.level.chunk.UpgradeData.EMPTY,
-                        source.getSections(),
-                        new net.minecraft.world.ticks.ProtoChunkTicks<>(),
-                        new net.minecraft.world.ticks.ProtoChunkTicks<>(),
-                        level,
-#if MC_VER < MC_1_21_2
-                        level.registryAccess().registryOrThrow(
-                                net.minecraft.core.registries.Registries.BIOME),
-#else
-                        (net.minecraft.core.Registry<net.minecraft.world.level.biome.Biome>)
-                                level.registryAccess().lookupOrThrow(
-                                        net.minecraft.core.registries.Registries.BIOME),
-#endif
-                        source.getBlendingData());
-#else
         net.minecraft.world.level.chunk.ProtoChunk proto =
                 new net.minecraft.world.level.chunk.ProtoChunk(
                         source.getPos(),
@@ -484,7 +280,6 @@ public final class ShadowServerCompat {
                         level,
                         PalettedContainerFactory.create(level.registryAccess()),
                         source.getBlendingData());
-#endif
         proto.setLightCorrect(lightCorrect);
         return proto;
     }
@@ -504,7 +299,6 @@ public final class ShadowServerCompat {
                         level.getChunkSource().getLightEngine();
         return engine.lightChunk(chunk, chunk.isLightCorrect());
     }
-#endif
 
 
 
@@ -523,7 +317,6 @@ public final class ShadowServerCompat {
         return true;
     }
 
-#if MC_VER >= MC_1_21_9
     private static final class MockProfileResolver implements ProfileResolver {
         @Override
         public Optional<GameProfile> fetchByName(String name) {
@@ -565,5 +358,4 @@ public final class ShadowServerCompat {
         public void save() {
         }
     }
-#endif
 }

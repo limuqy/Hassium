@@ -253,11 +253,7 @@ public final class ScenarioEngine {
                 LOGGER.warn("HassiumSmokeTest: {} no connection after {}ms — forcing teardown + one reconnect retry",
                         label, now - base);
                 try {
-#if MC_VER < MC_1_21_1
-                    mc.clearLevel();
-#else
                     mc.disconnect(new net.minecraft.client.gui.screens.TitleScreen(), false);
-#endif
                 } catch (Throwable t) {
                     LOGGER.warn("HassiumSmokeTest: teardown before retry failed: {}", t.toString());
                 }
@@ -446,11 +442,7 @@ public final class ScenarioEngine {
             LOGGER.info("HassiumSmokeTest: manual logout (Minecraft.disconnect/clearLevel path)");
             try {
                 // 1.20.2–1.20.4 的 disconnect(Screen) 中间层已随版本支持裁剪删除
-#if MC_VER < MC_1_21_1
-                mc.clearLevel();
-#else
                 mc.disconnect(new net.minecraft.client.gui.screens.TitleScreen(), false);
-#endif
             } catch (Throwable t) {
                 LOGGER.error("HassiumSmokeTest: manual logout failed", t);
             }
@@ -1171,11 +1163,7 @@ public final class ScenarioEngine {
     /** ResourceKey → "namespace:path"（1.21.11 起 ResourceKey 改 identifier()）。 */
     private static String dimensionId(net.minecraft.resources.ResourceKey<net.minecraft.world.level.Level> key) {
         return key
-#if MC_VER < MC_1_21_11
-                .location()
-#else
                 .identifier()
-#endif
                 .toString();
     }
 

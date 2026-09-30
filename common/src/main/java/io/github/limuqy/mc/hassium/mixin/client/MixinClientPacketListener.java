@@ -118,15 +118,6 @@ public class MixinClientPacketListener {
     }
 
 
-#if MC_VER < MC_1_21_1
-    /**
-     * 断开连接时清理（仅 1.20.1：onDisconnect 仍在 ClientPacketListener）
-     */
-    @Inject(method = "onDisconnect", at = @At("HEAD"))
-    private void hassium$onDisconnect(net.minecraft.network.chat.Component reason, CallbackInfo ci) {
-        ClientLifecycleHelper.cleanupOnDisconnect();
-    }
-#endif
 
 
     /**
@@ -175,31 +166,6 @@ public class MixinClientPacketListener {
     //   1.21.9+       另含 Pos-only (Vec3) 与 Rot-only (FF) 重载
     // teleport 纠偏走 handleTeleportEntity（不同方法），不经此路径，保持原版快速对齐。
 
-#if MC_VER < MC_1_21_1
-    @Redirect(method = "handleMoveEntity", at = @At(value = "INVOKE",
-            target = "Lnet/minecraft/world/entity/Entity;lerpTo(DDDFFIZ)V"))
-    private void hassium$adaptiveEntitySteps(net.minecraft.world.entity.Entity entity, double x, double y,
-            double z, float yRot, float xRot, int steps, boolean flag) {
-        entity.lerpTo(x, y, z, yRot, xRot,
-                EntityLerpPacing.observeAndPlan(entity.getId(), entity.level().getGameTime()), flag);
-    }
-#elif MC_VER < MC_1_21_5
-    @Redirect(method = "handleMoveEntity", at = @At(value = "INVOKE",
-            target = "Lnet/minecraft/world/entity/Entity;lerpTo(DDDFFI)V"))
-    private void hassium$adaptiveEntitySteps(net.minecraft.world.entity.Entity entity, double x, double y,
-            double z, float yRot, float xRot, int steps) {
-        entity.lerpTo(x, y, z, yRot, xRot,
-                EntityLerpPacing.observeAndPlan(entity.getId(), entity.level().getGameTime()));
-    }
-#elif MC_VER < MC_1_21_9
-    @Redirect(method = "handleMoveEntity", at = @At(value = "INVOKE",
-            target = "Lnet/minecraft/world/entity/Entity;moveOrInterpolateTo(Lnet/minecraft/world/phys/Vec3;FF)V"))
-    private void hassium$adaptiveEntitySteps(net.minecraft.world.entity.Entity entity,
-            net.minecraft.world.phys.Vec3 pos, float yRot, float xRot) {
-        hassium$applyAdaptiveEntitySteps(entity);
-        entity.moveOrInterpolateTo(pos, yRot, xRot);
-    }
-#else
     @Redirect(method = "handleMoveEntity", at = @At(value = "INVOKE",
             target = "Lnet/minecraft/world/entity/Entity;moveOrInterpolateTo(Lnet/minecraft/world/phys/Vec3;FF)V"))
     private void hassium$adaptiveEntitySteps(net.minecraft.world.entity.Entity entity,
@@ -223,9 +189,7 @@ public class MixinClientPacketListener {
         hassium$applyAdaptiveEntitySteps(entity);
         entity.moveOrInterpolateTo(yRot, xRot);
     }
-#endif
 
-#if MC_VER >= MC_1_21_5
     /**
      * 1.21.5+：窗口存放于 {@code InterpolationHandler.interpolationSteps}（构造默认 3），
      * 收包时先写入自适应步数，随后原版 moveOrInterpolateTo 按该步数插值。
@@ -238,7 +202,6 @@ public class MixinClientPacketListener {
             interpolation.setInterpolationLength(steps);
         }
     }
-#endif
 
     /** 头旋转包：lerpHeadTo 描述符全版本一致，与位置包共用同一节奏表（同 tick 第二包 gap=0 幂等）。 */
     @Redirect(method = "handleRotateMob", at = @At(value = "INVOKE",

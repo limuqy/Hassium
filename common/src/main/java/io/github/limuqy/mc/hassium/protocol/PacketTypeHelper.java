@@ -22,13 +22,7 @@ public class PacketTypeHelper {
         if (PacketPayloadCompat.isCustomPayloadPacket(packet)) {
             return PacketPayloadCompat.getPayloadId(packet);
         }
-#if MC_VER >= MC_1_21_1
         return ResourceLocationCompat.toPacketId(packet.type().id());
-#else
-        IndexSyncManager indexSyncManager = IndexSyncManager.getInstance();
-        NamespaceIndexManager indexManager = indexSyncManager.getServerIndexManager();
-        return indexManager.getVanillaIdentifier(packet.getClass());
-#endif
     }
 
     /**

@@ -13,8 +13,8 @@ import java.util.concurrent.CompletableFuture;
  * POI、可见 holder。影子端 type 126 读盘走 {@code ShadowStorageManager}，
  * 不再回落本访问器打开原版 RegionFile（与映像整文件重写双写同一 .mca）。
  * <p>
- * 签名分段：{@code < MC_1_21_2} 返回 {@code Either<ChunkAccess, ChunkLoadingFailure>}；
- * 1.21.2+ 重构后直接返回 {@code CompletableFuture<ChunkAccess>}。
+ * 签名分段（历史）：1.21.2 前返回 {@code Either<ChunkAccess, ChunkLoadingFailure>}；
+ * 1.21.2 起直接返回 {@code CompletableFuture<ChunkAccess>}。
  */
 @Mixin(net.minecraft.server.level.ChunkMap.class)
 public interface ChunkMapAccessor {
@@ -34,13 +34,6 @@ public interface ChunkMapAccessor {
     @Invoker("markPositionReplaceable")
     void hassium$markPositionReplaceable(ChunkPos pos);
 
-#if MC_VER < MC_1_21_1
-    @Invoker("scheduleChunkLoad")
-    CompletableFuture<com.mojang.datafixers.util.Either<net.minecraft.world.level.chunk.ChunkAccess,
-            net.minecraft.server.level.ChunkHolder.ChunkLoadingFailure>>
-            hassium$scheduleChunkLoad(ChunkPos pos);
-#else
     @Invoker("scheduleChunkLoad")
     CompletableFuture<net.minecraft.world.level.chunk.ChunkAccess> hassium$scheduleChunkLoad(ChunkPos pos);
-#endif
 }

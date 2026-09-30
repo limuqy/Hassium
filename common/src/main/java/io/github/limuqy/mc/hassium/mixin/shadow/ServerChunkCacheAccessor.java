@@ -12,8 +12,6 @@ import org.spongepowered.asm.mixin.gen.Accessor;
 @Mixin(net.minecraft.server.level.ServerChunkCache.class)
 public interface ServerChunkCacheAccessor {
 
-#if MC_VER >= MC_1_21_5
     @Accessor("ticketStorage")
     net.minecraft.world.level.TicketStorage hassium$getTicketStorage();
-#endif
 }

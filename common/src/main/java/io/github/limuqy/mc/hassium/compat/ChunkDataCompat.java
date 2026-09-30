@@ -16,19 +16,11 @@ public final class ChunkDataCompat {
      * 当前版本是否使用 SerializableChunkData 作为序列化入口。
      */
     public static boolean usesSerializableChunkData() {
-#if MC_VER < MC_1_21_2
-        return false;
-#else
         return true;
-#endif
     }
 
     /** 标记影子区块需要落盘；1.21.2 起 API 改为 {@code markUnsaved()}。 */
     public static void markUnsaved(net.minecraft.world.level.chunk.LevelChunk chunk) {
-#if MC_VER < MC_1_21_2
-        chunk.setUnsaved(true);
-#else
         chunk.markUnsaved();
-#endif
     }
 }

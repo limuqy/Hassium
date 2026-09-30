@@ -99,11 +99,7 @@ public final class ShadowOfficialPacketBridge {
             } else if (packet instanceof ClientboundLightUpdatePacket lightPacket) {
                 listener.handleLightUpdatePacket(lightPacket);
             } else if (packet instanceof ClientboundForgetLevelChunkPacket forget) {
-#if MC_VER < MC_1_21_1
                 listener.handleForgetLevelChunk(forget);
-#else
-                listener.handleForgetLevelChunk(forget);
-#endif
             } else {
                 // 其它包：不猜 listener 方法，避免版本漂移
                 return;

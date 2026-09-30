@@ -34,28 +34,12 @@ public class MixinMinecraftServer {
      * B4：影子 {@code ChunkMap} / 光照 mailbox 不挂全局 {@code Util.backgroundExecutor()}，
      * 避免和客户端 mesh 抢同一 ForkJoin 池。专用服构造走原版返回值。
      */
-#if MC_VER < MC_1_21_2
-    @Redirect(method = "<init>", at = @At(value = "INVOKE",
-            target = "Lnet/minecraft/Util;backgroundExecutor()Ljava/util/concurrent/ExecutorService;"))
-    private java.util.concurrent.ExecutorService hassium$isolateShadowWorldgenExecutor() {
-        return (java.util.concurrent.ExecutorService)
-                io.github.limuqy.mc.hassium.compat.ShadowServerCompat.shadowWorldgenExecutor();
-    }
-#elif MC_VER < MC_1_21_11
-    @Redirect(method = "<init>", at = @At(value = "INVOKE",
-            target = "Lnet/minecraft/Util;backgroundExecutor()Lnet/minecraft/TracingExecutor;"))
-    private net.minecraft.TracingExecutor hassium$isolateShadowWorldgenExecutor() {
-        return (net.minecraft.TracingExecutor)
-                io.github.limuqy.mc.hassium.compat.ShadowServerCompat.shadowWorldgenExecutor();
-    }
-#else
     @Redirect(method = "<init>", at = @At(value = "INVOKE",
             target = "Lnet/minecraft/util/Util;backgroundExecutor()Lnet/minecraft/TracingExecutor;"))
     private net.minecraft.TracingExecutor hassium$isolateShadowWorldgenExecutor() {
         return (net.minecraft.TracingExecutor)
                 io.github.limuqy.mc.hassium.compat.ShadowServerCompat.shadowWorldgenExecutor();
     }
-#endif
 
     /**
      * tick 起点：翻实体密度页 + 重建降帧快照 + 用上一 tick 实测实体包数更新压力倍率。

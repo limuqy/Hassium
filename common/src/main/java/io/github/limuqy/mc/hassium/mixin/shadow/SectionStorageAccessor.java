@@ -12,11 +12,6 @@ import org.spongepowered.asm.mixin.gen.Accessor;
 @Mixin(net.minecraft.world.level.chunk.storage.SectionStorage.class)
 public interface SectionStorageAccessor {
 
-#if MC_VER >= MC_1_21_1
     @Accessor("simpleRegionStorage")
     net.minecraft.world.level.chunk.storage.SimpleRegionStorage hassium$getRegionStorage();
-#else
-    @Accessor("worker")
-    net.minecraft.world.level.chunk.storage.IOWorker hassium$getRegionStorage();
-#endif
 }

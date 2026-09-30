@@ -64,11 +64,7 @@ public final class ShadowColumnContent {
 
     /** {@code CompoundTag.getString} 跨版本读取：1.21.5 起返回 {@code Optional<String>}。 */
     private static String statusOf(CompoundTag columnNbt) {
-#if MC_VER < MC_1_21_5
-        return columnNbt.getString(STATUS_KEY);
-#else
         return columnNbt.getString(STATUS_KEY).orElse("");
-#endif
     }
 
     /**

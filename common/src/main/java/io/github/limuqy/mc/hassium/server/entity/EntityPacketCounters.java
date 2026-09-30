@@ -41,12 +41,8 @@ public final class EntityPacketCounters {
                 || packet instanceof ClientboundTeleportEntityPacket) {
             return true;
         }
-#if MC_VER >= MC_1_21_2
         // 1.21.2 起原版用 ClientboundEntityPositionSyncPacket 取代 teleport 包做硬同步
         return packet instanceof net.minecraft.network.protocol.game.ClientboundEntityPositionSyncPacket;
-#else
-        return false;
-#endif
     }
 
     /** 记一次实体包（仅当 {@link #isEntityUpdatePacket(Packet)} 为真时调用）。 */

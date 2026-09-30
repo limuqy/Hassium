@@ -1,10 +1,6 @@
 package io.github.limuqy.mc.hassium.compat;
 
-#if MC_VER < MC_1_21_11
-import net.minecraft.resources.ResourceLocation;
-#else
 import net.minecraft.resources.Identifier;
-#endif
 
 /**
  * ResourceLocation 版本兼容层
@@ -17,19 +13,9 @@ public final class ResourceLocationCompat {
     private ResourceLocationCompat() {}
 
     public static
-#if MC_VER < MC_1_21_11
-    ResourceLocation
-#else
     Identifier
-#endif
     create(String namespace, String path) {
-#if MC_VER < MC_1_21_1
-        return new ResourceLocation(namespace, path);
-#elif MC_VER < MC_1_21_11
-        return ResourceLocation.fromNamespaceAndPath(namespace, path);
-#else
         return Identifier.fromNamespaceAndPath(namespace, path);
-#endif
     }
 
     /**
@@ -39,19 +25,9 @@ public final class ResourceLocationCompat {
      * 1.21.1+: 单参构造器被移除，需用 ResourceLocation.parse(String)
      */
     public static
-#if MC_VER < MC_1_21_11
-    ResourceLocation
-#else
     Identifier
-#endif
     create(String location) {
-#if MC_VER < MC_1_21_1
-        return new ResourceLocation(location);
-#elif MC_VER < MC_1_21_11
-        return ResourceLocation.parse(location);
-#else
         return Identifier.parse(location);
-#endif
     }
 
     /**
@@ -62,11 +38,7 @@ public final class ResourceLocationCompat {
      * 1.21.1+ 的 {@code parse} 都是「非法即抛」，没有跨版本一致的 try 版本。
      */
     public static
-#if MC_VER < MC_1_21_11
-    ResourceLocation
-#else
     Identifier
-#endif
     tryCreate(String location) {
         if (location == null) {
             return null;
@@ -83,11 +55,7 @@ public final class ResourceLocationCompat {
      * 业务代码持有 {@link PacketId}，仅在注册/发送等需要 vanilla 类型的位置调用本方法。
      */
     public static
-#if MC_VER < MC_1_21_11
-    ResourceLocation
-#else
     Identifier
-#endif
     vanilla(PacketId id) {
         return create(id.namespace(), id.path());
     }
@@ -96,11 +64,7 @@ public final class ResourceLocationCompat {
      * vanilla 类型 → {@link PacketId}（业务侧收口用；getNamespace/getPath 两版一致）。
      */
     public static PacketId toPacketId(
-#if MC_VER < MC_1_21_11
-    ResourceLocation
-#else
     Identifier
-#endif
     id) {
         return new PacketId(id.getNamespace(), id.getPath());
     }

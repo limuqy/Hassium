@@ -34,29 +34,13 @@ import net.minecraft.server.WorldStem;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.packs.repository.PackRepository;
 import net.minecraft.server.packs.repository.ServerPacksSource;
-#if MC_VER >= MC_1_21_1
 import net.minecraft.world.level.validation.DirectoryValidator;
-#endif
-#if MC_VER < MC_1_21_1
-import net.minecraft.server.level.progress.ChunkProgressListenerFactory;
-import net.minecraft.server.level.progress.LoggerChunkProgressListener;
-#elif MC_VER < MC_1_21_9
-import net.minecraft.server.level.progress.ChunkProgressListenerFactory;
-import net.minecraft.server.level.progress.LoggerChunkProgressListener;
-#else
 import net.minecraft.server.level.progress.LoggingLevelLoadListener;
-#endif
-#if MC_VER >= MC_1_21_11
 import net.minecraft.server.permissions.LevelBasedPermissionSet;
-#endif
 import net.minecraft.world.Difficulty;
 import net.minecraft.world.flag.FeatureFlags;
 import net.minecraft.world.level.DataPackConfig;
-#if MC_VER < MC_1_21_11
-import net.minecraft.world.level.GameRules;
-#else
 import net.minecraft.world.level.gamerules.GameRules;
-#endif
 import net.minecraft.world.level.GameType;
 import net.minecraft.world.level.LevelSettings;
 import net.minecraft.world.level.WorldDataConfiguration;
@@ -66,11 +50,7 @@ import net.minecraft.world.level.levelgen.WorldOptions;
 import net.minecraft.world.level.levelgen.presets.WorldPresets;
 import net.minecraft.world.level.storage.LevelStorageSource;
 import net.minecraft.world.level.storage.PrimaryLevelData;
-#if MC_VER < MC_1_21_11
-import net.minecraft.Util;
-#else
 import net.minecraft.util.Util;
-#endif
 
 /**
  * 影子服务端装配：临时目录 + 空存档 + 数据包加载 + 世界 stem 构建（两版本分段）。
@@ -98,19 +78,9 @@ public final class SeedGenLevelCompat {
      * {@code ≥ 1.21.9}：{@code LoggingLevelLoadListener.forDedicatedServer()}（监听器实例，
      * {@code MinecraftServer} 末参类型随之替换）。
      */
-#if MC_VER < MC_1_21_1
-    static ChunkProgressListenerFactory chunkProgressArg() {
-        return LoggerChunkProgressListener::new;
-    }
-#elif MC_VER < MC_1_21_9
-    static ChunkProgressListenerFactory chunkProgressArg() {
-        return LoggerChunkProgressListener::create;
-    }
-#else
     static LoggingLevelLoadListener chunkProgressArg() {
         return LoggingLevelLoadListener.forDedicatedServer();
     }
-#endif
 
     /**
      * 创建并启动影子服务端（阻塞数秒；任意线程可调）。失败抛异常。
@@ -169,14 +139,9 @@ public final class SeedGenLevelCompat {
         try {
             access = storage.validateAndCreateAccess("world");
             long tAccessNs = System.nanoTime();
-#if MC_VER < MC_1_21_1
-            repo = new PackRepository(io.github.limuqy.mc.hassium.platform.Services.PLATFORM
-                    .serverPackSources(new ServerPacksSource()));
-#else
             repo = new PackRepository(io.github.limuqy.mc.hassium.platform.Services.PLATFORM
                     .serverPackSources(new ServerPacksSource(
                             new DirectoryValidator(ignored -> false))));
-#endif
             // 挂上加载器 mod 数据包（NeoForge ResourcePackLoader 等）：自定义维度
             // LevelStem 在 mod jar 的 data/<ns>/dimension/*.json，不挂则 LEVEL_STEM 查不到。
             try {
@@ -195,20 +160,11 @@ public final class SeedGenLevelCompat {
                     new DataPackConfig(packIds, List.of()), FeatureFlags.REGISTRY.allFlags());
             LevelSettings settings = new LevelSettings("HassiumSeedGen", GameType.CREATIVE, false,
                     Difficulty.NORMAL, true,
-#if MC_VER < MC_1_21_2
-                    new GameRules(),
-#else
                     new GameRules(FeatureFlags.REGISTRY.allFlags()),
-#endif
                     dataConfig);
             WorldLoader.PackConfig packConfig = new WorldLoader.PackConfig(repo, dataConfig, false, true);
-#if MC_VER < MC_1_21_11
-            WorldLoader.InitConfig initConfig = new WorldLoader.InitConfig(
-                    packConfig, Commands.CommandSelection.DEDICATED, 4);
-#else
             WorldLoader.InitConfig initConfig = new WorldLoader.InitConfig(
                     packConfig, Commands.CommandSelection.DEDICATED, LevelBasedPermissionSet.OWNER);
-#endif
 
             WorldOptions worldOptions = new WorldOptions(seed, true, false);
             stem = loadWorldStemWithRetry(initConfig, settings, worldOptions, 2);
@@ -385,13 +341,8 @@ public final class SeedGenLevelCompat {
     /** NORMAL preset 的 WorldDimensions（两版本 registry/lookup 形态差异封装）。 */
     private static WorldDimensions normalPresetDimensions(WorldLoader.DataLoadContext dataLoadContext) {
         return dataLoadContext.datapackWorldgen()
-#if MC_VER < MC_1_21_2
-                .registryOrThrow(Registries.WORLD_PRESET)
-                .getHolderOrThrow(WorldPresets.NORMAL)
-#else
                 .lookupOrThrow(Registries.WORLD_PRESET)
                 .getOrThrow(WorldPresets.NORMAL)
-#endif
                 .value()
                 .createWorldDimensions();
     }
@@ -415,23 +366,12 @@ public final class SeedGenLevelCompat {
                 .orElseThrow(() -> new IllegalStateException("NORMAL preset missing end stem"));
         java.util.LinkedHashMap<ResourceKey<LevelStem>, LevelStem> extra =
                 resolveCustomDimensionStems(dataLoadContext);
-#if MC_VER < MC_1_21_1
-        MappedRegistry<LevelStem> dims = new MappedRegistry<>(Registries.LEVEL_STEM, Lifecycle.stable());
-        dims.register(LevelStem.OVERWORLD, overworldStem, Lifecycle.stable());
-        dims.register(LevelStem.NETHER, netherStem, Lifecycle.stable());
-        dims.register(LevelStem.END, endStem, Lifecycle.stable());
-        for (java.util.Map.Entry<ResourceKey<LevelStem>, LevelStem> e : extra.entrySet()) {
-            dims.register(e.getKey(), e.getValue(), Lifecycle.stable());
-        }
-        return new WorldDimensions(dims.freeze());
-#else
         java.util.Map<ResourceKey<LevelStem>, LevelStem> stems = new java.util.LinkedHashMap<>();
         stems.put(LevelStem.OVERWORLD, overworldStem);
         stems.put(LevelStem.NETHER, netherStem);
         stems.put(LevelStem.END, endStem);
         stems.putAll(extra);
         return new WorldDimensions(java.util.Map.copyOf(stems));
-#endif
     }
 
     /**
@@ -453,12 +393,8 @@ public final class SeedGenLevelCompat {
         Registry<LevelStem> localStems;
         try {
             // LEVEL_STEM 在 datapackDimensions 层（非 datapackWorldgen）——1.20.1–1.21.11 同构。
-#if MC_VER < MC_1_21_2
-            localStems = dataLoadContext.datapackDimensions().registryOrThrow(Registries.LEVEL_STEM);
-#else
             localStems = (Registry<LevelStem>) dataLoadContext.datapackDimensions()
                     .lookupOrThrow(Registries.LEVEL_STEM);
-#endif
         } catch (Throwable t) {
             Constants.LOG.warn("Hassium: Local LEVEL_STEM registry unavailable; skip custom dims", t);
             return extra;
@@ -505,13 +441,9 @@ public final class SeedGenLevelCompat {
         try {
             ResourceKey<LevelStem> key = ResourceKey.create(Registries.LEVEL_STEM,
                     io.github.limuqy.mc.hassium.compat.ResourceLocationCompat.create(dimId));
-#if MC_VER < MC_1_21_2
-            return localStems.get(key);
-#else
             return localStems.get(key)
                     .map(net.minecraft.core.Holder.Reference::value)
                     .orElse(null);
-#endif
         } catch (Throwable t) {
             return null;
         }

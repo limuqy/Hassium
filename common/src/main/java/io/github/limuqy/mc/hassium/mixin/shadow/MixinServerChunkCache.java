@@ -4,11 +4,7 @@ import io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer;
 import io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry;
 import io.github.limuqy.mc.hassium.shadow.server.SeedGenExecutor;
 import io.github.limuqy.mc.hassium.server.RuntimeServerContext;
-#if MC_VER < MC_1_21_1
-import net.minecraft.world.level.chunk.ChunkStatus;
-#else
 import net.minecraft.world.level.chunk.status.ChunkStatus;
-#endif
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.chunk.LightChunk;
 import org.spongepowered.asm.mixin.Mixin;

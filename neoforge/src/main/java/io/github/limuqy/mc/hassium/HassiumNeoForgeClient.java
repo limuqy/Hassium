@@ -23,14 +23,8 @@ import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent;
  * 直连拓扑：客户端不发 vanilla 握手（登录/配置期协商 + play_init_s2c 激活）；
  * LoggingOut 直接全量清理。
  */
-#if MC_VER < MC_1_21_6
-// 1.21.1–1.21.5：bus 参数仍在，MOD 事件（FMLClientSetupEvent）必须显式挂 Mod 总线；
-// 省略时按 Game 总线注册，bus-8.x registerListener 直接 IllegalArgumentException（1.21.2 冒烟实证）
-@EventBusSubscriber(modid = Constants.MOD_ID, value = Dist.CLIENT, bus = EventBusSubscriber.Bus.MOD)
-#else
 // 1.21.6+：bus 参数已移除，FML 按事件类型自动挂到 Mod / Game 总线
 @EventBusSubscriber(modid = Constants.MOD_ID, value = Dist.CLIENT)
-#endif
 public class HassiumNeoForgeClient {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/NeoForgeClient");

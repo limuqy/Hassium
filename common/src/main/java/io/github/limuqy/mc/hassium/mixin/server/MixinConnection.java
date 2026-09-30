@@ -70,19 +70,6 @@ public class MixinConnection {
         if (receiving != PacketFlow.SERVERBOUND) {
             return;
         }
-#if MC_VER < MC_1_21_1
-        if (!(packet instanceof net.minecraft.network.protocol.login.ServerboundCustomQueryPacket query)) {
-            return;
-        }
-        if (query.getTransactionId() != io.github.limuqy.mc.hassium.protocol.handshake.LoginHandshake.TRANSACTION_ID) {
-            return;
-        }
-        net.minecraft.network.FriendlyByteBuf data = query.getData();
-        Connection self = (Connection) (Object) this;
-        if (LoginHandshakeManager.consumeQueryAnswerAtChannel(self, data)) {
-            ci.cancel();
-        }
-#endif
     }
 
     // review-fix: T7-59: handler 统一加 hassium$ 前缀（Mixin 惯例，避免与目标类未来同名成员 merge 冲突）
@@ -94,22 +81,10 @@ public class MixinConnection {
     //   拦双参会整段漏包（1.21.1 实证：debug.log 0 条拦截日志，聚合静默失效）。只拦三参：
     //   单参→双参→三参全部汇聚，天然无重复拦截。
     // - 1.21.6+：三参第二参类型改为 ChannelFutureListener，结构同上。
-#if MC_VER < MC_1_21_1
-    @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;Lnet/minecraft/network/PacketSendListener;)V", at = @At("HEAD"), cancellable = true)
-    private void hassium$onSendPacket(Packet<?> packet, net.minecraft.network.PacketSendListener sendListener, CallbackInfo ci) {
-        hassium$tryAggregate(packet, sendListener != null, ci);
-    }
-#elif MC_VER < MC_1_21_6
-    @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;Lnet/minecraft/network/PacketSendListener;Z)V", at = @At("HEAD"), cancellable = true)
-    private void hassium$onSendPacket(Packet<?> packet, net.minecraft.network.PacketSendListener sendListener, boolean flushNow, CallbackInfo ci) {
-        hassium$tryAggregate(packet, sendListener != null, ci);
-    }
-#else
     @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;Lio/netty/channel/ChannelFutureListener;Z)V", at = @At("HEAD"), cancellable = true)
     private void hassium$onSendPacket(Packet<?> packet, io.netty.channel.ChannelFutureListener sendListener, boolean flushNow, CallbackInfo ci) {
         hassium$tryAggregate(packet, sendListener != null, ci);
     }
-#endif
 
     /**
      * 聚合拦截公共逻辑（需回调的包不聚合）。
@@ -154,13 +129,11 @@ public class MixinConnection {
             return;
         }
 
-#if MC_VER >= MC_1_21_1
         // mod / 加载器注册的 S2C payload：客户端 handler 按具体类型对象分发，
         // 聚合重放的 RawCustomPayload 会 ClassCastException（neoforge:custom_time_packet 实证）→ 直发
         if (PacketPayloadCompat.isModdedS2CCustomPayload(packet)) {
             return;
         }
-#endif
 
         // 检查黑名单 / 高频排除：控制面、独立压缩通道、区块图控制包不聚合
         String packetTypeId = packetType.toString();
@@ -201,11 +174,7 @@ public class MixinConnection {
 
     // review-fix: T7-60: 带描述符注入 disconnect——1.21.1+ 有 Component/DisconnectionDetails 双重载
     // （Component 委托 Details），无描述符会命中两个重载致清理逻辑重复执行
-#if MC_VER < MC_1_21_1
-    @Inject(method = "disconnect(Lnet/minecraft/network/chat/Component;)V", at = @At("HEAD"))
-#else
     @Inject(method = "disconnect(Lnet/minecraft/network/DisconnectionDetails;)V", at = @At("HEAD"))
-#endif
     private void hassium$onDisconnect(CallbackInfo ci) {
         Connection self = (Connection) (Object) this;
         HassiumConnectionRegistry.markDisabled(self);

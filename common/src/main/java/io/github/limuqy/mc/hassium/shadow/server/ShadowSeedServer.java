@@ -229,13 +229,7 @@ public class ShadowSeedServer extends MinecraftServer {
         this.worldData.setModdedInfo(this.getServerModName(), this.getModdedStatus().shouldReportAsModified());
         long tCreateNs = System.nanoTime();
         // 豁免：createLevels 1.20.1 有参 / 1.21.1 工厂 / 1.21.9 无参，且为 MinecraftServer.protected
-#if MC_VER < MC_1_21_1
-        this.createLevels(new net.minecraft.server.level.progress.LoggerChunkProgressListener(11));
-#elif MC_VER < MC_1_21_9
-        this.createLevels(net.minecraft.server.level.progress.LoggerChunkProgressListener.create(11));
-#else
         this.createLevels();
-#endif
         long tAfterLevelsNs = System.nanoTime();
         this.forceDifficulty();
         // 不调用 prepareLevels()：不等待 441 ticking 区块，按需生成
@@ -309,14 +303,9 @@ public class ShadowSeedServer extends MinecraftServer {
             return false;
         }
         try {
-#if MC_VER < MC_1_21_5
-            level.getChunkSource().addRegionTicket(
-                    net.minecraft.server.level.TicketType.FORCED, pos, 0, pos);
-#else
             ((io.github.limuqy.mc.hassium.mixin.shadow.ServerChunkCacheAccessor) (Object) level.getChunkSource())
                     .hassium$getTicketStorage()
                     .addTicketWithRadius(net.minecraft.server.level.TicketType.FORCED, pos, 0);
-#endif
             return true;
         } catch (Throwable t) {
             LOGGER.warn("Hassium: pin FORCED ticket failed ({}, {})", pos.x, pos.z, t);
@@ -330,14 +319,9 @@ public class ShadowSeedServer extends MinecraftServer {
             return;
         }
         try {
-#if MC_VER < MC_1_21_5
-            level.getChunkSource().removeRegionTicket(
-                    net.minecraft.server.level.TicketType.FORCED, pos, 0, pos);
-#else
             ((io.github.limuqy.mc.hassium.mixin.shadow.ServerChunkCacheAccessor) (Object) level.getChunkSource())
                     .hassium$getTicketStorage()
                     .removeTicketWithRadius(net.minecraft.server.level.TicketType.FORCED, pos, 0);
-#endif
         } catch (Throwable ignored) {
             // world 已停：票随实例销毁
         }
@@ -2502,7 +2486,6 @@ public class ShadowSeedServer extends MinecraftServer {
     }
 
     // 豁免：SampleLogger / tick 日志抽象方法仅 1.21.1+ 存在（1.20.1 无此 API）
-#if MC_VER >= MC_1_21_1
     private final net.minecraft.util.debugchart.SampleLogger sampleLogger =
             new net.minecraft.util.debugchart.LocalSampleLogger(4);
 
@@ -2515,7 +2498,6 @@ public class ShadowSeedServer extends MinecraftServer {
     public boolean isTickTimeLoggingEnabled() {
         return false;
     }
-#endif
 
     @Override
     public boolean shouldRconBroadcast() {
@@ -2543,62 +2525,6 @@ public class ShadowSeedServer extends MinecraftServer {
     }
 
     // 豁免：MinecraftServer 抽象方法签名随 1.21.9 改名换参、1.21.11 改 PermissionSet，必须落在子类
-#if MC_VER < MC_1_21_9
-    @Override
-    public int getOperatorUserPermissionLevel() {
-        return 0;
-    }
-
-    @Override
-    public int getFunctionCompilationLevel() {
-        return 4;
-    }
-
-    @Override
-    public boolean isEpollEnabled() {
-        return false;
-    }
-
-    @Override
-    public boolean isCommandBlockEnabled() {
-        return false;
-    }
-
-    @Override
-    public boolean isSingleplayerOwner(com.mojang.authlib.GameProfile profile) {
-        return false;
-    }
-#elif MC_VER < MC_1_21_11
-    @Override
-    public int operatorUserPermissionLevel() {
-        return 0;
-    }
-
-    @Override
-    public int getFunctionCompilationLevel() {
-        return 4;
-    }
-
-    @Override
-    public boolean isEpollEnabled() {
-        return false;
-    }
-
-    @Override
-    public boolean isCommandBlockEnabled() {
-        return false;
-    }
-
-    @Override
-    public boolean isSingleplayerOwner(net.minecraft.server.players.NameAndId nameAndId) {
-        return false;
-    }
-
-    @Override
-    public int getMaxPlayers() {
-        return 1;
-    }
-#else
     @Override
     public net.minecraft.server.permissions.LevelBasedPermissionSet operatorUserPermissions() {
         return net.minecraft.server.permissions.LevelBasedPermissionSet.ALL;
@@ -2623,5 +2549,4 @@ public class ShadowSeedServer extends MinecraftServer {
     public int getMaxPlayers() {
         return 1;
     }
-#endif
 }

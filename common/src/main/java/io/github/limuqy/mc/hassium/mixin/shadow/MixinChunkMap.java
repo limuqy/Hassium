@@ -19,24 +19,10 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
-#if MC_VER < MC_1_21_1
-import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
-import net.minecraft.server.level.ServerPlayer;
-import net.minecraft.server.level.ThreadedLevelLightEngine;
-import org.apache.commons.lang3.mutable.MutableObject;
-import org.spongepowered.asm.mixin.injection.ModifyVariable;
-#endif
-#if MC_VER < MC_1_21_1
-import com.mojang.datafixers.util.Either;
-import net.minecraft.server.level.ChunkHolder;
-import net.minecraft.world.level.chunk.ChunkStatus;
-import net.minecraft.world.level.chunk.ImposterProtoChunk;
-#else
 import net.minecraft.server.level.GenerationChunkHolder;
 import net.minecraft.util.StaticCache2D;
 import net.minecraft.world.level.chunk.status.ChunkStatus;
 import net.minecraft.world.level.chunk.status.ChunkStep;
-#endif
 
 /**
  * 影子端接管：已 materialize / 磁盘基线的区块短路进 {@code scheduleChunkLoad}，
@@ -50,104 +36,7 @@ public class MixinChunkMap {
     @Final
     ServerLevel level;
 
-#if MC_VER < MC_1_21_1
-    @Shadow
-    private ThreadedLevelLightEngine lightEngine;
 
-    @Unique
-    private ClientboundLevelChunkWithLightPacket hassium$dummyChunkPacket;
-
-    /**
-     * 1.20.1：专用服用独立、已填充的 holder，跳过 {@code new ClientboundLevelChunkWithLightPacket}
-     *（组包成本）。与压缩无关；{@link MixinServerPlayer} 登记 pending 并 cancel 发送。
-     * <p>
-     * 影子虚拟玩家上下文不走本钩子：{@code playerLoadedChunk} 在 HEAD 被
-     * {@link #hassium$shadowBridgeLoadedChunk} cancel 并转统一 Compare+Pull 桥。
-     */
-    @ModifyVariable(method = "playerLoadedChunk", at = @At("HEAD"), argsOnly = true, ordinal = 0)
-    private MutableObject<ClientboundLevelChunkWithLightPacket> hassium$skipVanillaPacketBuild(
-            MutableObject<ClientboundLevelChunkWithLightPacket> holder,
-            ServerPlayer player,
-            MutableObject<ClientboundLevelChunkWithLightPacket> ignored,
-            LevelChunk chunk) {
-        if (player == null
-                || !PlayerCompressionTracker.isCompressionEnabled(player)) {
-            return holder;
-        }
-        MutableObject<ClientboundLevelChunkWithLightPacket> isolated = new MutableObject<>();
-        isolated.setValue(hassium$dummyPacket(chunk));
-        return isolated;
-    }
-
-    /**
-     * 影子虚拟玩家交付桥（§6 节点 E/G → I）：原版链产出的柱注入影子表形成本地基线；
-     * seedGen 权威窗走 compare-before-deliver（先 mark，响应前不桥接）。
-     * 服务端裁决 UNCHANGED/DELTA/FULL 后经既有响应路径落地。
-     */
-    @Inject(method = "playerLoadedChunk", at = @At("HEAD"), cancellable = true)
-    private void hassium$shadowBridgeLoadedChunk(ServerPlayer player,
-            MutableObject<ClientboundLevelChunkWithLightPacket> holder, LevelChunk chunk,
-            CallbackInfo ci) {
-        if (!RuntimeServerContext.isShadowServerContext() || chunk == null) {
-            return;
-        }
-        // 先物化：seedGen defer 分支会写 SeedGenCompareGate，再决定是否桥接
-        hassium$notifyShadowMaterialized(chunk);
-        // S3 接法 B：官方包桥接真实客户端（awaiting-compare 时 forward 内也会拒）
-        Packet<?> packet = holder != null ? holder.getValue() : null;
-        if (packet == null && lightEngine != null) {
-            // 与 flush 序列化共用 chunkLock：否则 PalettedContainer ThreadingDetector
-            //（pack 线程 vs 本钩子 extractChunkData，1.20.1 实测 s3flyrt）。
-            final var engine = this.lightEngine;
-            packet = io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.withChunkLock(
-                    chunk.getPos(),
-                    () -> (Packet<?>) new ClientboundLevelChunkWithLightPacket(
-                            chunk, engine, null, null));
-        }
-        io.github.limuqy.mc.hassium.shadow.track.ShadowOfficialPacketBridge
-                .forwardToRealClient(packet,
-                        io.github.limuqy.mc.hassium.compat.LevelCompat
-                                .getDimensionId(player.level()));
-        ci.cancel();
-    }
-
-    @Unique
-    private ClientboundLevelChunkWithLightPacket hassium$dummyPacket(LevelChunk chunk) {
-        if (hassium$dummyChunkPacket == null && chunk != null && lightEngine != null) {
-            hassium$dummyChunkPacket = new ClientboundLevelChunkWithLightPacket(
-                    chunk, lightEngine, null, null);
-        }
-        return hassium$dummyChunkPacket;
-    }
-#endif
-
-#if MC_VER < MC_1_21_1
-    @Inject(method = "scheduleChunkLoad", at = @At("HEAD"), cancellable = true)
-    private void hassium$shortCircuitInjectLoad(ChunkPos pos,
-            CallbackInfoReturnable<CompletableFuture<Either<ChunkAccess, ChunkHolder.ChunkLoadingFailure>>> cir) {
-        if (!RuntimeServerContext.isShadowServerContext() || pos == null) {
-            return;
-        }
-        // S2：禁止有盘/有注入 Imposter 同步短路。始终悬置 future + Provider 异步 acquire
-        //（始终 compare/FULL）。SeedGen 门控开且 worldgen 允许时不压制，走原版生成链。
-        if (ShadowChunkMapCompat.isWorldgenAllowed()
-                || io.github.limuqy.mc.hassium.shadow.server.SeedGenExecutor.getInstance()
-                        .isGenerationGateOpen()) {
-            return;
-        }
-        String dimension = hassium$shadowDimension();
-        // S3：光照缓存客户端口径——读盘完整光=命中，否则重算（不短路 future）。
-        io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute
-                .accountLightAtScheduleLoad(dimension, pos);
-        CompletableFuture<Either<ChunkAccess, ChunkHolder.ChunkLoadingFailure>> suspended =
-                new CompletableFuture<>();
-        ShadowChunkMapCompat.registerSuspendedLoad(dimension, pos, suspended);
-        io.github.limuqy.mc.hassium.shadow.track.VanillaAlignedChunkProvider.getInstance()
-                .acquire(dimension, pos,
-                        io.github.limuqy.mc.hassium.shadow.track.ShadowChunkProvider.AcquireReason.TRACKING);
-        cir.setReturnValue(suspended);
-    }
-#else
     @Inject(method = "scheduleChunkLoad", at = @At("HEAD"), cancellable = true)
     private void hassium$shortCircuitInjectLoad(ChunkPos pos,
             CallbackInfoReturnable<CompletableFuture<ChunkAccess>> cir) {
@@ -176,22 +65,13 @@ public class MixinChunkMap {
      * 不跑 {@code MinecraftServer} 的 send-chunks 泵，必须在这里转 Compare+Pull 桥，
      * 否则 locallyGenerated 恒 0、生成柱永不 persist。
      */
-#if MC_VER < MC_1_21_2
-    @Inject(method = "onChunkReadyToSend(Lnet/minecraft/world/level/chunk/LevelChunk;)V",
-            at = @At("HEAD"))
-    private void hassium$shadowBridgeReadyToSend(LevelChunk chunk, CallbackInfo ci) {
-        hassium$notifyShadowMaterialized(chunk);
-    }
-#else
     @Inject(method = "onChunkReadyToSend(Lnet/minecraft/server/level/ChunkHolder;Lnet/minecraft/world/level/chunk/LevelChunk;)V",
             at = @At("HEAD"))
     private void hassium$shadowBridgeReadyToSend(net.minecraft.server.level.ChunkHolder holder,
             LevelChunk chunk, CallbackInfo ci) {
         hassium$notifyShadowMaterialized(chunk);
     }
-#endif
 
-#endif
 
     /** 影子区块物化桥：1.20.1={@code playerLoadedChunk}，1.21+={@code onChunkReadyToSend}。 */
     @Unique

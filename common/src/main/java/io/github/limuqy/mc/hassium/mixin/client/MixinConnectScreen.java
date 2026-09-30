@@ -20,14 +20,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(net.minecraft.client.gui.screens.ConnectScreen.class)
 public abstract class MixinConnectScreen {
 
-#if MC_VER < MC_1_21_1
-    @Inject(method = "startConnecting(Lnet/minecraft/client/gui/screens/Screen;Lnet/minecraft/client/Minecraft;Lnet/minecraft/client/multiplayer/resolver/ServerAddress;Lnet/minecraft/client/multiplayer/ServerData;Z)V",
-            at = @At("TAIL"))
-    private static void hassium$onStartConnecting(Screen parent, Minecraft minecraft, ServerAddress address,
-                                                 ServerData serverData, boolean quickPlay, CallbackInfo ci) {
-        ClientLifecycleHelper.onStartConnecting(serverData);
-    }
-#else
     @Inject(method = "startConnecting(Lnet/minecraft/client/gui/screens/Screen;Lnet/minecraft/client/Minecraft;Lnet/minecraft/client/multiplayer/resolver/ServerAddress;Lnet/minecraft/client/multiplayer/ServerData;ZLnet/minecraft/client/multiplayer/TransferState;)V",
             at = @At("TAIL"))
     private static void hassium$onStartConnecting(Screen parent, Minecraft minecraft, ServerAddress address,
@@ -36,5 +28,4 @@ public abstract class MixinConnectScreen {
                                                  CallbackInfo ci) {
         ClientLifecycleHelper.onStartConnecting(serverData);
     }
-#endif
 }
