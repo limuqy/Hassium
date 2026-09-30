@@ -22,7 +22,7 @@ class SeedGenCompareGateTest {
     @DisplayName("mark 后 blockClientDelivery 为 true；clear 后放行")
     void markBlocksUntilCleared() {
         ChunkPos pos = new ChunkPos(3, 5);
-        assertFalse(SeedGenCompareGate.blockClientDelivery("minecraft:overworld", pos.x, pos.z));
+        assertFalse(SeedGenCompareGate.blockClientDelivery("minecraft:overworld", pos.x(), pos.z()));
 
         SeedGenCompareGate.mark("minecraft:overworld", pos);
         assertTrue(SeedGenCompareGate.isAwaiting("minecraft:overworld", pos));

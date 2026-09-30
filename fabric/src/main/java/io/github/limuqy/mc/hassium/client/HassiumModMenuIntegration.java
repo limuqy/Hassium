@@ -28,6 +28,8 @@ public class HassiumModMenuIntegration implements ModMenuApi {
     }
 
     private static Screen openConfig(Screen parent) {
-        return HassiumClothConfigScreen.create(parent);
+        // 26.x：cloth-config 暂无对应构建，cloth-ui 未编入；cloth 构建就绪后恢复
+        // HassiumClothConfigScreen.create(parent)（历史见 git 与 docs/mc26-upgrade-plan.md）。
+        return null;
     }
 }

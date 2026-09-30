@@ -41,7 +41,7 @@ public class MixinClientLevel {
         if (mc.player == null) {
             DebugLogger.info(LogType.CHUNK_APPLY,
                     "[CHUNK_UNLOAD] eventMs={} target=({},{}) player=unavailable",
-                    System.currentTimeMillis(), pos.x, pos.z);
+                    System.currentTimeMillis(), pos.x(), pos.z());
             return;
         }
         int playerX = (int) Math.floor(mc.player.getX());
@@ -49,6 +49,6 @@ public class MixinClientLevel {
         int playerZ = (int) Math.floor(mc.player.getZ());
         DebugLogger.info(LogType.CHUNK_APPLY,
                 "[CHUNK_UNLOAD] eventMs={} target=({},{}) playerBlock=({},{},{}) playerChunk=({},{})",
-                System.currentTimeMillis(), pos.x, pos.z, playerX, playerY, playerZ, playerX >> 4, playerZ >> 4);
+                System.currentTimeMillis(), pos.x(), pos.z(), playerX, playerY, playerZ, playerX >> 4, playerZ >> 4);
     }
 }

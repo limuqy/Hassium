@@ -27,8 +27,8 @@ public final class ShadowPullServer {
     public static ShadowPullResponseS2CPacket handleRequest(ShadowPullHandler handler, ServerPlayer player,
                                                             ShadowPullRequestC2SPacket request) {
         String dimension = LevelCompat.getDimensionId(player.level());
-        return handler.handle(player.getUUID(), request, dimension, request.epoch(), player.chunkPosition().x,
-                player.chunkPosition().z,
+        return handler.handle(player.getUUID(), request, dimension, request.epoch(), player.chunkPosition().x(),
+                player.chunkPosition().z(),
                 PlayerCompat.getViewDistance(player) + ShadowPullRadii.AUTHORITY_MARGIN,
                 true, player.isAlive() && !player.hasDisconnected(),
                 (req, entry) -> ServerChunkPushManager.getInstance().resolveShadowPull(player, req, entry, dimension));

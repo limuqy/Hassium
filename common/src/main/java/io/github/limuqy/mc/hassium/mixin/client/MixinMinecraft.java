@@ -24,8 +24,10 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class MixinMinecraft {
 
     /**
-     * T0b 诊断：加载屏消退时刻（ReceivingLevelScreen 被替换为非加载屏，含 setScreen(null)）。
+     * T0b 诊断：加载屏消退时刻（ReceivingLevelScreen/LevelLoadingScreen 被替换为非加载屏）。
+     * 仅 26.1.2：屏幕状态在 Minecraft.screen + Minecraft.setScreen；26.2+ 迁入 Gui（见 MixinGui）。
      */
+#if MC_VER < MC_26_2
     @Inject(method = "setScreen(Lnet/minecraft/client/gui/screens/Screen;)V", at = @At("HEAD"))
     private void hassium$onSetScreen(net.minecraft.client.gui.screens.Screen screen, CallbackInfo ci) {
         net.minecraft.client.gui.screens.Screen current = ((Minecraft) (Object) this).screen;
@@ -37,6 +39,7 @@ public abstract class MixinMinecraft {
             io.github.limuqy.mc.hassium.utils.LoginTiming.onLoadingScreenDismissed();
         }
     }
+#endif
 
     /**
      * 断连缓存落盘（dump），在世界拆除之前触发——手动登出（PauseScreen 保存并退出 →

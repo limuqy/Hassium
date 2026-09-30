@@ -1,5 +1,7 @@
 package io.github.limuqy.mc.hassium.shadow.server;
 
+import io.github.limuqy.mc.hassium.compat.ChunkLightPacketCompat;
+
 import io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession;
 import io.github.limuqy.mc.hassium.shadow.track.ShadowChunkSource;
 import io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute;
@@ -15,6 +17,7 @@ import io.github.limuqy.mc.hassium.shadow.storage.RegionCache;
 import com.mojang.logging.LogUtils;
 import io.github.limuqy.mc.hassium.compat.BlockEntityCompat;
 import io.github.limuqy.mc.hassium.compat.ChunkDataCompat;
+import io.github.limuqy.mc.hassium.compat.ChunkPacketDataCompat;
 import io.github.limuqy.mc.hassium.compat.LevelCompat;
 import io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat;
 import io.github.limuqy.mc.hassium.compat.ShadowServerCompat;
@@ -30,6 +33,7 @@ import java.net.Proxy;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.locks.LockSupport;
 import java.util.function.BooleanSupplier;
 import net.minecraft.CrashReport;
@@ -42,6 +46,7 @@ import net.minecraft.core.SectionPos;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.notifications.NotificationManager;
 import net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket;
 import net.minecraft.network.protocol.game.ClientboundBlockUpdatePacket;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkPacketData;
@@ -176,11 +181,30 @@ public class ShadowSeedServer extends MinecraftServer {
                              WorldStem stem,
                              long seed,
                              java.nio.file.Path worldRoot) {
-        super(thread, access, repo, stem, Proxy.NO_PROXY, DataFixers.getDataFixer(), NO_SERVICES,
-                SeedGenLevelCompat.chunkProgressArg());
+        // 26.x：ctor 含 Optional<GameRules>（empty → 按 worldData 特性集取默认规则）与
+        // propagatesCrashes=false（影子线程异常不外溢宿主 JVM）；
+        // 26.2+ 尾参再加 NotificationManager（无通知服务），26.1.2 无此形参。
+        // super() 参数表 arity 不可经 compat 收口，#if 留在本类（同 createLevels 豁免）。
+#if MC_VER >= MC_26_2
+        super(thread, access, repo, stem, Optional.empty(), Proxy.NO_PROXY, DataFixers.getDataFixer(),
+                NO_SERVICES, SeedGenLevelCompat.chunkProgressArg(), false, new NotificationManager());
+#else
+        super(thread, access, repo, stem, Optional.empty(), Proxy.NO_PROXY, DataFixers.getDataFixer(),
+                NO_SERVICES, SeedGenLevelCompat.chunkProgressArg(), false);
+#endif
         this.stem = stem;
         this.worldSeed = seed;
         this.worldRoot = worldRoot;
+    }
+
+    // 以下两个方法覆写 26.2+ MinecraftServer 的抽象方法（GameTestServer 同款返回 0）；
+    // 26.1.2 无此抽象——不加 @Override 以零 #if 跨锚点（影子端无聊天/命令转发）。
+    public int getChatSpamThresholdSeconds() {
+        return 0;
+    }
+
+    public int getCommandSpamThresholdSeconds() {
+        return 0;
     }
 
     static ShadowSeedServer create(Thread thread,
@@ -248,7 +272,8 @@ public class ShadowSeedServer extends MinecraftServer {
      */
     void saveWorldData() {
         try {
-            this.storageSource.saveDataTag(this.registryAccess(), this.worldData);
+            // 26.3：saveDataTag 收窄为单参（WorldData），registryAccess 由内部自取
+            this.storageSource.saveDataTag(this.worldData);
             LOGGER.info("Hassium: Shadow level.dat saved (seed={})", worldSeed);
         } catch (Throwable t) {
             LOGGER.warn("Hassium: Shadow level.dat save failed", t);
@@ -308,7 +333,7 @@ public class ShadowSeedServer extends MinecraftServer {
                     .addTicketWithRadius(net.minecraft.server.level.TicketType.FORCED, pos, 0);
             return true;
         } catch (Throwable t) {
-            LOGGER.warn("Hassium: pin FORCED ticket failed ({}, {})", pos.x, pos.z, t);
+            LOGGER.warn("Hassium: pin FORCED ticket failed ({}, {})", pos.x(), pos.z(), t);
             return false;
         }
     }
@@ -393,7 +418,7 @@ public class ShadowSeedServer extends MinecraftServer {
             try {
                 chunk = generateChunk(dimension, pos);
             } catch (Throwable t) {
-                LOGGER.warn("Hassium: local generate failed ({}, {}) dim={}", pos.x, pos.z, dimension, t);
+                LOGGER.warn("Hassium: local generate failed ({}, {}) dim={}", pos.x(), pos.z(), dimension, t);
                 chunk = null;
             }
             final LevelChunk result = chunk;
@@ -463,13 +488,13 @@ public class ShadowSeedServer extends MinecraftServer {
 
 
     public boolean injectChunk(String dimension, ChunkPos pos, ClientboundLevelChunkWithLightPacket packet) {
-        long key = DimensionKey.key(dimension, pos.x, pos.z);
+        long key = DimensionKey.key(dimension, pos.x(), pos.z());
         LevelChunk previous = this.injectedChunks.get(key);
         try {
             ServerLevel level = level(dimension);
             if (level == null) {
                 LOGGER.warn("Hassium: Shadow inject skipped for ({}, {}): dimension {} not assembled",
-                        pos.x, pos.z, dimension);
+                        pos.x(), pos.z(), dimension);
                 return false;
             }
             boolean fresh = previous == null;
@@ -511,34 +536,25 @@ public class ShadowSeedServer extends MinecraftServer {
         // initializeLightSources / BE → ServerLevel.getChunk，把 Proto 强转 LevelChunk。
         // 必须先让 getChunk mixin 命中本柱，decode 失败再还原。
         this.injectedChunks.put(key, chunk);
-        ClientboundLevelChunkPacketData data = packet.getChunkData();
-        // 显式把 section 读游标复位到 0：getReadBuffer() 返回的是包内 byte[] 的
-        // 新包装，正常应本来就是 0，但这里不依赖该假设——防止某些 Netty/FriendlyByteBuf
-        // 路径把 readerIndex 留在尾部导致整柱 section 全部被跳过（区块只剩高度图/空气）。
-        FriendlyByteBuf sectionBuf = data.getReadBuffer();
-        sectionBuf.readerIndex(0);
-        int sectionBytes = sectionBuf.readableBytes();
-        chunk.replaceWithPacketData(sectionBuf, data.getHeightmaps(),
-                data.getBlockEntitiesTagsConsumer(pos.x, pos.z));
+        ClientboundLevelChunkPacketData data = ChunkLightPacketCompat.chunkData(packet);
+        int sectionBytes = data.getReadBuffer().readableBytes();
+        ChunkPacketDataCompat.applyToChunk(chunk, pos.x(), pos.z(), data);
         int nonAirSections = countNonAirSections(chunk);
-        // 防御：包内确实有 section 字节却解析成整柱空气时，用全新的 LevelChunk 和
-        // 全新的 read buffer 再试一次（不沿用可能已被推进/污染的包装）。
+        // 防御：包内确实有 section 字节却解析成整柱空气时，用全新的 LevelChunk 重试一次
+        //（26.1.2–26.2 的 getReadBuffer() 包装可能被推进污染；26.3 重试无害）。
         if (nonAirSections == 0 && sectionBytes > 0) {
             DebugLogger.warn(DebugLogger.LogType.ASYNC,
-                    "[SHADOW_INJECT] Empty sections detected for ({}, {}), retrying with fresh read buffer "
+                    "[SHADOW_INJECT] Empty sections detected for ({}, {}), retrying with fresh chunk "
                             + "(sections={}, sectionBytes={}, heightmapKeys={})",
-                    pos.x, pos.z, chunk.getSections().length, sectionBytes, data.getHeightmaps().size());
+                    pos.x(), pos.z(), chunk.getSections().length, sectionBytes, data.getHeightmaps().size());
             chunk = new LevelChunk(level, pos);
             this.injectedChunks.put(key, chunk);
-            FriendlyByteBuf retryBuf = data.getReadBuffer();
-            retryBuf.readerIndex(0);
-            chunk.replaceWithPacketData(retryBuf, data.getHeightmaps(),
-                    data.getBlockEntitiesTagsConsumer(pos.x, pos.z));
+            ChunkPacketDataCompat.applyToChunk(chunk, pos.x(), pos.z(), data);
             nonAirSections = countNonAirSections(chunk);
         }
         DebugLogger.debug(DebugLogger.LogType.ASYNC,
                 "[SHADOW_INJECT] pos=({},{}) sections={} nonAirSections={} sectionBytes={} heightmapKeys={}",
-                pos.x, pos.z, chunk.getSections().length, nonAirSections, sectionBytes,
+                pos.x(), pos.z(), chunk.getSections().length, nonAirSections, sectionBytes,
                 data.getHeightmaps().size());
         // 网络注入：packet 内容可能与磁盘表 hash 不同，必须现算并覆盖。
         // 读盘柱走 injectLoadedChunk，hash 已由 MixinRegionFile 回填，禁止在此重复现算。
@@ -585,7 +601,7 @@ public class ShadowSeedServer extends MinecraftServer {
         this.execute(() -> {
             try {
                 ServerLevel level = level(dimension);
-                if (level == null || injectedChunk(dimension, pos.x, pos.z) == null) {
+                if (level == null || injectedChunk(dimension, pos.x(), pos.z()) == null) {
                     result.complete(null);
                     return;
                 }
@@ -595,7 +611,7 @@ public class ShadowSeedServer extends MinecraftServer {
                             if (failure != null) {
                                 result.completeExceptionally(failure);
                             } else {
-                                result.complete(injectedChunk(dimension, pos.x, pos.z));
+                                result.complete(injectedChunk(dimension, pos.x(), pos.z()));
                             }
                         });
             } catch (Throwable failure) {
@@ -863,9 +879,9 @@ public class ShadowSeedServer extends MinecraftServer {
         // 变更 section 清光投递与光屏障互斥（同 clearChunkLight；2026-08-14 NPE 同源）。
         synchronized (ShadowLightCompute.LIGHT_ENGINE_MUTEX) {
             try {
-            LevelChunk chunk = injectedChunks.get(DimensionKey.key(dimension, pos.x, pos.z));
+            LevelChunk chunk = injectedChunks.get(DimensionKey.key(dimension, pos.x(), pos.z()));
             if (chunk == null) {
-                LOGGER.debug("Hassium: Shadow applySectionDelta chunk not injected ({}, {})", pos.x, pos.z);
+                LOGGER.debug("Hassium: Shadow applySectionDelta chunk not injected ({}, {})", pos.x(), pos.z());
                 return false;
             }
             // 增量应用会就地覆盖 section/heightmap/BE/光，标记为需要 saveAll 重写。
@@ -888,7 +904,7 @@ public class ShadowSeedServer extends MinecraftServer {
                         }
                     } else {
                         LOGGER.debug("Hassium: Shadow applySectionDelta unknown kind {} ({}, {})",
-                                sd.kind(), pos.x, pos.z);
+                                sd.kind(), pos.x(), pos.z());
                         SectionDeltaSnapshots.invalidate(dimension, pos);
                         return false;
                     }
@@ -935,7 +951,7 @@ public class ShadowSeedServer extends MinecraftServer {
                                 .computeSectionHashes(chunk));
                 if (contentHash != entry.expectedChunkHash()) {
                     LOGGER.debug("Hassium: Shadow applySectionDelta hash mismatch ({}, {}): got={} expected={}",
-                            pos.x, pos.z, Long.toHexString(contentHash),
+                            pos.x(), pos.z(), Long.toHexString(contentHash),
                             Long.toHexString(entry.expectedChunkHash()));
                     SectionDeltaSnapshots.invalidate(dimension, pos);
                     return false;
@@ -1010,7 +1026,7 @@ public class ShadowSeedServer extends MinecraftServer {
                             long key = DimensionKey.key(dimension, pos.getX() >> 4, pos.getZ() >> 4);
                             LevelChunk chunk = injectedChunks.get(key);
                             if (chunk != null) {
-                                ChunkPos cp = new ChunkPos(pos);
+                                ChunkPos cp = new ChunkPos(pos.getX() >> 4, pos.getZ() >> 4);
                                 // 禁止 level.setBlock：会邻接更新并 scheduleTick，
                                 // 影子端 ChunkMap 未加载邻柱时 1.21.2+ 刷
                                 // "Trying to schedule tick in not loaded position" ERROR。
@@ -1106,7 +1122,7 @@ public class ShadowSeedServer extends MinecraftServer {
         if (dimension == null || pos == null) {
             return null;
         }
-        long decodeKey = io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z);
+        long decodeKey = io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x(), pos.z());
         java.util.concurrent.CompletableFuture<LevelChunk> mine = new java.util.concurrent.CompletableFuture<>();
         java.util.concurrent.CompletableFuture<LevelChunk> running =
                 inFlightDiskDecodes.putIfAbsent(decodeKey, mine);
@@ -1115,7 +1131,7 @@ public class ShadowSeedServer extends MinecraftServer {
                 return running.join();
             } catch (java.util.concurrent.CompletionException
                      | java.util.concurrent.CancellationException e) {
-                LOGGER.debug("Hassium: shared loadFromDisk failed for ({}, {})", pos.x, pos.z, e);
+                LOGGER.debug("Hassium: shared loadFromDisk failed for ({}, {})", pos.x(), pos.z(), e);
                 return null;
             }
         }
@@ -1245,7 +1261,7 @@ public class ShadowSeedServer extends MinecraftServer {
             if (elapsed >= DISK_READ_STUCK_WARN_MS) {
                 stuckEntries.add(inf);
                 if (stuck.size() < 8) {
-                    stuck.add("(" + inf.pos().x + "," + inf.pos().z + ") " + elapsed + "ms "
+                    stuck.add("(" + inf.pos().x() + "," + inf.pos().z() + ") " + elapsed + "ms "
                             + inf.dimension());
                 }
             }
@@ -1283,7 +1299,7 @@ public class ShadowSeedServer extends MinecraftServer {
             StringBuilder sb = new StringBuilder(1024);
             sb.append("Hassium: [SHADOW_DISK] stuck-read stack #").append(dumped)
                     .append(" thread=").append(t.getName())
-                    .append(" chunk=(").append(inf.pos().x).append(',').append(inf.pos().z).append(')')
+                    .append(" chunk=(").append(inf.pos().x()).append(',').append(inf.pos().z()).append(')')
                     .append(" dim=").append(inf.dimension())
                     .append(" elapsedMs=").append(System.currentTimeMillis() - inf.startMs());
             StackTraceElement[] frames = t.getStackTrace();
@@ -1305,7 +1321,7 @@ public class ShadowSeedServer extends MinecraftServer {
         if ((n == 1L || now - last >= 5_000L) && DISK_READ_ANOMALY_LOG_MS.compareAndSet(last, now)) {
             LOGGER.warn("Hassium: shadow disk read {} ({}, {}) treated as no-cache — total {}; "
                             + "if this keeps growing the shadow read path is stuck (handoff §8.5)",
-                    kind, pos.x, pos.z, n);
+                    kind, pos.x(), pos.z(), n);
         }
     }
 
@@ -1339,7 +1355,7 @@ public class ShadowSeedServer extends MinecraftServer {
         }
         java.util.concurrent.atomic.AtomicBoolean settled =
                 new java.util.concurrent.atomic.AtomicBoolean(false);
-        long inflightKey = DimensionKey.key(dimension, pos.x, pos.z);
+        long inflightKey = DimensionKey.key(dimension, pos.x(), pos.z());
         DISK_READ_ENTERED.incrementAndGet();
         // 护栏②：硬超时。到期即按无缓存回调；许可**不归还**（读盘线程仍在跑）。
         DISK_READ_TIMER.schedule(() -> {
@@ -1358,7 +1374,7 @@ public class ShadowSeedServer extends MinecraftServer {
             try {
                 loaded = loadFromDisk(dimension, pos);
             } catch (Throwable t) {
-                LOGGER.debug("Hassium: async loadFromDisk failed for ({}, {})", pos.x, pos.z, t);
+                LOGGER.debug("Hassium: async loadFromDisk failed for ({}, {})", pos.x(), pos.z(), t);
             } finally {
                 // 读盘段已结束（成败都算）→ 归还额度 + 摘在途登记。
                 // 卡死时走不到这里：额度被永久占用（自旋受害面上限），在途登记也留着供看门狗报点。
@@ -1533,7 +1549,7 @@ public class ShadowSeedServer extends MinecraftServer {
         if (chunk == null || pos == null) {
             return;
         }
-        long key = DimensionKey.key(dimension, pos.x, pos.z);
+        long key = DimensionKey.key(dimension, pos.x(), pos.z());
         if (dirty) {
             io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes.markContentDirty(key);
         } else {
@@ -1596,7 +1612,7 @@ public class ShadowSeedServer extends MinecraftServer {
         }
         ChunkPos pos = chunk.getPos();
         String dimension = LevelCompat.getDimensionId(chunkLevel(chunk));
-        long key = io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z);
+        long key = io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x(), pos.z());
         // 【I2 唯一收口（2026-09-19）】只有「3×3 全在场时算出的光」才是权威的，才允许标
         // isLightCorrect=true。本方法是全仓**唯一**把该标志置真的地方（另两个调用点
         // persistAfterClientLightPush / confirmLightsCorrectIfConverged 都经此），
@@ -1608,7 +1624,7 @@ public class ShadowSeedServer extends MinecraftServer {
             if (withheldLogged.add(key)) {
                 DebugLogger.info(DebugLogger.LogType.LIGHT,
                         "[SHADOW_LIGHT] withhold isLightCorrect (not authoritative) ({}, {}) dim={}",
-                        pos.x, pos.z, dimension);
+                        pos.x(), pos.z(), dimension);
             }
             return;
         }
@@ -1641,7 +1657,7 @@ public class ShadowSeedServer extends MinecraftServer {
 
 
     public void setPersistenceRole(String dimension, ChunkPos pos, ShadowChunkPersistenceRole role) {
-        long key = DimensionKey.key(dimension, pos.x, pos.z);
+        long key = DimensionKey.key(dimension, pos.x(), pos.z());
     }
     public boolean saveChunkToDisk(ChunkPos pos, LevelChunk chunk) {
         return saveChunkToDisk(DimensionKey.OVERWORLD, pos, chunk);
@@ -1754,7 +1770,7 @@ public class ShadowSeedServer extends MinecraftServer {
         }
         LevelChunk chunk = ShadowChunkMapCompat.fullLevelChunkIfPresent(level(dimension), pos);
         if (chunk == null) {
-            chunk = injectedChunks.get(DimensionKey.key(dimension, pos.x, pos.z));
+            chunk = injectedChunks.get(DimensionKey.key(dimension, pos.x(), pos.z()));
         }
         if (chunk == null) {
             return null;
@@ -1781,7 +1797,7 @@ public class ShadowSeedServer extends MinecraftServer {
             net.minecraft.nbt.NbtIo.write(nbt, new java.io.DataOutputStream(baos));
             return baos.toByteArray();
         } catch (Throwable t) {
-            LOGGER.warn("Hassium: Shadow column serialize failed for ({}, {})", pos.x, pos.z, t);
+            LOGGER.warn("Hassium: Shadow column serialize failed for ({}, {})", pos.x(), pos.z(), t);
             return null;
         }
     }
@@ -1851,7 +1867,7 @@ public class ShadowSeedServer extends MinecraftServer {
                 io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager.DEFAULT_FLUSH_TIMEOUT_MS)) {
             return false;
         }
-        long key = DimensionKey.key(dimension, pos.x, pos.z);
+        long key = DimensionKey.key(dimension, pos.x(), pos.z());
         injectedChunks.remove(key, chunk);
         if (unmountIdle && mgr != null) {
             mgr.unmountIdleRegions();
@@ -2316,7 +2332,7 @@ public class ShadowSeedServer extends MinecraftServer {
 
     /** 删除指定维度磁盘区块（缓存清理调用，任意线程）。 */
     public void deleteChunk(String dimension, ChunkPos pos) {
-        long key = DimensionKey.key(dimension, pos.x, pos.z);
+        long key = DimensionKey.key(dimension, pos.x(), pos.z());
         injectedChunks.remove(key);
         // 磁盘清理连带摘注入表（B4 占位标记已删除）
         if (!ownShutdownInProgress
@@ -2347,7 +2363,7 @@ public class ShadowSeedServer extends MinecraftServer {
         try {
             java.nio.file.Files.deleteIfExists(
                     io.github.limuqy.mc.hassium.shadow.storage.RegionCache.regionFileByKey(
-                            regionDir(dimension), net.minecraft.world.level.ChunkPos.asLong(regionX, regionZ)));
+                            regionDir(dimension), net.minecraft.world.level.ChunkPos.pack(regionX, regionZ)));
         } catch (Exception e) {
             LOGGER.debug("Hassium: deleteRegion file failed dim={} r.{}.{}", dimension, regionX, regionZ, e);
         }

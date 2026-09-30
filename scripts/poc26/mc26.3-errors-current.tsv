@@ -1,0 +1,62 @@
+/common/src/main/java/io/github/limuqy/mc/hassium/command/HassiumCommandHandler.java|297|找不到符号|
+/common/src/main/java/io/github/limuqy/mc/hassium/command/HassiumCommandHandler.java|303|找不到符号|
+/common/src/main/java/io/github/limuqy/mc/hassium/compat/ChunkPacketDataCompat.java|173|找不到符号|
+/common/src/main/java/io/github/limuqy/mc/hassium/compat/ChunkPacketDataCompat.java|174|找不到符号|
+/common/src/main/java/io/github/limuqy/mc/hassium/compat/ChunkPacketDataCompat.java|272|找不到符号|
+/common/src/main/java/io/github/limuqy/mc/hassium/compat/ChunkPacketDataCompat.java|273|找不到符号|
+/common/src/main/java/io/github/limuqy/mc/hassium/compat/ChunkPacketDataCompat.java|292|找不到符号|
+/common/src/main/java/io/github/limuqy/mc/hassium/compat/ChunkPacketDataCompat.java|293|找不到符号|
+/common/src/main/java/io/github/limuqy/mc/hassium/compat/ClientLoadingScreenCompat.java|27|找不到符号|
+/common/src/main/java/io/github/limuqy/mc/hassium/compat/PacketCodecCompat.java|223|不兼容的类型: Context 不是函数接口|
+/common/src/main/java/io/github/limuqy/mc/hassium/shadow/server/ShadowSeedServer.java|85|ShadowSeedServer不是抽象的, 并且未覆盖MinecraftServer中的抽象方法getChatSpamThresholdSeconds()|
+/common/src/main/java/io/github/limuqy/mc/hassium/shadow/server/ShadowSeedServer.java|179|无法将类 MinecraftServer中的构造器 MinecraftServer应用到给定类型;|
+/common/src/main/java/io/github/limuqy/mc/hassium/shadow/server/ShadowSeedServer.java|179|不兼容的类型: Proxy无法转换为Optional<GameRules>|
+/common/src/main/java/io/github/limuqy/mc/hassium/shadow/server/ShadowSeedServer.java|251|不兼容的类型: Frozen无法转换为WorldData|
+/common/src/main/java/io/github/limuqy/mc/hassium/shadow/server/ShadowSeedServer.java|522|找不到符号|
+/common/src/main/java/io/github/limuqy/mc/hassium/shadow/server/ShadowSeedServer.java|536|找不到符号|
+/common/src/main/java/io/github/limuqy/mc/hassium/shadow/server/ShadowSeedServer.java|1013|不兼容的类型: BlockPos无法转换为long|
+/common/src/main/java/io/github/limuqy/mc/hassium/mixin/client/MixinClientPacketListener.java|182|不兼容的类型: Vec3无法转换为PositionPath|
+/common/src/main/java/io/github/limuqy/mc/hassium/mixin/client/MixinClientPacketListener.java|202|找不到符号|
+/common/src/main/java/io/github/limuqy/mc/hassium/mixin/client/MixinMinecraft.java|31|找不到符号|
+/common/src/main/java/io/github/limuqy/mc/hassium/server/ServerChunkPushManager.java|855|对于ClientboundLightUpdatePacketData(FriendlyByteBuf,int,int), 找不到合适的构造器|
+/common/src/main/java/io/github/limuqy/mc/hassium/shadow/light/ShadowLightProbe.java|194|找不到符号|
+/common/src/main/java/io/github/limuqy/mc/hassium/shadow/light/ShadowLightProbe.java|195|找不到符号|
+/common/src/main/java/io/github/limuqy/mc/hassium/shadow/server/SeedGenLevelCompat.java|161|无法将记录 LevelSettings中的构造器 LevelSettings应用到给定类型;|
+/common/src/main/java/io/github/limuqy/mc/hassium/shadow/server/SeedGenLevelCompat.java|248|找不到符号|
+/common/src/main/java/io/github/limuqy/mc/hassium/shadow/server/SeedGenLevelCompat.java|289|对于PrimaryLevelData(LevelSettings,WorldOptions,SpecialWorldProperty,Lifecycle), 找不到合适的构造器|
+/common/src/main/java/io/github/limuqy/mc/hassium/shadow/server/SeedGenLevelCompat.java|282|不兼容的类型: 推论变量 D 具有不兼容的上限|
+/common/src/main/java/io/github/limuqy/mc/hassium/shadow/server/SeedGenLevelCompat.java|343|找不到符号|
+/common/src/main/java/io/github/limuqy/mc/hassium/shadow/server/ShadowServerRegistry.java|444|找不到符号|
+/common/src/main/java/io/github/limuqy/mc/hassium/shadow/track/ShadowOfficialPacketBridge.java|78|找不到符号|
+/common/src/main/java/io/github/limuqy/mc/hassium/shadow/track/ShadowOfficialPacketBridge.java|78|找不到符号|
+/common/src/main/java/io/github/limuqy/mc/hassium/shadow/server/ShadowSeedServer.java|179|无法将类 MinecraftServer中的构造器 MinecraftServer应用到给定类型;|需要: Thread,LevelStorageSource.LevelStorageAccess,PackRepository,WorldStem,Optional<GameRules>,Proxy,DataFixer,Services,LevelLoadListener,boolean,NotificationManager ~ 找到:    Thread,LevelStorageSource.LevelStorageAccess,PackRepository,WorldStem,Proxy,DataFixer,Services,LoggingLevelLoadListener
+/common/src/main/java/io/github/limuqy/mc/hassium/shadow/server/SeedGenLevelCompat.java|161|无法将记录 LevelSettings中的构造器 LevelSettings应用到给定类型;|需要: String,GameType,DifficultySettings,boolean,WorldDataConfiguration ~ 找到:    String,GameType,boolean,Difficulty,boolean,GameRules,WorldDataConfiguration
+/common/src/main/java/io/github/limuqy/mc/hassium/server/ServerChunkPushManager.java|855|对于ClientboundLightUpdatePacketData(FriendlyByteBuf,int,int), 找不到合适的构造器|
+/common/src/main/java/io/github/limuqy/mc/hassium/shadow/server/SeedGenLevelCompat.java|289|对于PrimaryLevelData(LevelSettings,WorldOptions,SpecialWorldProperty,Lifecycle), 找不到合适的构造器|
+/common/src/main/java/io/github/limuqy/mc/hassium/shadow/server/ShadowSeedServer.java|85|ShadowSeedServer不是抽象的, 并且未覆盖MinecraftServer中的抽象方法getChatSpamThresholdSeconds()|
+/common/src/main/java/io/github/limuqy/mc/hassium/compat/PacketCodecCompat.java|223|不兼容的类型: Context 不是函数接口|
+/common/src/main/java/io/github/limuqy/mc/hassium/shadow/server/ShadowSeedServer.java|179|不兼容的类型: Proxy无法转换为Optional<GameRules>|
+/common/src/main/java/io/github/limuqy/mc/hassium/shadow/server/ShadowSeedServer.java|251|不兼容的类型: Frozen无法转换为WorldData|
+/common/src/main/java/io/github/limuqy/mc/hassium/shadow/server/ShadowSeedServer.java|1013|不兼容的类型: BlockPos无法转换为long|
+/common/src/main/java/io/github/limuqy/mc/hassium/mixin/client/MixinClientPacketListener.java|182|不兼容的类型: Vec3无法转换为PositionPath|
+/common/src/main/java/io/github/limuqy/mc/hassium/shadow/server/SeedGenLevelCompat.java|282|不兼容的类型: 推论变量 D 具有不兼容的上限|
+/common/src/main/java/io/github/limuqy/mc/hassium/compat/ClientLoadingScreenCompat.java|27|找不到符号|符号:   变量 screen ~ 位置: 类型为Minecraft的变量 mc
+/common/src/main/java/io/github/limuqy/mc/hassium/mixin/client/MixinMinecraft.java|31|找不到符号|符号:   变量 screen ~ 位置: 类 Minecraft
+/common/src/main/java/io/github/limuqy/mc/hassium/command/HassiumCommandHandler.java|297|找不到符号|符号:   方法 getChat() ~ 位置: 类型为Gui的变量 gui
+/common/src/main/java/io/github/limuqy/mc/hassium/command/HassiumCommandHandler.java|303|找不到符号|符号:   方法 getChat() ~ 位置: 类型为Gui的变量 gui
+/common/src/main/java/io/github/limuqy/mc/hassium/compat/ChunkPacketDataCompat.java|173|找不到符号|符号:   方法 writeCollection(List<byte[]>,(b,arr)->b[...](arr)) ~ 位置: 类型为FriendlyByteBuf的变量 buf
+/common/src/main/java/io/github/limuqy/mc/hassium/compat/ChunkPacketDataCompat.java|174|找不到符号|符号:   方法 writeCollection(List<byte[]>,(b,arr)->b[...](arr)) ~ 位置: 类型为FriendlyByteBuf的变量 buf
+/common/src/main/java/io/github/limuqy/mc/hassium/compat/ChunkPacketDataCompat.java|272|找不到符号|符号:   方法 writeCollection(ArrayList<byte[]>,(b,arr)->b[...](arr)) ~ 位置: 类型为FriendlyByteBuf的变量 buf
+/common/src/main/java/io/github/limuqy/mc/hassium/compat/ChunkPacketDataCompat.java|273|找不到符号|符号:   方法 writeCollection(ArrayList<byte[]>,(b,arr)->b[...](arr)) ~ 位置: 类型为FriendlyByteBuf的变量 buf
+/common/src/main/java/io/github/limuqy/mc/hassium/compat/ChunkPacketDataCompat.java|292|找不到符号|符号:   方法 readCollection(java.util.[...]::new,ChunkPacke[...]Array) ~ 位置: 类型为FriendlyByteBuf的变量 buf
+/common/src/main/java/io/github/limuqy/mc/hassium/compat/ChunkPacketDataCompat.java|293|找不到符号|符号:   方法 readCollection(java.util.[...]::new,ChunkPacke[...]Array) ~ 位置: 类型为FriendlyByteBuf的变量 buf
+/common/src/main/java/io/github/limuqy/mc/hassium/shadow/server/ShadowSeedServer.java|522|找不到符号|符号:   方法 getBlockEntitiesTagsConsumer(int,int) ~ 位置: 类型为ClientboundLevelChunkPacketData的变量 data
+/common/src/main/java/io/github/limuqy/mc/hassium/shadow/server/ShadowSeedServer.java|536|找不到符号|符号:   方法 getBlockEntitiesTagsConsumer(int,int) ~ 位置: 类型为ClientboundLevelChunkPacketData的变量 data
+/common/src/main/java/io/github/limuqy/mc/hassium/mixin/client/MixinClientPacketListener.java|202|找不到符号|符号:   方法 setInterpolationLength(int) ~ 位置: 类型为InterpolationHandler的变量 interpolation
+/common/src/main/java/io/github/limuqy/mc/hassium/shadow/light/ShadowLightProbe.java|194|找不到符号|符号:   方法 getSkyUpdates() ~ 位置: 类 ClientboundLightUpdatePacketData
+/common/src/main/java/io/github/limuqy/mc/hassium/shadow/light/ShadowLightProbe.java|195|找不到符号|符号:   方法 getBlockUpdates() ~ 位置: 类 ClientboundLightUpdatePacketData
+/common/src/main/java/io/github/limuqy/mc/hassium/shadow/server/SeedGenLevelCompat.java|248|找不到符号|符号:   方法 datapackWorldgen() ~ 位置: 类型为DataLoadContext的变量 dataLoadContext
+/common/src/main/java/io/github/limuqy/mc/hassium/shadow/server/SeedGenLevelCompat.java|343|找不到符号|符号:   方法 datapackWorldgen() ~ 位置: 类型为DataLoadContext的变量 dataLoadContext
+/common/src/main/java/io/github/limuqy/mc/hassium/shadow/server/ShadowServerRegistry.java|444|找不到符号|符号:   方法 displayClientMessage(MutableComponent,boolean) ~ 位置: 类型为LocalPlayer的变量 player
+/common/src/main/java/io/github/limuqy/mc/hassium/shadow/track/ShadowOfficialPacketBridge.java|78|找不到符号|符号:   方法 getX() ~ 位置: 类型为ClientboundLightUpdatePacket的变量 lightPacket
+/common/src/main/java/io/github/limuqy/mc/hassium/shadow/track/ShadowOfficialPacketBridge.java|78|找不到符号|符号:   方法 getZ() ~ 位置: 类型为ClientboundLightUpdatePacket的变量 lightPacket

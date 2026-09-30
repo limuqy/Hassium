@@ -1,5 +1,7 @@
 package io.github.limuqy.mc.hassium.shadow.light;
 
+import io.github.limuqy.mc.hassium.compat.ChunkLightPacketCompat;
+
 import io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer;
 import io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry;
 
@@ -65,7 +67,7 @@ public final class ShadowLightProbe {
     }
 
     private static boolean isProbeChunk(ChunkPos pos) {
-        return pos != null && pos.x == CHUNK_X && pos.z == CHUNK_Z;
+        return pos != null && pos.x() == CHUNK_X && pos.z() == CHUNK_Z;
     }
 
     /** 包内可见：接缝补光是否命中探针柱（onSeamRelight 内部再查 enabled）。 */
@@ -84,7 +86,7 @@ public final class ShadowLightProbe {
         }
         try {
             Constants.LOG.info("{}SEAM target=({},{}) source=({},{}) missingBit={} submitted={} mask={}",
-                    PREFIX, target.x, target.z, source.x, source.z, missingBit, submitted, skyMask);
+                    PREFIX, target.x(), target.z(), source.x(), source.z(), missingBit, submitted, skyMask);
         } catch (Throwable t) {
             warnHookFailure("onSeamRelight", t);
         }
@@ -103,7 +105,7 @@ public final class ShadowLightProbe {
         try {
             StringBuilder sb = new StringBuilder();
             sb.append(PREFIX).append("DECODE dim=").append(dimension).append(" pos=(")
-                    .append(pos.x).append(',').append(pos.z).append(")\n");
+                    .append(pos.x()).append(',').append(pos.z()).append(")\n");
             appendSectionProfile(sb, "DECODE", chunk);
             appendHeightmap(sb, "DECODE", chunk);
             appendSectionDump(sb, "DECODE-SECTION", chunk, SECTION_Y);
@@ -191,8 +193,9 @@ public final class ShadowLightProbe {
             return;
         }
         try {
-            java.util.List<?> sky = packet.getLightData().getSkyUpdates();
-            java.util.List<?> block = packet.getLightData().getBlockUpdates();
+            var ld = ChunkLightPacketCompat.lightData(packet);
+            java.util.List<?> sky = ChunkLightPacketCompat.skyUpdates(ld);
+            java.util.List<?> block = ChunkLightPacketCompat.blockUpdates(ld);
             int probeIdx = engine == null ? -1 : SECTION_Y - engine.getMinLightSection();
             Constants.LOG.info("{}PACKET probeIndex={} skyUpdates({}): {}",
                     PREFIX, probeIdx, sky.size(), dumpLightList(sky));

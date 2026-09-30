@@ -182,7 +182,7 @@ public final class ShadowStorageManager implements AutoCloseable {
         if (image == null) {
             return new ProbeResult(table == Boolean.FALSE ? ProbeStatus.MISMATCH : ProbeStatus.ABSENT);
         }
-        int index = RegionCache.localIndex(pos.x, pos.z);
+        int index = RegionCache.localIndex(pos.x(), pos.z());
         if (image.isEmptySlot(index)) {
             return new ProbeResult(table == Boolean.FALSE ? ProbeStatus.MISMATCH : ProbeStatus.ABSENT);
         }
@@ -216,7 +216,7 @@ public final class ShadowStorageManager implements AutoCloseable {
         if (image == null) {
             return Kind.NO_IMAGE;
         }
-        int index = RegionCache.localIndex(pos.x, pos.z);
+        int index = RegionCache.localIndex(pos.x(), pos.z());
         if (image.isEmptySlot(index)) {
             return Kind.EMPTY_SLOT;
         }
@@ -261,7 +261,7 @@ public final class ShadowStorageManager implements AutoCloseable {
         // 时 readChunk 仍能读到」（flush 退化路径不得丢柱），导出路径 ShadowColumnStore.load 也没做
         // 该检查。**真正的缺口是 TOCTOU**（检查通过后、读盘完成前该柱被注入），由
         // ShadowLightCompute.scheduleAsyncDiskPublish 回调里的**读到后复检**关掉。
-        long slotKey = ChunkPos.asLong(pos.x, pos.z);
+        long slotKey = ChunkPos.pack(pos.x(), pos.z());
         CompletableFuture<byte[]> mine = new CompletableFuture<>();
         CompletableFuture<byte[]> running = inFlightReads.putIfAbsent(slotKey, mine);
         if (running != null) {
@@ -296,7 +296,7 @@ public final class ShadowStorageManager implements AutoCloseable {
         // 缺了这一步，空槽会一路走到 readDecompressed（挂载/解压链），在「同一空柱被反复
         // 尝试读取」的场景下变成稳态自旋（实测：58 个虚拟线程恒定卡在
         // loadFromDisk → ChunkSerializer.read → PoiManager.checkConsistencyWithBlocks）。
-        int index = RegionCache.localIndex(pos.x, pos.z);
+        int index = RegionCache.localIndex(pos.x(), pos.z());
         if (image.isEmptySlot(index)) {
             return null;
         }
@@ -346,15 +346,15 @@ public final class ShadowStorageManager implements AutoCloseable {
             payload = java.util.Arrays.copyOfRange(
                     payload, 1 + HassiumType126Codec.HASH_LENGTH, payload.length);
         }
-        long regionKey = RegionCache.regionKey(pos.x, pos.z);
+        long regionKey = RegionCache.regionKey(pos.x(), pos.z());
         RegionCache.Image image = imageFor(pos, true);
-        image.writePayload(RegionCache.localIndex(pos.x, pos.z), payload, hash);
+        image.writePayload(RegionCache.localIndex(pos.x(), pos.z()), payload, hash);
         // 本调用期间 region 可能被 unmountIdleRegions 摘走并已 save：重新挂回，
         // 让下一次 saveRegions 带上本次写入，别把刚落地的柱丢了。
         if (images.get(regionKey) != image) {
             RegionCache.Image raced = images.putIfAbsent(regionKey, image);
             if (raced != null && raced != image) {
-                raced.writePayload(RegionCache.localIndex(pos.x, pos.z), payload, hash);
+                raced.writePayload(RegionCache.localIndex(pos.x(), pos.z()), payload, hash);
             }
         }
         return true;
@@ -391,7 +391,7 @@ public final class ShadowStorageManager implements AutoCloseable {
     }
 
     public boolean isRegionMounted(int regionX, int regionZ) {
-        return images.containsKey(ChunkPos.asLong(regionX, regionZ));
+        return images.containsKey(ChunkPos.pack(regionX, regionZ));
     }
 
     public List<ChunkPos> snapshotWriteLog() {
@@ -526,7 +526,7 @@ public final class ShadowStorageManager implements AutoCloseable {
         if (closed || pos == null) {
             return false;
         }
-        long key = DimensionKey.key(dimension, pos.x, pos.z);
+        long key = DimensionKey.key(dimension, pos.x(), pos.z());
         if (ENCODING_PAUSED.get()) {
             // 编码暂停窗口：仍脏则不能承诺已落盘
             return !ShadowStorageHashes.isDirty(key);
@@ -604,18 +604,18 @@ public final class ShadowStorageManager implements AutoCloseable {
         ShadowStorageHashes.remove(dimension, pos);
         RegionCache.Image image = imageFor(pos, false);
         if (image == null) {
-            Path file = RegionCache.regionFile(regionDir, pos.x, pos.z);
+            Path file = RegionCache.regionFile(regionDir, pos.x(), pos.z());
             if (!Files.isRegularFile(file)) {
                 return;
             }
             image = imageFor(pos, true);
         }
         if (image != null) {
-            image.clearSlot(RegionCache.localIndex(pos.x, pos.z));
+            image.clearSlot(RegionCache.localIndex(pos.x(), pos.z()));
             try {
-                Path file = RegionCache.regionFile(regionDir, pos.x, pos.z);
+                Path file = RegionCache.regionFile(regionDir, pos.x(), pos.z());
                 image.save(file);
-                touchHeatSize(RegionCache.regionKey(pos.x, pos.z), file);
+                touchHeatSize(RegionCache.regionKey(pos.x(), pos.z()), file);
             } catch (IOException e) {
                 LOGGER.debug("Hassium: deleteColumn save failed for {}", pos, e);
             }
@@ -624,7 +624,7 @@ public final class ShadowStorageManager implements AutoCloseable {
 
     /** 卸映像、停 worker、删整个 {@code r.X.Z.mca}，并清该 region 的 hash / 热度。 */
     public void deleteRegion(int regionX, int regionZ) {
-        long regionKey = ChunkPos.asLong(regionX, regionZ);
+        long regionKey = ChunkPos.pack(regionX, regionZ);
         RegionWorker worker = workers.remove(regionKey);
         if (worker != null) {
             worker.shutdown();
@@ -712,7 +712,7 @@ public final class ShadowStorageManager implements AutoCloseable {
         writeBatch(pending, written, deadline);
         int abandoned = 0;
         for (PendingWrite write : pending) {
-            if (ShadowStorageHashes.isDirty(DimensionKey.key(dimension, write.pos.x, write.pos.z))
+            if (ShadowStorageHashes.isDirty(DimensionKey.key(dimension, write.pos.x(), write.pos.z()))
                     && write.nbt == null) {
                 // 超时还原后仍脏，不计入 written
             }
@@ -749,8 +749,8 @@ public final class ShadowStorageManager implements AutoCloseable {
 
     /** 认领脏位，NBT 由 RegionWorker 再快照（热路径不得同步序列化）。 */
     private PendingWrite claimForWorker(ChunkPos pos) {
-        long key = DimensionKey.key(dimension, pos.x, pos.z);
-        if (!injected.test(ChunkPos.asLong(pos.x, pos.z))) {
+        long key = DimensionKey.key(dimension, pos.x(), pos.z());
+        if (!injected.test(ChunkPos.pack(pos.x(), pos.z()))) {
             return null;
         }
         boolean content = ShadowStorageHashes.isContentDirty(key);
@@ -765,8 +765,8 @@ public final class ShadowStorageManager implements AutoCloseable {
     }
 
     private PendingWrite claimAndSerialize(ChunkPos pos) {
-        long key = DimensionKey.key(dimension, pos.x, pos.z);
-        if (!injected.test(ChunkPos.asLong(pos.x, pos.z))) {
+        long key = DimensionKey.key(dimension, pos.x(), pos.z());
+        if (!injected.test(ChunkPos.pack(pos.x(), pos.z()))) {
             return null;
         }
         boolean content = ShadowStorageHashes.isContentDirty(key);
@@ -794,7 +794,7 @@ public final class ShadowStorageManager implements AutoCloseable {
         }
         Map<Long, List<PendingWrite>> byRegion = new HashMap<>();
         for (PendingWrite write : pending) {
-            byRegion.computeIfAbsent(RegionCache.regionKey(write.pos.x, write.pos.z), k -> new ArrayList<>())
+            byRegion.computeIfAbsent(RegionCache.regionKey(write.pos.x(), write.pos.z()), k -> new ArrayList<>())
                     .add(write);
         }
         AtomicInteger written = new AtomicInteger();
@@ -830,7 +830,7 @@ public final class ShadowStorageManager implements AutoCloseable {
         }
         Map<Long, List<PendingWrite>> byRegion = new HashMap<>();
         for (PendingWrite write : pending) {
-            byRegion.computeIfAbsent(RegionCache.regionKey(write.pos.x, write.pos.z), k -> new ArrayList<>())
+            byRegion.computeIfAbsent(RegionCache.regionKey(write.pos.x(), write.pos.z()), k -> new ArrayList<>())
                     .add(write);
         }
         AtomicInteger written = new AtomicInteger();
@@ -921,7 +921,7 @@ public final class ShadowStorageManager implements AutoCloseable {
                     nbt = serializer.serialize(write.pos);
                     if (nbt == null) {
                         ShadowStorageHashes.restoreDirty(
-                                DimensionKey.key(dimension, write.pos.x, write.pos.z),
+                                DimensionKey.key(dimension, write.pos.x(), write.pos.z()),
                                 write.content, write.light, write.mutation, write.lightReady);
                         continue;
                     }
@@ -939,17 +939,17 @@ public final class ShadowStorageManager implements AutoCloseable {
                 // 写进首块 .mca 的同槽位——与相邻 region 镜像柱（差 32）互串，原版按坐标读时
                 // 报 wrong location 且内容错位（relocating）。submitAsync/submitAndWait 已按
                 // region 分组，本修复让混批路径同样安全。
-                long writeRegionKey = RegionCache.regionKey(write.pos.x, write.pos.z);
+                long writeRegionKey = RegionCache.regionKey(write.pos.x(), write.pos.z());
                 if (image == null || imageRegionKey != writeRegionKey) {
                     image = imageFor(write.pos, true);
                     imageRegionKey = writeRegionKey;
                 }
-                image.writePayload(RegionCache.localIndex(write.pos.x, write.pos.z), payload, hash);
+                image.writePayload(RegionCache.localIndex(write.pos.x(), write.pos.z()), payload, hash);
                 encoded.add(write);
             } catch (Exception e) {
                 LOGGER.warn("Hassium: region encode failed for {}", write.pos, e);
                 ShadowStorageHashes.restoreDirty(
-                        DimensionKey.key(dimension, write.pos.x, write.pos.z),
+                        DimensionKey.key(dimension, write.pos.x(), write.pos.z()),
                         write.content, write.light, write.mutation, write.lightReady);
             }
         }
@@ -1029,18 +1029,18 @@ public final class ShadowStorageManager implements AutoCloseable {
     private void restoreAll(List<PendingWrite> batch) {
         for (PendingWrite write : batch) {
             ShadowStorageHashes.restoreDirty(
-                    DimensionKey.key(dimension, write.pos.x, write.pos.z),
+                    DimensionKey.key(dimension, write.pos.x(), write.pos.z()),
                     write.content, write.light, write.mutation, write.lightReady);
         }
     }
 
     private RegionCache.Image imageFor(ChunkPos pos, boolean create) {
-        long key = RegionCache.regionKey(pos.x, pos.z);
+        long key = RegionCache.regionKey(pos.x(), pos.z());
         RegionCache.Image existing = images.get(key);
         if (existing != null) {
             return existing;
         }
-        Path file = RegionCache.regionFile(regionDir, pos.x, pos.z);
+        Path file = RegionCache.regionFile(regionDir, pos.x(), pos.z());
         try {
             RegionCache.Image loaded = RegionCache.Image.load(file);
             if (loaded != null) {
@@ -1071,7 +1071,7 @@ public final class ShadowStorageManager implements AutoCloseable {
         for (int lx = 0; lx < 32; lx++) {
             for (int lz = 0; lz < 32; lz++) {
                 long chunkKey = DimensionKey.key(dimension, rx * 32 + lx, rz * 32 + lz);
-                if (injected.test(ChunkPos.asLong(rx * 32 + lx, rz * 32 + lz))
+                if (injected.test(ChunkPos.pack(rx * 32 + lx, rz * 32 + lz))
                         || ShadowStorageHashes.isDirty(chunkKey)) {
                     return true;
                 }

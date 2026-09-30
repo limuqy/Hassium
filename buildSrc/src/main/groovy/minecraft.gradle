@@ -1,15 +1,13 @@
 plugins {
-    id 'dev.architectury.loom'
     id 'common'
 }
 
-loom {
-    silentMojangMappingsLicense()
-}
-
-dependencies {
-    minecraft "com.mojang:minecraft:${gradle.ext.minecraft_version}"
-    mappings loom.officialMojangMappings()
+// 26.x 双构建链：loom 由 loom-common/loom-fabric 的 plugins{} 先行应用；neoforge 走 MDG
+// （loom-neoforge.gradle plugins{} 内声明，本脚本不对 neoforge 加 loom 依赖）。
+if (project.name != 'neoforge') {
+    dependencies {
+        minecraft "com.mojang:minecraft:${gradle.ext.minecraft_version}"
+    }
 }
 
 if (project.name == "common") return // Don't apply the code below to the common project

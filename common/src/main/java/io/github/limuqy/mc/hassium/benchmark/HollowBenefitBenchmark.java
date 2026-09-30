@@ -448,16 +448,16 @@ public final class HollowBenefitBenchmark {
         for (Map.Entry<ChunkPos, boolean[]> e : denseMap.entrySet()) {
             ChunkPos p = e.getKey();
             boolean[] dense = e.getValue();
-            boolean missingNeighbor = !denseMap.containsKey(new ChunkPos(p.x + 1, p.z))
-                    || !denseMap.containsKey(new ChunkPos(p.x - 1, p.z))
-                    || !denseMap.containsKey(new ChunkPos(p.x, p.z + 1))
-                    || !denseMap.containsKey(new ChunkPos(p.x, p.z - 1));
+            boolean missingNeighbor = !denseMap.containsKey(new ChunkPos(p.x() + 1, p.z()))
+                    || !denseMap.containsKey(new ChunkPos(p.x() - 1, p.z()))
+                    || !denseMap.containsKey(new ChunkPos(p.x(), p.z() + 1))
+                    || !denseMap.containsKey(new ChunkPos(p.x(), p.z() - 1));
             int[] d = new int[dense.length];
             Arrays.fill(d, -1);
             for (int y = 0; y < dense.length; y++) {
                 if (!dense[y] || missingNeighbor) {
                     d[y] = 0;
-                    queue.add(new long[]{p.x, p.z, y});
+                    queue.add(new long[]{p.x(), p.z(), y});
                 }
             }
             dist.put(p, d);

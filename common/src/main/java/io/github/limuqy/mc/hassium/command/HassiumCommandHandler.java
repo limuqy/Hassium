@@ -292,17 +292,11 @@ public class HassiumCommandHandler {
         Thread t = new Thread(() -> {
             try {
                 copyTree(src, dst);
-                Minecraft mc = Minecraft.getInstance();
-                if (mc != null && mc.gui != null) {
-                    mc.gui.getChat().addMessage(
-                            Component.translatable("hassium.command.export.done", dst.toString()));
-                }
+                io.github.limuqy.mc.hassium.compat.ClientHudCompat.sendSystemMessage(
+                        Component.translatable("hassium.command.export.done", dst.toString()));
             } catch (Exception e) {
-                Minecraft mc = Minecraft.getInstance();
-                if (mc != null && mc.gui != null) {
-                    mc.gui.getChat().addMessage(
-                            Component.translatable("hassium.command.export.failed", String.valueOf(e.getMessage())));
-                }
+                io.github.limuqy.mc.hassium.compat.ClientHudCompat.sendSystemMessage(
+                        Component.translatable("hassium.command.export.failed", String.valueOf(e.getMessage())));
             }
         }, "hassium-export-" + cacheId);
         t.setDaemon(true);

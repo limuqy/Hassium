@@ -139,7 +139,7 @@ public final class ShadowCacheEviction {
         candidates.sort(Comparator
                 .comparingDouble((ShadowRegionHeat.RegionFileStat c) ->
                         hotScoreOf(c, now, recencyWeight, frequencyWeight))
-                .thenComparingLong(c -> ChunkPos.asLong(c.regionX(), c.regionZ())));
+                .thenComparingLong(c -> ChunkPos.pack(c.regionX(), c.regionZ())));
 
         Constants.LOG.info("Hassium: [SHADOW_CLEANUP] Triggered: current={}MB, target={}MB, needToFree={}MB, candidates={}",
                 currentBytes >> 20, targetBytes >> 20, sizeToFree >> 20, candidates.size());
@@ -189,7 +189,7 @@ public final class ShadowCacheEviction {
             }
             int rx = Math.floorDiv(DimensionKey.chunkXOf(key), 32);
             int rz = Math.floorDiv(DimensionKey.chunkZOf(key), 32);
-            live.add(ChunkPos.asLong(rx, rz));
+            live.add(ChunkPos.pack(rx, rz));
         }
         return live;
     }

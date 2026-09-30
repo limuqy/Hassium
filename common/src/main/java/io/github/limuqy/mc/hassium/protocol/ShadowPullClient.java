@@ -1,5 +1,7 @@
 package io.github.limuqy.mc.hassium.protocol;
 
+import io.github.limuqy.mc.hassium.compat.ChunkLightPacketCompat;
+
 import io.github.limuqy.mc.hassium.platform.client.TraceOrigin;
 
 import io.github.limuqy.mc.hassium.Constants;
@@ -89,7 +91,7 @@ public final class ShadowPullClient {
         if (dim == null) {
             return;
         }
-        long key = io.github.limuqy.mc.hassium.utils.DimensionKey.key(dim, pos.x, pos.z);
+        long key = io.github.limuqy.mc.hassium.utils.DimensionKey.key(dim, pos.x(), pos.z());
         lastFailAtMs.put(key, System.currentTimeMillis());
         // 拉取失败 ⇒ 释放 compare 去重登记，冷却结束后允许再发（否则该柱一次失败就永不重试）
         COMPARE_REQUESTED.remove(key);
@@ -103,7 +105,7 @@ public final class ShadowPullClient {
             return true;
         }
         Long at = lastFailAtMs.get(
-                io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z));
+                io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x(), pos.z()));
         return at == null || System.currentTimeMillis() - at >= RETRY_COOLDOWN_MS;
     }
 
@@ -114,7 +116,7 @@ public final class ShadowPullClient {
             return;
         }
         lastFailAtMs.remove(
-                io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z));
+                io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x(), pos.z()));
     }
 
     /**
@@ -135,8 +137,8 @@ public final class ShadowPullClient {
                 io.github.limuqy.mc.hassium.utils.DebugLogger.LogType.NETWORK,
                 "[DIAG] ShadowPullClient.request dim={} chunks={} baseline={} first=({},{})",
                 dimension, chunks == null ? -1 : chunks.size(), includeLocalBaseline,
-                chunks == null || chunks.isEmpty() ? 0 : chunks.get(0).x,
-                chunks == null || chunks.isEmpty() ? 0 : chunks.get(0).z);
+                chunks == null || chunks.isEmpty() ? 0 : chunks.get(0).x(),
+                chunks == null || chunks.isEmpty() ? 0 : chunks.get(0).z());
         if (dimension == null || dimension.isEmpty() || chunks == null || chunks.isEmpty()) {
             return;
         }
@@ -150,7 +152,7 @@ public final class ShadowPullClient {
         List<ChunkPos> fresh = null;
         for (ChunkPos chunkPos : chunks) {
             if (COMPARE_REQUESTED.add(
-                    io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, chunkPos.x, chunkPos.z))) {
+                    io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, chunkPos.x(), chunkPos.z()))) {
                 if (fresh == null) {
                     fresh = new java.util.ArrayList<>(chunks.size());
                 }
@@ -210,7 +212,7 @@ public final class ShadowPullClient {
             if (shadow == null) {
                 return;
             }
-            if (shadow.injectedChunk(dimension, pos.x, pos.z) != null) {
+            if (shadow.injectedChunk(dimension, pos.x(), pos.z()) != null) {
                 continue;
             }
             ShadowLightCompute.materializeFromDiskForCompare(dimension, pos);
@@ -230,7 +232,7 @@ public final class ShadowPullClient {
             if (includeLocalBaseline) {
                 entries.add(ShadowLightCompute.localPullEntry(dimension, pos));
             } else {
-                entries.add(new ShadowPullRequestC2SPacket.Entry(pos.x, pos.z, 0L, List.of(), 0));
+                entries.add(new ShadowPullRequestC2SPacket.Entry(pos.x(), pos.z(), 0L, List.of(), 0));
             }
         }
         return new ShadowPullRequestC2SPacket(dimension, 0L, requestId, entries);
@@ -257,7 +259,7 @@ public final class ShadowPullClient {
         if (!LoginCaps.has(ClientLoginNegotiation.current(), LoginCaps.SHADOW_PULL)) {
             return false;
         }
-        long key = io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z);
+        long key = io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x(), pos.z());
         if (PENDING_COMPARE.putIfAbsent(key,
                 new PendingCompare(dimension, System.currentTimeMillis(), networkApply)) != null) {
             // 已在途：重复推送直接丢弃，等响应落地
@@ -269,7 +271,7 @@ public final class ShadowPullClient {
         } else if (io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession.getInstance() != null
                 && io.github.limuqy.mc.hassium.shadow.server.SeedGenExecutor.getInstance().isGenerationGateOpen()
                 && io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession.getInstance()
-                        .isInComputeDomain(pos.x, pos.z)) {
+                        .isInComputeDomain(pos.x(), pos.z())) {
             // A1-③（handoff-2026-09-18 §1）：seedGen 开 + 无缓存 → 本地生成作基线 → compare。
             // 拦截路径【只挂起，不驱动】：生成由影子主循环泵的 SEEDGEN_LOCAL 分支统一驱动
             // （pin FORCED 票等操作仅影子线程安全，渲染线程不得触碰——2026-09-21 实测
@@ -289,7 +291,7 @@ public final class ShadowPullClient {
      *  pull FULL 回放（{@link ClientChunkHandler#applyShadowPullFull}）必须放行：
      *  否则会把刚收到的权威包当成原版首包再打一次空基线 Pull，落地被标成 SERVER_PUSH。 */
     public static boolean handleNativeChunk(net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket packet) {
-        if (packet != null && ClientChunkHandler.isPendingPullApply(packet.getX(), packet.getZ())) {
+        if (packet != null && ClientChunkHandler.isPendingPullApply(ChunkLightPacketCompat.chunkX(packet), ChunkLightPacketCompat.chunkZ(packet))) {
             nativeBypassPendingPull.incrementAndGet();
             return false;
         }
@@ -308,7 +310,7 @@ public final class ShadowPullClient {
             return false;
         }
         String dimension = LevelCompat.getDimensionId(minecraft.level);
-        ChunkPos pos = new ChunkPos(packet.getX(), packet.getZ());
+        ChunkPos pos = new ChunkPos(ChunkLightPacketCompat.chunkX(packet), ChunkLightPacketCompat.chunkZ(packet));
         if (dimension == null) {
             nativeBypassEngineOff.incrementAndGet();
             return false;
@@ -360,7 +362,7 @@ public final class ShadowPullClient {
             return false;
         }
         return COMPARE_REQUESTED.contains(
-                io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z));
+                io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x(), pos.z()));
     }
 
     /** 释放去重登记，允许该柱再次请求（重试 / 卸载 / 切维 / 失败回退）。 */
@@ -369,7 +371,7 @@ public final class ShadowPullClient {
             return;
         }
         COMPARE_REQUESTED.remove(
-                io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z));
+                io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x(), pos.z()));
     }
 
     public static long nativeBypassPendingPullCount() {
@@ -458,7 +460,7 @@ public final class ShadowPullClient {
         if (!isPullRetryAllowed(dimension, pos)) {
             return;
         }
-        long key = io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z);
+        long key = io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x(), pos.z());
         lastFailAtMs.put(key, System.currentTimeMillis());
         requestAuthoritativeFull(dimension, List.of(pos));
     }
@@ -489,7 +491,7 @@ public final class ShadowPullClient {
                 }
             }
             ChunkPos pos = new ChunkPos(result.chunkX(), result.chunkZ());
-            long key = io.github.limuqy.mc.hassium.utils.DimensionKey.key(response.dimension(), pos.x, pos.z);
+            long key = io.github.limuqy.mc.hassium.utils.DimensionKey.key(response.dimension(), pos.x(), pos.z());
             PendingCompare pending = PENDING_COMPARE.remove(key);
             // 任何权威裁决到达都释放 session pull 在途，避免 drain 误判 inflight 后无法补发
             io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession.getInstance()
@@ -546,7 +548,7 @@ public final class ShadowPullClient {
                 var shadow = io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry
                         .getInstance().get();
                 net.minecraft.world.level.chunk.LevelChunk baseline = shadow == null ? null
-                        : shadow.injectedChunk(response.dimension(), pos.x, pos.z);
+                        : shadow.injectedChunk(response.dimension(), pos.x(), pos.z());
                 // 【2026-09-20 同柱重复交付闸（用户拍板）】客户端已持有该柱（落地凭据在）
                 // → 服务端已裁决内容未变，客户端手上的就是同一份数据：**只记命中，不回放重交付**。
                 // 此前「保鲜 compare」（ShadowTrackingSession.materialize 对权威注入柱再 compare）
@@ -613,7 +615,7 @@ public final class ShadowPullClient {
             var server = io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry
                     .getInstance().get();
             if (server != null && dimension != null && pos != null) {
-                material = server.injectedChunk(dimension, pos.x, pos.z);
+                material = server.injectedChunk(dimension, pos.x(), pos.z());
             }
             if (material != null) {
                 io.github.limuqy.mc.hassium.shadow.track.VanillaAlignedChunkProvider

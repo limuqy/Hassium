@@ -31,7 +31,7 @@ public final class ShadowColumnStore {
             VanillaAlignedChunkProvider.failAcquire(dimension, pos);
             DebugLogger.info(DebugLogger.LogType.NETWORK,
                     "[SHADOW_STORE] flushAndEvict ({}, {}) dim={}",
-                    pos.x, pos.z, dimension);
+                    pos.x(), pos.z(), dimension);
         }
         return ok;
     }

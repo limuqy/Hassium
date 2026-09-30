@@ -65,7 +65,7 @@ public final class ShadowChunkMapCompat {
         if (dimension == null || pos == null || future == null) {
             return;
         }
-        SUSPENDED_LOADS.put(io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z), future);
+        SUSPENDED_LOADS.put(io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x(), pos.z()), future);
     }
 
     /**
@@ -79,7 +79,7 @@ public final class ShadowChunkMapCompat {
             return false;
         }
         java.util.concurrent.CompletableFuture<?> future =
-                SUSPENDED_LOADS.remove(io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z));
+                SUSPENDED_LOADS.remove(io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x(), pos.z()));
         if (future == null) {
             return false;
         }
@@ -106,7 +106,7 @@ public final class ShadowChunkMapCompat {
             return;
         }
         SUSPENDED_LOADS.remove(
-                io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z));
+                io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x(), pos.z()));
     }
 
     /** 当前悬置 future 数量（诊断用）。 */
@@ -149,7 +149,7 @@ public final class ShadowChunkMapCompat {
         }
         try {
             ChunkMapAccessor map = (ChunkMapAccessor) (Object) cache.chunkMap;
-            return map.hassium$getVisibleChunkIfPresent(ChunkPos.asLong(x, z)) != null;
+            return map.hassium$getVisibleChunkIfPresent(ChunkPos.pack(x, z)) != null;
         } catch (Throwable ignored) {
             return false;
         }
@@ -172,7 +172,7 @@ public final class ShadowChunkMapCompat {
         if (server == null || pos == null) {
             return null;
         }
-        LevelChunk injected = server.injectedChunk(dimension, pos.x, pos.z);
+        LevelChunk injected = server.injectedChunk(dimension, pos.x(), pos.z());
         if (injected != null) {
             return injected;
         }
@@ -194,7 +194,7 @@ public final class ShadowChunkMapCompat {
         }
         try {
             ChunkMapAccessor map = (ChunkMapAccessor) (Object) level.getChunkSource().chunkMap;
-            ChunkHolder holder = map.hassium$getVisibleChunkIfPresent(pos.toLong());
+            ChunkHolder holder = map.hassium$getVisibleChunkIfPresent(pos.pack());
             if (holder == null) {
                 return null;
             }

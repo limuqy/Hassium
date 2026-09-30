@@ -89,7 +89,7 @@ class ShadowCacheEvictionTest {
         ShadowCacheEviction.recordAccess(b);
         ShadowCacheEviction.recordAccess(b);
         ShadowRegionHeat.updateRegionSize(io.github.limuqy.mc.hassium.utils.DimensionKey.OVERWORLD,
-                Math.floorDiv(b.x, 32), Math.floorDiv(b.z, 32), 12_345L);
+                Math.floorDiv(b.x(), 32), Math.floorDiv(b.z(), 32), 12_345L);
 
         ShadowCacheEviction.save(tempDir);
         assertTrue(Files.exists(tempDir.resolve("heat.idx")));
@@ -104,7 +104,7 @@ class ShadowCacheEvictionTest {
         assertEquals(1, ShadowCacheEviction.accessCountOf(a));
         ShadowRegionHeat.HotEntry hotB = ShadowRegionHeat.get(
                 io.github.limuqy.mc.hassium.utils.DimensionKey.OVERWORLD,
-                Math.floorDiv(b.x, 32), Math.floorDiv(b.z, 32));
+                Math.floorDiv(b.x(), 32), Math.floorDiv(b.z(), 32));
         assertNotNull(hotB);
         assertEquals(12_345L, hotB.sizeBytes(), "解析 heat.idx 应读出文件大小");
 

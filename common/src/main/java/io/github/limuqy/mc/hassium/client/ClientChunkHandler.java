@@ -1,5 +1,7 @@
 package io.github.limuqy.mc.hassium.client;
 
+import io.github.limuqy.mc.hassium.compat.ChunkLightPacketCompat;
+
 import io.github.limuqy.mc.hassium.platform.client.TraceOrigin;
 import io.github.limuqy.mc.hassium.shadow.light.ShadowVanillaLightPipeline;
 import io.github.limuqy.mc.hassium.Constants;
@@ -38,16 +40,16 @@ public class ClientChunkHandler {
 
     /** pull FULL 响应落地前调用；listener 据此以 REMOTE_PULL 归因，且勿走原版首包拦截。 */
     static void markPullApply(int chunkX, int chunkZ) {
-        PENDING_PULL_APPLY.add(ChunkPos.asLong(chunkX, chunkZ));
+        PENDING_PULL_APPLY.add(ChunkPos.pack(chunkX, chunkZ));
     }
 
     public static boolean isPendingPullApply(int chunkX, int chunkZ) {
-        return PENDING_PULL_APPLY.contains(ChunkPos.asLong(chunkX, chunkZ));
+        return PENDING_PULL_APPLY.contains(ChunkPos.pack(chunkX, chunkZ));
     }
 
     /** listener 分支消费：该柱是否为在途 pull FULL 落地；命中即清除。 */
     public static boolean consumePullApplyOrigin(int chunkX, int chunkZ) {
-        return PENDING_PULL_APPLY.remove(ChunkPos.asLong(chunkX, chunkZ));
+        return PENDING_PULL_APPLY.remove(ChunkPos.pack(chunkX, chunkZ));
     }
 
     /**
@@ -97,7 +99,7 @@ public class ClientChunkHandler {
         if (packet == null) {
             return false;
         }
-        markPullApply(packet.getX(), packet.getZ());
+        markPullApply(ChunkLightPacketCompat.chunkX(packet), ChunkLightPacketCompat.chunkZ(packet));
         net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
         net.minecraft.client.multiplayer.ClientPacketListener listener = mc.getConnection();
         if (listener == null) {
@@ -162,7 +164,7 @@ public class ClientChunkHandler {
         if (mc.player == null) {
             DebugLogger.info(LogType.CHUNK_APPLY,
                     "[CHUNK_APPLY] eventMs={} phase={} origin={} view={} target=({},{}) renderOnly={} player=unavailable",
-                    eventMs, phase, originValue, view, pos.x, pos.z, renderOnly);
+                    eventMs, phase, originValue, view, pos.x(), pos.z(), renderOnly);
             return;
         }
         int playerX = (int) Math.floor(mc.player.getX());
@@ -170,7 +172,7 @@ public class ClientChunkHandler {
         int playerZ = (int) Math.floor(mc.player.getZ());
         DebugLogger.info(LogType.CHUNK_APPLY,
                 "[CHUNK_APPLY] eventMs={} phase={} origin={} view={} target=({},{}) renderOnly={} playerBlock=({},{},{}) playerChunk=({},{})",
-                eventMs, phase, originValue, view, pos.x, pos.z, renderOnly,
+                eventMs, phase, originValue, view, pos.x(), pos.z(), renderOnly,
                 playerX, playerY, playerZ, playerX >> 4, playerZ >> 4);
     }
 
@@ -237,15 +239,15 @@ public class ClientChunkHandler {
      */
     public static void onProbeChunkUnloaded(ChunkPos pos) {
         if (pos != null) {
-            PROBE_LAST_SKY.remove(pos.toLong());
-            PROBE_PENDING_RECHECK.remove(pos.toLong());
+            PROBE_LAST_SKY.remove(pos.pack());
+            PROBE_PENDING_RECHECK.remove(pos.pack());
         }
     }
 
     /** 光包/整柱 apply 后排队复检（去重续期）：判定状态由 {@link #runProbeRecheck} 写入。 */
     public static void scheduleProbeRecheck(ChunkPos pos) {
         if (pos != null) {
-            PROBE_PENDING_RECHECK.put(pos.toLong(), PROBE_RECHECK_MAX_FRAMES);
+            PROBE_PENDING_RECHECK.put(pos.pack(), PROBE_RECHECK_MAX_FRAMES);
         }
     }
 
@@ -269,13 +271,13 @@ public class ClientChunkHandler {
             java.util.Map.Entry<Long, Integer> e = it.next();
             long key = e.getKey();
             int remaining = e.getValue();
-            ChunkPos pos = new ChunkPos(key);
-            if (!level.getChunkSource().hasChunk(pos.x, pos.z)) {
+            ChunkPos pos = ChunkPos.unpack(key);
+            if (!level.getChunkSource().hasChunk(pos.x(), pos.z())) {
                 it.remove();
                 continue; // 已卸载：由 onProbeChunkUnloaded 收口，不判
             }
-            int bx = (pos.x << 4) + 8;
-            int bz = (pos.z << 4) + 8;
+            int bx = (pos.x() << 4) + 8;
+            int bz = (pos.z() << 4) + 8;
             int minY = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinBlockY(level);
             int topY = level.getHeight(Heightmap.Types.WORLD_SURFACE, bx, bz);
             if (topY <= minY) {
@@ -350,15 +352,15 @@ public class ClientChunkHandler {
         if (!countAsApply && !chunkPresent) {
             DebugLogger.info(LogType.LIGHT,
                     "[CHUNK_PROBE] source=light pos=({},{}) fullOrigin={} fullView={} fullApplySeq={} fullApplyAgeMs={} lightQueueDelayMs={} fullAppliedAfterLightQueued={} chunkPresent=false",
-                    pos.x, pos.z, origin, fullView, fullApplySequence, fullApplyAgeMs, lightQueueDelayMs,
+                    pos.x(), pos.z(), origin, fullView, fullApplySequence, fullApplyAgeMs, lightQueueDelayMs,
                     fullAppliedAfterLightQueued);
             return;
         }
         int count = countAsApply
-                ? APPLY_COUNT.merge(pos.toLong(), 1, Integer::sum)
-                : APPLY_COUNT.getOrDefault(pos.toLong(), 0);
-        int bx = (pos.x << 4) + 8;
-        int bz = (pos.z << 4) + 8;
+                ? APPLY_COUNT.merge(pos.pack(), 1, Integer::sum)
+                : APPLY_COUNT.getOrDefault(pos.pack(), 0);
+        int bx = (pos.x() << 4) + 8;
+        int bz = (pos.z() << 4) + 8;
         int minY = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinBlockY(level);
         int maxY = minY + level.getHeight();
         int topY = level.getHeight(Heightmap.Types.WORLD_SURFACE, bx, bz);
@@ -374,8 +376,8 @@ public class ClientChunkHandler {
         int fixedY = Math.max(minY, Math.min(maxY - 1, 62));
         String fixedBlock = level.getBlockState(new BlockPos(bx, fixedY, bz))
                 .getBlock().getDescriptionId();
-        int originX = pos.x << 4;
-        int originZ = pos.z << 4;
+        int originX = pos.x() << 4;
+        int originZ = pos.z() << 4;
         int surfaceSection = SectionPos.blockToSectionCoord(Math.max(topY, minY));
         int midY = Math.max(minY, Math.min(maxY - 1, SectionPos.sectionToBlockCoord(surfaceSection) + 8));
         int skyMid = level.getBrightness(LightLayer.SKY, new BlockPos(bx, midY, bz));
@@ -391,7 +393,7 @@ public class ClientChunkHandler {
         // 判定状态由下一帧 runProbeRecheck 的 post-apply 采样写入。
         if (lightProbe && topY > minY && "block.minecraft.air".equals(topBlock)) {
             if (skyTop > 0) {
-                PROBE_EVER_LIT.add(pos.toLong());
+                PROBE_EVER_LIT.add(pos.pack());
             } else {
                 darkLightProbeSamples.incrementAndGet();
             }
@@ -400,14 +402,14 @@ public class ClientChunkHandler {
         if (!countAsApply) {
             DebugLogger.info(LogType.LIGHT,
                     "[CHUNK_PROBE] source=light pos=({},{}) apply#={} fullOrigin={} fullView={} fullApplySeq={} fullApplyAgeMs={} lightQueueDelayMs={} fullAppliedAfterLightQueued={} chunkPresent=true topY={} skyTop={} skyAir={} blockLow={} topBlock={} fixedY={} fixedBlock={} secY={} skyMid={} skyW={} skyE={} skyN={} skyS={}",
-                    pos.x, pos.z, count, origin, fullView, fullApplySequence, fullApplyAgeMs, lightQueueDelayMs,
+                    pos.x(), pos.z(), count, origin, fullView, fullApplySequence, fullApplyAgeMs, lightQueueDelayMs,
                     fullAppliedAfterLightQueued, topY, skyTop, skyAir, blockLow, topBlock, fixedY, fixedBlock,
                     surfaceSection, skyMid, skyW, skyE, skyN, skyS);
             return;
         }
         DebugLogger.info(LogType.CHUNK_APPLY,
                 "[CHUNK_PROBE] source={} pos=({},{}) apply#={} topY={} skyTop={} skyAir={} blockLow={} topBlock={} fixedY={} fixedBlock={} secY={} skyMid={} skyW={} skyE={} skyN={} skyS={}",
-                source, pos.x, pos.z, count, topY, skyTop, skyAir, blockLow, topBlock, fixedY, fixedBlock,
+                source, pos.x(), pos.z(), count, topY, skyTop, skyAir, blockLow, topBlock, fixedY, fixedBlock,
                 surfaceSection, skyMid, skyW, skyE, skyN, skyS);
     }
     private static long getLightBytesPerChunk(ClientLevel level) {

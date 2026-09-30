@@ -34,7 +34,7 @@ final class CompareFullDump {
             return;
         }
         try {
-            LevelChunk localChunk = shadow.injectedChunk(dimension, pos.x, pos.z);
+            LevelChunk localChunk = shadow.injectedChunk(dimension, pos.x(), pos.z());
             ServerLevel level = shadow.level(dimension);
             if (localChunk == null || level == null) {
                 return;
@@ -43,7 +43,7 @@ final class CompareFullDump {
                     SeedGenChunkCodec.buildPacket(localChunk, level), level.registryAccess());
             Path directory = Path.of(DUMP_ROOT)
                     .resolve(sanitize(dimension))
-                    .resolve(pos.x + "_" + pos.z + "_" + System.nanoTime());
+                    .resolve(pos.x() + "_" + pos.z() + "_" + System.nanoTime());
             Files.createDirectories(directory);
             Files.write(directory.resolve("server-full.bin"), serverPacket,
                     StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
@@ -51,8 +51,8 @@ final class CompareFullDump {
                     StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
             Files.writeString(directory.resolve("metadata.txt"),
                     "dimension=" + dimension + System.lineSeparator()
-                            + "chunkX=" + pos.x + System.lineSeparator()
-                            + "chunkZ=" + pos.z + System.lineSeparator()
+                            + "chunkX=" + pos.x() + System.lineSeparator()
+                            + "chunkZ=" + pos.z() + System.lineSeparator()
                             + "serverBytes=" + serverPacket.length + System.lineSeparator()
                             + "localBytes=" + localPacket.length + System.lineSeparator()
                             + "serverSha256=" + sha256(serverPacket) + System.lineSeparator()
@@ -60,7 +60,7 @@ final class CompareFullDump {
                     StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
         } catch (IOException | RuntimeException exception) {
             Constants.LOG.warn("[SHADOW_PULL] compare FULL dump failed ({}, {}) dim={}",
-                    pos.x, pos.z, dimension, exception);
+                    pos.x(), pos.z(), dimension, exception);
         }
     }
 

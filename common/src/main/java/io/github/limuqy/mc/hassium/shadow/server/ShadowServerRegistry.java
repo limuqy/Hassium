@@ -438,16 +438,11 @@ public final class ShadowServerRegistry {
         }
         try {
             Minecraft mc = Minecraft.getInstance();
-            if (mc != null && mc.player != null) {
-                mc.execute(() -> {
-                    if (mc.player != null) {
-                        mc.player.displayClientMessage(
-                                net.minecraft.network.chat.Component.literal(
-                                        "[Hassium] Hassium 引擎异常：客户端缓存/超视渲染/SeedGen 已关闭。"
-                                                + "可在配置中关闭 chunk.enabled 抑制本提示。"),
-                                false);
-                    }
-                });
+            if (mc != null) {
+                mc.execute(() -> io.github.limuqy.mc.hassium.compat.ClientHudCompat.sendSystemMessage(
+                        net.minecraft.network.chat.Component.literal(
+                                "[Hassium] Hassium 引擎异常：客户端缓存/超视渲染/SeedGen 已关闭。"
+                                        + "可在配置中关闭 chunk.enabled 抑制本提示。")));
             }
         } catch (Throwable ignored) {
             // 报错提示失败不影响降级态

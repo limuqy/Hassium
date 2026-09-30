@@ -2,32 +2,29 @@ plugins {
     id 'loom-neoforge'
 }
 
-sourceSets {
-    main {
-        java {
-            srcDir rootProject.file('cloth-ui/src/main/java')
-        }
-    }
-}
+// 26.x：cloth-config 暂无对应构建，cloth-ui（硬 import cloth API）暂不编入；
+// NeoForge 侧配置按钮本就走反射（HassiumNeoForgeConfigScreens），不受影响。
+// cloth 26.x 构建就绪后恢复此 srcDir。
+// sourceSets {
+//     main {
+//         java {
+//             srcDir rootProject.file('cloth-ui/src/main/java')
+//         }
+//     }
+// }
 
-configurations {
-    library
-}
-configurations.implementation.extendsFrom(configurations.library)
-configurations.minecraftLibraries.extendsFrom(configurations.library)
-configurations.minecraftRuntimeLibraries.extendsFrom(configurations.library)
 dependencies {
     // zstd-jni 零编译期依赖：由 native-dep-shade.gradle 嵌入 + ZstdRuntimeBridge 隔离加载（勿在此声明）
-    library 'org.lz4:lz4-java:1.8.0'
-    library 'com.google.code.findbugs:jsr305:3.0.1'
+    implementation 'org.lz4:lz4-java:1.8.0'
+    implementation 'com.google.code.findbugs:jsr305:3.0.1'
 
-    if (gradle.ext.has('cloth_config_version')) {
-        modCompileOnly("me.shedaniel.cloth:cloth-config-neoforge:${gradle.ext.cloth_config_version}")
-    }
-
-    if (gradle.ext.has('imblocker_version')) {
-        modLocalRuntime("maven.modrinth:WMDesFsZ:${gradle.ext.imblocker_version}-neoforge")
-    }
+    // 26.x：cloth-config / IMBlocker 暂无对应构建（历史见 git 与 mc26-upgrade-plan.md）
+    // if (gradle.ext.has('cloth_config_version')) {
+    //     compileOnly("me.shedaniel.cloth:cloth-config-neoforge:${gradle.ext.cloth_config_version}")
+    // }
+    // if (gradle.ext.has('imblocker_version')) {
+    //     localRuntime("maven.modrinth:WMDesFsZ:${gradle.ext.imblocker_version}-neoforge")
+    // }
 }
 
 afterEvaluate {
@@ -42,5 +39,3 @@ tasks.withType(JavaCompile).configureEach {
     options.compilerArgs.add('-Arequires=0')
     options.compilerArgs.add('-AdefaultObfuscationEnv=mojang')
 }
-
-

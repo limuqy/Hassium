@@ -28,7 +28,7 @@ public final class SeedGenCompareGate {
         if (dimension == null || pos == null) {
             return;
         }
-        long key = DimensionKey.key(dimension, pos.x, pos.z);
+        long key = DimensionKey.key(dimension, pos.x(), pos.z());
         AWAITING.add(key);
         // 新的 awaiting 表示尚未拿到本柱权威裁决
         CONFIRMED.remove(key);
@@ -38,7 +38,7 @@ public final class SeedGenCompareGate {
         if (dimension == null || pos == null) {
             return;
         }
-        AWAITING.remove(DimensionKey.key(dimension, pos.x, pos.z));
+        AWAITING.remove(DimensionKey.key(dimension, pos.x(), pos.z()));
     }
 
     /** 权威 compare 成功落地：放行交付，并记住「已比对」供 drain 复用。 */
@@ -46,7 +46,7 @@ public final class SeedGenCompareGate {
         if (dimension == null || pos == null) {
             return;
         }
-        long key = DimensionKey.key(dimension, pos.x, pos.z);
+        long key = DimensionKey.key(dimension, pos.x(), pos.z());
         AWAITING.remove(key);
         CONFIRMED.add(key);
     }
@@ -55,14 +55,14 @@ public final class SeedGenCompareGate {
         if (dimension == null || pos == null) {
             return false;
         }
-        return CONFIRMED.contains(DimensionKey.key(dimension, pos.x, pos.z));
+        return CONFIRMED.contains(DimensionKey.key(dimension, pos.x(), pos.z()));
     }
 
     public static boolean isAwaiting(String dimension, ChunkPos pos) {
         if (dimension == null || pos == null) {
             return false;
         }
-        return AWAITING.contains(DimensionKey.key(dimension, pos.x, pos.z));
+        return AWAITING.contains(DimensionKey.key(dimension, pos.x(), pos.z()));
     }
 
     public static boolean isAwaiting(String dimension, int x, int z) {

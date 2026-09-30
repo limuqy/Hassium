@@ -95,12 +95,12 @@ class ShadowStorageManagerTest {
     @DisplayName("光收敛只进内存映像，encodeDirty 不写 .mca")
     void lightReadyDoesNotWriteRegionFileUntilSave() throws Exception {
         ChunkPos pos = new ChunkPos(1, 2);
-        injected.add(ChunkPos.asLong(pos.x, pos.z));
+        injected.add(ChunkPos.pack(pos.x(), pos.z()));
         ShadowStorageHashes.put(pos, 8L);
         manager.markContentDirty(pos);
         manager.markLightReady(pos);
         assertFalse(manager.encodeDirty(5_000L).timedOut());
-        Path file = RegionCache.regionFile(regionDir, pos.x, pos.z);
+        Path file = RegionCache.regionFile(regionDir, pos.x(), pos.z());
         assertFalse(java.nio.file.Files.isRegularFile(file), "热路径不得整文件落盘");
         assertFalse(manager.saveDirtyRegions(5_000L).timedOut());
         assertTrue(java.nio.file.Files.isRegularFile(file));
@@ -110,17 +110,17 @@ class ShadowStorageManagerTest {
     @DisplayName("flushColumn：脏柱同步编码+落盘，成功后 isDirty=false 可读回")
     void flushColumnPersistsDirtyColumnBeforeUnload() throws Exception {
         ChunkPos pos = new ChunkPos(5, 6);
-        injected.add(ChunkPos.asLong(pos.x, pos.z));
+        injected.add(ChunkPos.pack(pos.x(), pos.z()));
         ShadowStorageHashes.put(pos, 99L);
         manager.markContentDirty(pos);
         manager.markLightReady(pos);
         assertTrue(ShadowStorageHashes.isDirty(pos), "脏位在 flushColumn 前应存在");
         assertTrue(manager.flushColumn(pos, 5_000L), "脏柱 flushColumn 必须成功");
         assertFalse(ShadowStorageHashes.isDirty(pos), "成功后脏位应清零");
-        Path file = RegionCache.regionFile(regionDir, pos.x, pos.z);
+        Path file = RegionCache.regionFile(regionDir, pos.x(), pos.z());
         assertTrue(java.nio.file.Files.isRegularFile(file), "flushColumn 必须写 .mca");
         // 模拟 unload 后回程读盘
-        injected.remove(ChunkPos.asLong(pos.x, pos.z));
+        injected.remove(ChunkPos.pack(pos.x(), pos.z()));
         manager.close();
         manager = new ShadowStorageManager(regionDir, p -> nbtPayload.clone(), injected::contains, 1);
         byte[] read = manager.readChunk(pos);
@@ -146,7 +146,7 @@ class ShadowStorageManagerTest {
         assertEquals(ShadowStorageManager.ProbeStatus.ABSENT, missing.status());
         assertEquals(0, manager.decompressCount());
 
-        injected.add(ChunkPos.asLong(pos.x, pos.z));
+        injected.add(ChunkPos.pack(pos.x(), pos.z()));
         ShadowStorageHashes.put(pos, 42L);
         persistIngest(pos);
         manager.close();
@@ -162,7 +162,7 @@ class ShadowStorageManagerTest {
     @DisplayName("markDirty 不分配 NBT；未刷脏的首次注入不进 flush()")
     void markDirtyDoesNotSerializeUntilFlush() {
         ChunkPos pos = new ChunkPos(1, 1);
-        injected.add(ChunkPos.asLong(pos.x, pos.z));
+        injected.add(ChunkPos.pack(pos.x(), pos.z()));
         ShadowStorageHashes.put(pos, 7L);
         manager.markContentDirty(pos);
         assertEquals(0, serializeCalls.get());
@@ -174,18 +174,18 @@ class ShadowStorageManagerTest {
         assertEquals(1, serializeCalls.get());
         assertFalse(ShadowStorageHashes.isDirty(pos));
         assertTrue(ShadowStorageHashes.isPersisted(
-                DimensionKey.key(DimensionKey.OVERWORLD, pos.x, pos.z)));
+                DimensionKey.key(DimensionKey.OVERWORLD, pos.x(), pos.z())));
     }
 
     @Test
     @DisplayName("encodeDirty 只进映像，不写 .mca")
     void encodeDirtyDoesNotWriteRegionFile() throws Exception {
         ChunkPos pos = new ChunkPos(14, 1);
-        injected.add(ChunkPos.asLong(pos.x, pos.z));
+        injected.add(ChunkPos.pack(pos.x(), pos.z()));
         ShadowStorageHashes.put(pos, 33L);
         manager.markContentDirty(pos);
         manager.encodeDirty(5_000L);
-        Path file = RegionCache.regionFile(regionDir, pos.x, pos.z);
+        Path file = RegionCache.regionFile(regionDir, pos.x(), pos.z());
         assertFalse(java.nio.file.Files.isRegularFile(file), "刷脏编码不得落盘");
         assertEquals(1, serializeCalls.get());
         assertFalse(manager.saveDirtyRegions(5_000L).timedOut());
@@ -196,13 +196,13 @@ class ShadowStorageManagerTest {
     @DisplayName("enqueueDirty 刷 contentDirty；saveDirtyRegions 才落盘")
     void enqueueDirtyPicksContentDirtyThenSaveWritesFile() throws Exception {
         ChunkPos pos = new ChunkPos(15, 1);
-        injected.add(ChunkPos.asLong(pos.x, pos.z));
+        injected.add(ChunkPos.pack(pos.x(), pos.z()));
         ShadowStorageHashes.put(pos, 34L);
         manager.markContentDirty(pos);
         assertEquals(0, serializeCalls.get());
         manager.enqueueDirty();
         assertEquals(1, serializeCalls.get());
-        Path file = RegionCache.regionFile(regionDir, pos.x, pos.z);
+        Path file = RegionCache.regionFile(regionDir, pos.x(), pos.z());
         assertFalse(java.nio.file.Files.isRegularFile(file), "刷脏入队仍不落盘");
         assertFalse(manager.saveDirtyRegions(5_000L).timedOut());
         assertTrue(java.nio.file.Files.isRegularFile(file));
@@ -213,11 +213,11 @@ class ShadowStorageManagerTest {
     @DisplayName("阶段2：已 persist 后再 markLightDirty+encodeDirty 再序列化")
     void lightDirtyAfterPersistReenqueues() {
         ChunkPos pos = new ChunkPos(13, 1);
-        injected.add(ChunkPos.asLong(pos.x, pos.z));
+        injected.add(ChunkPos.pack(pos.x(), pos.z()));
         ShadowStorageHashes.put(pos, 32L);
         persistIngest(pos);
         assertEquals(1, serializeCalls.get());
-        long key = DimensionKey.key(DimensionKey.OVERWORLD, pos.x, pos.z);
+        long key = DimensionKey.key(DimensionKey.OVERWORLD, pos.x(), pos.z());
         ShadowStorageHashes.markLightDirty(pos);
         assertTrue(ShadowStorageHashes.isMutation(key));
         assertFalse(manager.encodeDirty(5_000L).timedOut());
@@ -231,18 +231,18 @@ class ShadowStorageManagerTest {
     void flushOnlyWritesMutations() {
         ChunkPos ingest = new ChunkPos(2, 2);
         ChunkPos mutated = new ChunkPos(3, 3);
-        injected.add(ChunkPos.asLong(ingest.x, ingest.z));
-        injected.add(ChunkPos.asLong(mutated.x, mutated.z));
+        injected.add(ChunkPos.pack(ingest.x(), ingest.z()));
+        injected.add(ChunkPos.pack(mutated.x(), mutated.z()));
         ShadowStorageHashes.put(ingest, 1L);
         ShadowStorageHashes.put(mutated, 2L);
         manager.markContentDirty(ingest);
         ShadowStorageHashes.markPersisted(
-                DimensionKey.key(DimensionKey.OVERWORLD, mutated.x, mutated.z));
+                DimensionKey.key(DimensionKey.OVERWORLD, mutated.x(), mutated.z()));
         manager.markContentDirty(mutated);
         assertTrue(ShadowStorageHashes.isMutation(
-                DimensionKey.key(DimensionKey.OVERWORLD, mutated.x, mutated.z)));
+                DimensionKey.key(DimensionKey.OVERWORLD, mutated.x(), mutated.z())));
         assertFalse(ShadowStorageHashes.isMutation(
-                DimensionKey.key(DimensionKey.OVERWORLD, ingest.x, ingest.z)));
+                DimensionKey.key(DimensionKey.OVERWORLD, ingest.x(), ingest.z())));
         assertEquals(1, manager.flush(5_000L).written());
         assertTrue(ShadowStorageHashes.isDirty(ingest), "未 mutation 的首次注入仍不进 flush()");
         assertFalse(ShadowStorageHashes.isDirty(mutated));
@@ -255,7 +255,7 @@ class ShadowStorageManagerTest {
     @DisplayName("pauseEncoding 后 encodeDirty 不再序列化")
     void pauseEncodingSkipsEnqueue() {
         ChunkPos pos = new ChunkPos(11, 11);
-        injected.add(ChunkPos.asLong(pos.x, pos.z));
+        injected.add(ChunkPos.pack(pos.x(), pos.z()));
         ShadowStorageHashes.put(pos, 21L);
         manager.markContentDirty(pos);
         ShadowStorageManager.pauseEncoding();
@@ -271,7 +271,7 @@ class ShadowStorageManagerTest {
     @DisplayName("saveDirtyRegions 只写已编码映像，不再走 ChunkSerializer")
     void saveDirtyRegionsDoesNotSerialize() {
         ChunkPos pos = new ChunkPos(9, 9);
-        injected.add(ChunkPos.asLong(pos.x, pos.z));
+        injected.add(ChunkPos.pack(pos.x(), pos.z()));
         ShadowStorageHashes.put(pos, 13L);
         persistIngest(pos);
         int before = serializeCalls.get();
@@ -283,12 +283,12 @@ class ShadowStorageManagerTest {
     @DisplayName("已 persist 的点亮柱退出再 markLightReady 会按当前层重写")
     void lightReadyAfterPersistRewritesColumn() {
         ChunkPos pos = new ChunkPos(4, 4);
-        injected.add(ChunkPos.asLong(pos.x, pos.z));
+        injected.add(ChunkPos.pack(pos.x(), pos.z()));
         ShadowStorageHashes.put(pos, 9L);
         persistIngest(pos);
         assertEquals(1, serializeCalls.get());
         assertTrue(ShadowStorageHashes.isPersisted(
-                DimensionKey.key(DimensionKey.OVERWORLD, pos.x, pos.z)));
+                DimensionKey.key(DimensionKey.OVERWORLD, pos.x(), pos.z())));
         assertFalse(ShadowStorageHashes.isDirty(pos));
         manager.markLightReady(pos);
         assertFalse(manager.encodeDirty(5_000L).timedOut());
@@ -314,8 +314,8 @@ class ShadowStorageManagerTest {
     void regionWritesAreSerial() {
         ChunkPos a = new ChunkPos(0, 0);
         ChunkPos b = new ChunkPos(1, 0);
-        injected.add(ChunkPos.asLong(a.x, a.z));
-        injected.add(ChunkPos.asLong(b.x, b.z));
+        injected.add(ChunkPos.pack(a.x(), a.z()));
+        injected.add(ChunkPos.pack(b.x(), b.z()));
         ShadowStorageHashes.put(a, 1L);
         ShadowStorageHashes.put(b, 2L);
         persistIngest(a);
@@ -330,10 +330,10 @@ class ShadowStorageManagerTest {
     @DisplayName("flush 超时 abandoned")
     void flushTimeoutAbandoned() {
         ChunkPos pos = new ChunkPos(5, 5);
-        injected.add(ChunkPos.asLong(pos.x, pos.z));
+        injected.add(ChunkPos.pack(pos.x(), pos.z()));
         ShadowStorageHashes.put(pos, 3L);
         ShadowStorageHashes.markPersisted(
-                DimensionKey.key(DimensionKey.OVERWORLD, pos.x, pos.z));
+                DimensionKey.key(DimensionKey.OVERWORLD, pos.x(), pos.z()));
         manager.markContentDirty(pos);
         manager.testWriteDelayMs = 400L;
         ShadowStorageManager.FlushResult result = manager.flush(50L);
@@ -345,7 +345,7 @@ class ShadowStorageManagerTest {
     @DisplayName("无注入柱的压缩映像可卸；再 probe 可重新 load")
     void idleCompressedImageUnmountsAndReloads() throws Exception {
         ChunkPos pos = new ChunkPos(10, 10);
-        injected.add(ChunkPos.asLong(pos.x, pos.z));
+        injected.add(ChunkPos.pack(pos.x(), pos.z()));
         ShadowStorageHashes.put(pos, 99L);
         persistIngest(pos);
         injected.clear();
@@ -365,7 +365,7 @@ class ShadowStorageManagerTest {
     @DisplayName("flush 期间 HashIndex 被清空仍写出 0x48 头，新会话 probe 可命中")
     void flushCapturesHashBeforeIndexClear() {
         ChunkPos pos = new ChunkPos(12, 4);
-        injected.add(ChunkPos.asLong(pos.x, pos.z));
+        injected.add(ChunkPos.pack(pos.x(), pos.z()));
         ShadowStorageHashes.put(pos, 0xCAFEBABEL);
         manager.markContentDirty(pos);
         manager.close();
@@ -386,7 +386,7 @@ class ShadowStorageManagerTest {
     @DisplayName("表项过期 mismatch 时仍以磁盘 9B 头为准")
     void probeHashTrustsDiskWhenTableStale() {
         ChunkPos pos = new ChunkPos(7, 2);
-        injected.add(ChunkPos.asLong(pos.x, pos.z));
+        injected.add(ChunkPos.pack(pos.x(), pos.z()));
         ShadowStorageHashes.put(pos, 0x1111L);
         persistIngest(pos);
         injected.clear();
@@ -401,13 +401,13 @@ class ShadowStorageManagerTest {
     @DisplayName("Anvil 头按 4B location 读；三平面读法会漏槽")
     void anvilHeaderUsesSequentialLocationsNotThreePlanes() throws Exception {
         ChunkPos pos = new ChunkPos(3, 1);
-        injected.add(ChunkPos.asLong(pos.x, pos.z));
+        injected.add(ChunkPos.pack(pos.x(), pos.z()));
         ShadowStorageHashes.put(pos, 5L);
         persistIngest(pos);
-        Path file = RegionCache.regionFile(regionDir, pos.x, pos.z);
+        Path file = RegionCache.regionFile(regionDir, pos.x(), pos.z());
         byte[] header = java.nio.file.Files.readAllBytes(file);
         header = java.util.Arrays.copyOf(header, RegionCache.SECTOR_SIZE);
-        int index = RegionCache.localIndex(pos.x, pos.z);
+        int index = RegionCache.localIndex(pos.x(), pos.z());
         assertTrue(RegionCache.locationAt(header, index) != 0);
         int threePlane = (header[index] & 0xFF) << 16
                 | (header[index + 1024] & 0xFF) << 8
@@ -420,8 +420,8 @@ class ShadowStorageManagerTest {
     void oneCompressedImagePerRegion() {
         ChunkPos a = new ChunkPos(0, 0);
         ChunkPos b = new ChunkPos(31, 31);
-        injected.add(ChunkPos.asLong(a.x, a.z));
-        injected.add(ChunkPos.asLong(b.x, b.z));
+        injected.add(ChunkPos.pack(a.x(), a.z()));
+        injected.add(ChunkPos.pack(b.x(), b.z()));
         ShadowStorageHashes.put(a, 1L);
         ShadowStorageHashes.put(b, 2L);
         persistIngest(a);
@@ -437,7 +437,7 @@ class ShadowStorageManagerTest {
     @DisplayName("跨维同坐标：nether manager flush/probe 与 overworld 互不干扰")
     void crossDimensionManagersDoNotInterfere() {
         ChunkPos pos = new ChunkPos(6, 6);
-        injected.add(ChunkPos.asLong(pos.x, pos.z));
+        injected.add(ChunkPos.pack(pos.x(), pos.z()));
 
         ShadowStorageManager nether = new ShadowStorageManager(
                 DimensionKey.NETHER, regionDir, pos2 -> nbtPayload.clone(), injected::contains, 1);
@@ -466,8 +466,8 @@ class ShadowStorageManagerTest {
         ChunkPos positive = new ChunkPos(19, 4);
         ChunkPos negative = new ChunkPos(-13, 4);
         ChunkPos neighbour = new ChunkPos(20, 4);
-        assertEquals(RegionCache.localIndex(positive.x, positive.z),
-                RegionCache.localIndex(negative.x, negative.z), "前置：镜像槽位");
+        assertEquals(RegionCache.localIndex(positive.x(), positive.z()),
+                RegionCache.localIndex(negative.x(), negative.z()), "前置：镜像槽位");
 
         assertTrue(manager.adoptEncodedColumn(positive, adoptedPayload(0xA1L, 11), 0xA1L));
         assertTrue(manager.adoptEncodedColumn(negative, adoptedPayload(0xB2L, 22), 0xB2L));
@@ -500,8 +500,8 @@ class ShadowStorageManagerTest {
         // 新实现整槽不进文件：邻槽安全，该柱退化为下次会话 cache miss。
         ChunkPos neighbour = new ChunkPos(9, 1);
         ChunkPos oversize = new ChunkPos(10, 1);
-        assertEquals(RegionCache.regionKey(neighbour.x, neighbour.z),
-                RegionCache.regionKey(oversize.x, oversize.z), "前置：同 region");
+        assertEquals(RegionCache.regionKey(neighbour.x(), neighbour.z()),
+                RegionCache.regionKey(oversize.x(), oversize.z()), "前置：同 region");
         assertTrue(manager.adoptEncodedColumn(neighbour, adoptedPayload(0xD4L, 44), 0xD4L));
         assertTrue(manager.adoptEncodedColumn(oversize, new byte[255 * 4096], 0xE5L),
                 "超槽位柱照收（本会话仍由映像服务）");
@@ -524,9 +524,9 @@ class ShadowStorageManagerTest {
         // 旧柱扇区随重写真正消失、产物仍是可读的完整映像。
         ChunkPos kept = new ChunkPos(6, 1);
         ChunkPos dropped = new ChunkPos(7, 1);
-        assertEquals(RegionCache.regionKey(kept.x, kept.z),
-                RegionCache.regionKey(dropped.x, dropped.z), "前置：同 region");
-        Path file = RegionCache.regionFile(regionDir, kept.x, kept.z);
+        assertEquals(RegionCache.regionKey(kept.x(), kept.z()),
+                RegionCache.regionKey(dropped.x(), dropped.z()), "前置：同 region");
+        Path file = RegionCache.regionFile(regionDir, kept.x(), kept.z());
         Path tmp = file.resolveSibling(file.getFileName() + RegionCache.Image.TMP_SUFFIX);
 
         assertTrue(manager.adoptEncodedColumn(kept, adoptedPayload(0x51L, 51), 0x51L));
@@ -556,10 +556,10 @@ class ShadowStorageManagerTest {
         // Windows 未授予 FILE_SHARE_DELETE → 原子改名必被拒。退化路径必须仍然落盘完整内容，
         // 否则脏位永不清、重连复用整条链断掉（实测 ATOMIC_MOVE 抛 AccessDeniedException）。
         ChunkPos pos = new ChunkPos(6, 3);
-        injected.add(ChunkPos.asLong(pos.x, pos.z));
+        injected.add(ChunkPos.pack(pos.x(), pos.z()));
         ShadowStorageHashes.put(pos, 0x71L);
         persistIngest(pos);
-        Path file = RegionCache.regionFile(regionDir, pos.x, pos.z);
+        Path file = RegionCache.regionFile(regionDir, pos.x(), pos.z());
         Path tmp = file.resolveSibling(file.getFileName() + RegionCache.Image.TMP_SUFFIX);
         assertTrue(java.nio.file.Files.isRegularFile(file), "前置：先有一次落盘");
 
@@ -603,13 +603,13 @@ class ShadowStorageManagerTest {
     @DisplayName("deleteRegion 删除整个 .mca 并清 hash / 热度")
     void deleteRegionRemovesFileAndHeat() throws Exception {
         ChunkPos pos = new ChunkPos(1, 2);
-        injected.add(ChunkPos.asLong(pos.x, pos.z));
+        injected.add(ChunkPos.pack(pos.x(), pos.z()));
         ShadowStorageHashes.put(pos, 8L);
         persistIngest(pos);
-        Path file = RegionCache.regionFile(regionDir, pos.x, pos.z);
+        Path file = RegionCache.regionFile(regionDir, pos.x(), pos.z());
         assertTrue(java.nio.file.Files.isRegularFile(file));
-        injected.remove(ChunkPos.asLong(pos.x, pos.z));
-        manager.deleteRegion(Math.floorDiv(pos.x, 32), Math.floorDiv(pos.z, 32));
+        injected.remove(ChunkPos.pack(pos.x(), pos.z()));
+        manager.deleteRegion(Math.floorDiv(pos.x(), 32), Math.floorDiv(pos.z(), 32));
         assertFalse(java.nio.file.Files.isRegularFile(file));
         assertNull(ShadowStorageHashes.get(pos));
         assertEquals(0, ShadowRegionHeat.entryCount());
@@ -623,10 +623,10 @@ class ShadowStorageManagerTest {
         // 原版按坐标读取即报 wrong location 且内容错位（冒烟 1.20.1 fabric 114 条实证）。
         ChunkPos positive = new ChunkPos(19, 4);
         ChunkPos negative = new ChunkPos(-13, 4);
-        assertEquals(RegionCache.localIndex(positive.x, positive.z),
-                RegionCache.localIndex(negative.x, negative.z), "前置：镜像槽位");
-        injected.add(ChunkPos.asLong(positive.x, positive.z));
-        injected.add(ChunkPos.asLong(negative.x, negative.z));
+        assertEquals(RegionCache.localIndex(positive.x(), positive.z()),
+                RegionCache.localIndex(negative.x(), negative.z()), "前置：镜像槽位");
+        injected.add(ChunkPos.pack(positive.x(), positive.z()));
+        injected.add(ChunkPos.pack(negative.x(), negative.z()));
         ShadowStorageHashes.put(positive, 0x111L);
         ShadowStorageHashes.put(negative, 0x222L);
         manager.markContentDirty(positive);

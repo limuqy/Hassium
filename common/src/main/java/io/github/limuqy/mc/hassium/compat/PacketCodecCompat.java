@@ -220,9 +220,24 @@ public final class PacketCodecCompat {
         if (flow == PacketFlow.CLIENTBOUND) {
             return net.minecraft.network.protocol.game.GameProtocols.CLIENTBOUND_TEMPLATE.bind(decorator);
         }
+        // 26.3：bind 第二参从 BooleanSupplier 改为非函数接口 GameProtocols.Context
+        //（26.1.2–26.2 仅 hasInfiniteMaterials；26.3 增 canUseCommandBlocks）。
+        // 桥接解码上下文沿用旧 () -> true 的语义（无限材料 + 允许命令块）。
         return net.minecraft.network.protocol.game.GameProtocols.SERVERBOUND_TEMPLATE.bind(
                 decorator,
-                () -> true);
+                new net.minecraft.network.protocol.game.GameProtocols.Context() {
+                    @Override
+                    public boolean hasInfiniteMaterials() {
+                        return true;
+                    }
+
+#if MC_VER >= MC_26_3
+                    @Override
+                    public boolean canUseCommandBlocks() {
+                        return true;
+                    }
+#endif
+                });
     }
 
 

@@ -83,7 +83,7 @@ public final class ChunkAuthorityHashes {
         if (dimension == null || pos == null) {
             return null;
         }
-        long[] stored = getByKey(DimensionKey.key(dimension, pos.x, pos.z));
+        long[] stored = getByKey(DimensionKey.key(dimension, pos.x(), pos.z()));
         if (stored == null) {
             MISSES.incrementAndGet();
             return null;
@@ -126,7 +126,7 @@ public final class ChunkAuthorityHashes {
             SHADOW_REJECTS.incrementAndGet();
             return;
         }
-        putByKey(DimensionKey.key(dimension, pos.x, pos.z), sectionHashes.clone());
+        putByKey(DimensionKey.key(dimension, pos.x(), pos.z()), sectionHashes.clone());
     }
 
     /** 方块变更失效（旧的权威 hash 已不再代表内容）。 */
@@ -134,7 +134,7 @@ public final class ChunkAuthorityHashes {
         if (dimension == null || pos == null) {
             return;
         }
-        invalidate(dimension, pos.x, pos.z);
+        invalidate(dimension, pos.x(), pos.z());
     }
 
     /** 方块变更失效（指定维度/坐标）。 */

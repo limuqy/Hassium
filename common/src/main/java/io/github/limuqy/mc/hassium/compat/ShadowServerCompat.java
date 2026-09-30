@@ -20,7 +20,12 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.storage.PlayerDataStorage;
+// authlib：26.3 ServicesKeySet 迁入 com.mojang.authlib.services
+#if MC_VER >= MC_26_3
+import com.mojang.authlib.services.ServicesKeySet;
+#else
 import com.mojang.authlib.yggdrasil.ServicesKeySet;
+#endif
 import net.minecraft.world.level.chunk.PalettedContainerFactory;
 import net.minecraft.server.level.ChunkResult;
 import net.minecraft.world.level.chunk.status.ChunkStatus;
@@ -66,7 +71,7 @@ public final class ShadowServerCompat {
             ServerChunkCache cache, ChunkPos pos, boolean biomesOnly, long deadlineNanos) {
         ChunkStatus status = biomesOnly ? ChunkStatus.BIOMES : ChunkStatus.FULL;
         CompletableFuture<ChunkResult<ChunkAccess>> future =
-                cache.getChunkFuture(pos.x, pos.z, status, true);
+                cache.getChunkFuture(pos.x(), pos.z(), status, true);
         while (!future.isDone()) {
             if (System.nanoTime() > deadlineNanos) {
                 return null;
@@ -82,14 +87,14 @@ public final class ShadowServerCompat {
         } catch (Throwable t) {
             // 例如 "No chunk holder after ticket has been added"（票未钉稳时）：
             // 以失败回调，不得把 CompletionException 抛回 local-gen 池/主循环 pollTask。
-            Constants.LOG.warn("Hassium: awaitGeneratedChunk join failed ({}, {})", pos.x, pos.z, t);
+            Constants.LOG.warn("Hassium: awaitGeneratedChunk join failed ({}, {})", pos.x(), pos.z(), t);
             return null;
         }
     }
 
     /** 获取注入柱的原版 LIGHT future；邻柱由 LightEngine 的 getter 读取，不单独请求 holder。 */
     public static CompletableFuture<ChunkAccess> requestLightChunk(ServerChunkCache cache, ChunkPos pos) {
-        return requestSingleLight(cache, pos.x, pos.z);
+        return requestSingleLight(cache, pos.x(), pos.z());
     }
 
     private static CompletableFuture<ChunkAccess> requestSingleLight(ServerChunkCache cache, int x, int z) {
@@ -238,6 +243,19 @@ public final class ShadowServerCompat {
     public static Services noServices() {
         return new Services(null, ServicesKeySet.EMPTY, null,
                 new MockUserNameToIdResolver(), new MockProfileResolver());
+    }
+
+    /**
+     * WorldLoader.DataLoadContext 的 worldgen 注册表 lookup。
+     * 26.3 记录组件改名 {@code datapackWorldgen}→{@code datapackWorldRegistries}。
+     */
+    public static net.minecraft.core.HolderLookup.Provider datapackWorldGen(
+            net.minecraft.server.WorldLoader.DataLoadContext dataLoadContext) {
+#if MC_VER >= MC_26_3
+        return dataLoadContext.datapackWorldRegistries();
+#else
+        return dataLoadContext.datapackWorldgen();
+#endif
     }
 
     /**

@@ -110,7 +110,7 @@ public final class SmokeChunkTrace {
         if (ShadowTrackingSession.serverViewDistance() <= 0 || !session.hasTrackingState()) {
             return false;
         }
-        return ShadowTrackingSession.isDeliverableToClient(pos.x, pos.z);
+        return ShadowTrackingSession.isDeliverableToClient(pos.x(), pos.z());
     }
 
     public static void recordClientApplied(String dimension, ChunkPos pos) {
@@ -132,7 +132,7 @@ public final class SmokeChunkTrace {
         if (!ENABLED || pos == null || !DimensionKey.isCacheableDimension(dimension)) {
             return;
         }
-        WORLDGEN_START_AT_NS.putIfAbsent(DimensionKey.key(dimension, pos.x, pos.z), System.nanoTime());
+        WORLDGEN_START_AT_NS.putIfAbsent(DimensionKey.key(dimension, pos.x(), pos.z()), System.nanoTime());
         WORLDGEN_STARTS.incrementAndGet();
     }
 
@@ -144,7 +144,7 @@ public final class SmokeChunkTrace {
         if (!ENABLED || pos == null || !DimensionKey.isCacheableDimension(dimension)) {
             return;
         }
-        long key = DimensionKey.key(dimension, pos.x, pos.z);
+        long key = DimensionKey.key(dimension, pos.x(), pos.z());
         Long startNs = WORLDGEN_START_AT_NS.remove(key);
         if (startNs == null) {
             return;
@@ -271,7 +271,7 @@ public final class SmokeChunkTrace {
     private static void record(Set<Long> destination, ConcurrentHashMap<Long, Long> times,
                                String dimension, ChunkPos pos) {
         if (ENABLED && pos != null && DimensionKey.isCacheableDimension(dimension)) {
-            long key = DimensionKey.key(dimension, pos.x, pos.z);
+            long key = DimensionKey.key(dimension, pos.x(), pos.z());
             destination.add(key);
             if (times != null) {
                 times.putIfAbsent(key, System.currentTimeMillis());
@@ -283,7 +283,7 @@ public final class SmokeChunkTrace {
         Set<Long> positions = ConcurrentHashMap.newKeySet();
         for (long key : source) {
             if (dimension.equals(DimensionKey.dimensionOf(key))) {
-                positions.add(ChunkPos.asLong(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key)));
+                positions.add(ChunkPos.pack(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key)));
             }
         }
         return positions;
@@ -293,7 +293,7 @@ public final class SmokeChunkTrace {
         java.util.Map<Long, Long> result = new java.util.HashMap<>();
         for (var entry : source.entrySet()) {
             if (dimension.equals(DimensionKey.dimensionOf(entry.getKey()))) {
-                result.put(ChunkPos.asLong(DimensionKey.chunkXOf(entry.getKey()),
+                result.put(ChunkPos.pack(DimensionKey.chunkXOf(entry.getKey()),
                         DimensionKey.chunkZOf(entry.getKey())), entry.getValue());
             }
         }
@@ -312,7 +312,7 @@ public final class SmokeChunkTrace {
         for (long packed : positions) {
             result.add(new ChunkPos(ChunkPos.getX(packed), ChunkPos.getZ(packed)));
         }
-        result.sort(Comparator.comparingInt((ChunkPos pos) -> pos.z).thenComparingInt(pos -> pos.x));
+        result.sort(Comparator.comparingInt((ChunkPos pos) -> pos.z()).thenComparingInt(pos -> pos.x()));
         return List.copyOf(result);
     }
 

@@ -3,6 +3,8 @@
 本文档描述 Hassium 与其他模组并存时的预期行为、已知边界与配置逃生口。跨版本 API 桥接见 [`version-segments.md`](version-segments.md)；区块推送见 [`chunk-cache.md`](chunk-cache.md)。
 
 > 2.0.0 直连拓扑：客户端↔服务端**唯一 vanilla TCP**，全部自定义 payload 走 vanilla 通道；网络核心（进程内网关）、UDP 数据面、ViaFabric 兼容桥已裁剪。
+>
+> **26.x（2026-09-30 起）**：本文实测记录多为 1.20.1–1.21.11 时代（钩子存活性已核，见 [`mc26-upgrade-plan.md`](mc26-upgrade-plan.md) §2.2）。26.x 注意：cloth-config / IMBlocker 无 26.x 构建——cloth-ui 暂不编入（配置屏反射拦截，NeoForge 侧配置按钮本走反射不受影响）；Mod Menu 用 26.x 专属构建（26.1.2=18 / 26.2=20 / 26.3=21）。三方 mod（Starlight / C2ME / TF 等）在 26.x 的兼容实测待逐锚点复测。
 
 ## 1. 兼容边界
 

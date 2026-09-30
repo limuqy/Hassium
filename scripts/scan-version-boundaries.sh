@@ -4,19 +4,19 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-ALLOWED='MC_1_21_11'
+ALLOWED='MC_26_1_2|MC_26_2|MC_26_3'
 
 illegal=0
 while IFS= read -r -d '' file; do
   while IFS= read -r match; do
-    token=$(echo "$match" | grep -oE 'MC_1_[0-9]+_[0-9]+' | head -1)
+    token=$(echo "$match" | grep -oE 'MC_[0-9]+(_[0-9]+)+' | head -1)
     line=$(echo "$match" | cut -d: -f2)
     rel=${file#"$ROOT/"}
     if ! echo "$token" | grep -qE "^($ALLOWED)$"; then
       echo "  ${rel}:${line}: ${token}"
       illegal=1
     fi
-  done < <(grep -nE 'MC_1_[0-9]+_[0-9]+' "$file" || true)
+  done < <(grep -nE 'MC_[0-9]+(_[0-9]+)+' "$file" || true)
 done < <(find "$ROOT/common" "$ROOT/fabric" "$ROOT/neoforge" -name '*.java' -print0 2>/dev/null)
 
 if [[ "$illegal" -ne 0 ]]; then

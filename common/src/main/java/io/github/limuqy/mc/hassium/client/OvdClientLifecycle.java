@@ -148,8 +148,8 @@ public final class OvdClientLifecycle {
             return false;
         }
         ChunkPos playerPos = mc.player.chunkPosition();
-        int dx = pos.x - playerPos.x;
-        int dz = pos.z - playerPos.z;
+        int dx = pos.x() - playerPos.x();
+        int dz = pos.z() - playerPos.z();
         if (isInClientChebyshev(dx, dz, clientVD)) {
             return !isInServerShape(dx, dz, serverVD);
         }

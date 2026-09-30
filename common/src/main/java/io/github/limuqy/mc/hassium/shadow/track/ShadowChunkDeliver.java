@@ -34,10 +34,10 @@ public final class ShadowChunkDeliver {
             return false;
         }
         // 远离视距 + 余量外不投递；边界内仍投，原版可 Ignore 更远柱
-        if (!renderOnly && !ShadowTrackingSession.isDeliverableToClient(pos.x, pos.z)) {
+        if (!renderOnly && !ShadowTrackingSession.isDeliverableToClient(pos.x(), pos.z())) {
             DebugLogger.info(DebugLogger.LogType.CHUNK_APPLY,
                     "[SHADOW_DELIVER] skip beyond view+margin ({}, {}) dim={}",
-                    pos.x, pos.z, dimension);
+                    pos.x(), pos.z(), dimension);
             return false;
         }
         // 【2026-09-19】原此处另有一道 `SeedGenCompareGate.isAwaiting` 检查，已删：

@@ -113,7 +113,7 @@ public abstract class MixinRegionFile {
         if (table == null) {
             return;
         }
-        int index = (pos.x & 31) + (pos.z & 31) * 32;
+        int index = (pos.x() & 31) + (pos.z() & 31) * 32;
         table.putInt(index * 4, timestamp);
         // review-fix: T7-64: 脏标记——不再每次 chunk 写立即整扇区落盘
         hassium$metadataDirty = true;
@@ -500,7 +500,7 @@ public abstract class MixinRegionFile {
         try {
             HassiumType126Codec.Decoded decoded = HassiumType126Codec.decode(rawData);
             if (decoded.contentHash() != null) {
-                io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes.put(pos.x, pos.z, decoded.contentHash());
+                io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes.put(pos.x(), pos.z(), decoded.contentHash());
             }
             decompressed = decoded.nbt();
         } catch (Exception e) {

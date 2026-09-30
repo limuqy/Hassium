@@ -180,6 +180,20 @@ public final class EntityUpdatePacing {
      * 只替换门条件那一处读取（{@code ordinal = 0}）；方法内后面的 {@code tickCount % 60}
      * 绝对包节拍与 {@code tickCount > 0} 首帧判定保持原版。
      */
+    /**
+     * 26.3+ {@code UpdateInterval.test} 门条件替换（等价 J/K 的 tickCount 相位 + interval 除数双替换）。
+     * 受控 → {@code (tickCount + phase) % effective == 0}；完全未替换时保持原版判定
+     * （含 NEVER/自定义区间语义）。由 MixinServerEntity 的 test() 重定向调用。
+     */
+    public static boolean pacedGateTest(Entity entity, int vanillaInterval, int tickCount, boolean vanillaFire) {
+        int staggered = staggeredTickCount(entity, tickCount, vanillaInterval);
+        int effective = effectiveInterval(entity, vanillaInterval);
+        if (staggered == tickCount && effective == vanillaInterval) {
+            return vanillaFire;
+        }
+        return staggered % Math.max(1, effective) == 0;
+    }
+
     public static int staggeredTickCount(Entity entity, int tickCount, int vanillaInterval) {
         Snapshot current = snapshot;
         if (!current.active || !current.smoothPush || !eligible(entity, current)

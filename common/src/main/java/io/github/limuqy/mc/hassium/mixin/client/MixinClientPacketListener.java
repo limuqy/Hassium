@@ -1,5 +1,7 @@
 package io.github.limuqy.mc.hassium.mixin.client;
 
+import io.github.limuqy.mc.hassium.compat.ChunkLightPacketCompat;
+
 import io.github.limuqy.mc.hassium.platform.client.TraceOrigin;
 
 import io.github.limuqy.mc.hassium.client.ClientLifecycleHelper;
@@ -55,12 +57,12 @@ public class MixinClientPacketListener {
             // pull FULL 响应落地（影子 tracking 采集）以 REMOTE_PULL 归因，区别于服务端自主推送
             io.github.limuqy.mc.hassium.platform.client.TraceOrigin origin =
                     io.github.limuqy.mc.hassium.client.ClientChunkHandler.consumePullApplyOrigin(
-                            packet.getX(), packet.getZ())
+                            ChunkLightPacketCompat.chunkX(packet), ChunkLightPacketCompat.chunkZ(packet))
                             ? io.github.limuqy.mc.hassium.platform.client.TraceOrigin.REMOTE_PULL
                             : io.github.limuqy.mc.hassium.platform.client.TraceOrigin.SERVER_PUSH;
             io.github.limuqy.mc.hassium.shadow.light.ShadowVanillaLightPipeline.submitVisible(
                     io.github.limuqy.mc.hassium.shadow.light.ShadowVanillaLightPipeline.currentDimension(),
-                    new net.minecraft.world.level.ChunkPos(packet.getX(), packet.getZ()), packet,
+                    new net.minecraft.world.level.ChunkPos(ChunkLightPacketCompat.chunkX(packet), ChunkLightPacketCompat.chunkZ(packet)), packet,
                     origin);
             this.hassium$recordNativeChunk = false;
             ci.cancel();
@@ -71,9 +73,9 @@ public class MixinClientPacketListener {
         if (!this.hassium$recordNativeChunk) {
             return;
         }
-        this.hassium$nativeChunkX = packet.getX();
-        this.hassium$nativeChunkZ = packet.getZ();
-        this.hassium$nativeChunkPayloadBytes = packet.getChunkData().getReadBuffer().readableBytes();
+        this.hassium$nativeChunkX = ChunkLightPacketCompat.chunkX(packet);
+        this.hassium$nativeChunkZ = ChunkLightPacketCompat.chunkZ(packet);
+        this.hassium$nativeChunkPayloadBytes = ChunkLightPacketCompat.chunkData(packet).getReadBuffer().readableBytes();
     }
 
     /** 仅原版 replaceWithPacketData 成功返回后，才把完整区块计入真实接收/落地指标。 */
@@ -166,6 +168,25 @@ public class MixinClientPacketListener {
     //   1.21.9+       另含 Pos-only (Vec3) 与 Rot-only (FF) 重载
     // teleport 纠偏走 handleTeleportEntity（不同方法），不经此路径，保持原版快速对齐。
 
+    // 26.3 moveOrInterpolateTo 位置参换 PositionPath；26.1.2-26.2 为 Vec3 三重载。
+    // Mixin 目标描述符跨版本，#if 留在本类（hassium-manifold 允许）。
+#if MC_VER >= MC_26_3
+    @Redirect(method = "handleMoveEntity", at = @At(value = "INVOKE",
+            target = "Lnet/minecraft/world/entity/Entity;moveOrInterpolateTo(Lnet/minecraft/world/entity/PositionPath;FF)V"))
+    private void hassium$adaptiveEntitySteps(net.minecraft.world.entity.Entity entity,
+            net.minecraft.world.entity.PositionPath pos, float yRot, float xRot) {
+        hassium$applyAdaptiveEntitySteps(entity);
+        entity.moveOrInterpolateTo(pos, yRot, xRot);
+    }
+
+    @Redirect(method = "handleMoveEntity", at = @At(value = "INVOKE",
+            target = "Lnet/minecraft/world/entity/Entity;moveOrInterpolateTo(Lnet/minecraft/world/entity/PositionPath;)V"))
+    private void hassium$adaptiveEntityStepsNoRotation(net.minecraft.world.entity.Entity entity,
+            net.minecraft.world.entity.PositionPath pos) {
+        hassium$applyAdaptiveEntitySteps(entity);
+        entity.moveOrInterpolateTo(pos);
+    }
+#else
     @Redirect(method = "handleMoveEntity", at = @At(value = "INVOKE",
             target = "Lnet/minecraft/world/entity/Entity;moveOrInterpolateTo(Lnet/minecraft/world/phys/Vec3;FF)V"))
     private void hassium$adaptiveEntitySteps(net.minecraft.world.entity.Entity entity,
@@ -181,6 +202,7 @@ public class MixinClientPacketListener {
         hassium$applyAdaptiveEntitySteps(entity);
         entity.moveOrInterpolateTo(pos);
     }
+#endif
 
     @Redirect(method = "handleMoveEntity", at = @At(value = "INVOKE",
             target = "Lnet/minecraft/world/entity/Entity;moveOrInterpolateTo(FF)V"))
@@ -193,14 +215,13 @@ public class MixinClientPacketListener {
     /**
      * 1.21.5+：窗口存放于 {@code InterpolationHandler.interpolationSteps}（构造默认 3），
      * 收包时先写入自适应步数，随后原版 moveOrInterpolateTo 按该步数插值。
-     * null（无插值处理器的实体）走原版直接 setPos 路径，无需干预。
+     * 26.3：步数不再由客户端 {@code setInterpolationLength} 控制——插值窗口随服务端
+     * {@code PositionPath.Stepped} 在包内编码（{@code SteppedInterpolationTracker}），
+     * 适配点移到服务端实体包构建（见 mc26-upgrade-plan.md §8）；客户端侧仅保留节奏表观测。
      */
     private void hassium$applyAdaptiveEntitySteps(net.minecraft.world.entity.Entity entity) {
         int steps = EntityLerpPacing.observeAndPlan(entity.getId(), entity.level().getGameTime());
-        net.minecraft.world.entity.InterpolationHandler interpolation = entity.getInterpolation();
-        if (interpolation != null) {
-            interpolation.setInterpolationLength(steps);
-        }
+        io.github.limuqy.mc.hassium.compat.EntityInterpCompat.applyAdaptiveSteps(entity, steps);
     }
 
     /** 头旋转包：lerpHeadTo 描述符全版本一致，与位置包共用同一节奏表（同 tick 第二包 gap=0 幂等）。 */

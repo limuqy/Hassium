@@ -1,5 +1,7 @@
 package io.github.limuqy.mc.hassium.shadow.track;
 
+import io.github.limuqy.mc.hassium.compat.ChunkLightPacketCompat;
+
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import net.minecraft.client.Minecraft;
@@ -75,7 +77,7 @@ public final class ShadowOfficialPacketBridge {
         // 光照增量已随光桥删除不再产生（保留判据为防御）。
         if (dimension != null && packet instanceof ClientboundLightUpdatePacket lightPacket
                 && io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
-                        .blockClientDelivery(dimension, lightPacket.getX(), lightPacket.getZ())) {
+                        .blockClientDelivery(dimension, ChunkLightPacketCompat.lightX(lightPacket), ChunkLightPacketCompat.lightZ(lightPacket))) {
             return false;
         }
         try {

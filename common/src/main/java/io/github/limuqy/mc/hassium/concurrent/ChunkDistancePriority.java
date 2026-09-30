@@ -72,8 +72,8 @@ public final class ChunkDistancePriority {
      * chunk 坐标空间平方欧氏距离（用于 Comparator / 排序，无开方）。
      */
     public static double distSq(ChunkPos pos, double playerChunkX, double playerChunkZ) {
-        double dx = pos.x - playerChunkX;
-        double dz = pos.z - playerChunkZ;
+        double dx = pos.x() - playerChunkX;
+        double dz = pos.z() - playerChunkZ;
         return dx * dx + dz * dz;
     }
 
@@ -81,8 +81,8 @@ public final class ChunkDistancePriority {
      * 整数中心（如 view-distance resync 扫掠中心）的平方距离。
      */
     public static double distSq(ChunkPos pos, int centerChunkX, int centerChunkZ) {
-        double dx = pos.x - (double) centerChunkX;
-        double dz = pos.z - (double) centerChunkZ;
+        double dx = pos.x() - (double) centerChunkX;
+        double dz = pos.z() - (double) centerChunkZ;
         return dx * dx + dz * dz;
     }
 

@@ -1,5 +1,7 @@
 package io.github.limuqy.mc.hassium.shadow.light;
 
+import io.github.limuqy.mc.hassium.compat.ChunkLightPacketCompat;
+
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.compat.ShadowServerCompat;
 import net.minecraft.core.BlockPos;
@@ -64,13 +66,13 @@ public final class SeedGenChunkCodec {
             if (sky == null && block == null) {
                 return;
             }
-            net.minecraft.network.protocol.game.ClientboundLightUpdatePacketData ld = packet.getLightData();
+            net.minecraft.network.protocol.game.ClientboundLightUpdatePacketData ld = ChunkLightPacketCompat.lightData(packet);
             int sections = engine.getLightSectionCount();
             if (sky != null) {
-                fillLight(ld.getSkyYMask(), ld.getEmptySkyYMask(), ld.getSkyUpdates(), sky, sections);
+                fillLight(ChunkLightPacketCompat.skyYMask(ld), ChunkLightPacketCompat.emptySkyYMask(ld), ChunkLightPacketCompat.skyUpdates(ld), sky, sections);
             }
             if (block != null) {
-                fillLight(ld.getBlockYMask(), ld.getEmptyBlockYMask(), ld.getBlockUpdates(), block, sections);
+                fillLight(ChunkLightPacketCompat.blockYMask(ld), ChunkLightPacketCompat.emptyBlockYMask(ld), ChunkLightPacketCompat.blockUpdates(ld), block, sections);
             }
         } catch (Throwable t) {
             Constants.LOG.warn("Hassium: writeForeignLight failed {}", chunk.getPos(), t);

@@ -273,8 +273,8 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
         // payload type 注册统一在 FabricPayloadRegistry.registerAll（registerChannels 时调用，幂等）
         ServerConfigurationNetworking.registerGlobalReceiver(PreHandshakePayload.TYPE,
                 (payload, context) -> {
-                    UUID playerId = io.github.limuqy.mc.hassium.compat.PlayerCompat.getProfileId(context.networkHandler().getOwner());
-                    net.minecraft.network.Connection connection = io.github.limuqy.mc.hassium.compat.PlayerCompat.getConnection(context.networkHandler());
+                    UUID playerId = io.github.limuqy.mc.hassium.compat.PlayerCompat.getProfileId(context.packetListener().getOwner());
+                    net.minecraft.network.Connection connection = io.github.limuqy.mc.hassium.compat.PlayerCompat.getConnection(context.packetListener());
                     PreHandshakeProtocol.handlePreHandshake(playerId, payload, connection);
                 });
     }

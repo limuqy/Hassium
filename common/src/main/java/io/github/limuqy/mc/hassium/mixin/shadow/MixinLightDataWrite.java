@@ -31,6 +31,10 @@ public abstract class MixinLightDataWrite {
     @Unique
     private static final ThreadLocal<Integer> hassium$lightWriteStartIdx = new ThreadLocal<>();
 
+    // 26.3：ClientboundLightUpdatePacketData record 化后无 write 方法（编码走 STREAM_CODEC
+    // 复合 lambda，无可注入的真实方法）——本指标 26.3 起停采，估算常量 ESTIMATED_LIGHT_BYTES
+    // 兜底（见 mc26-upgrade-plan.md §8）。26.1.2–26.2 仍按 write 前后 writerIndex 差值实测。
+#if MC_VER < MC_26_3
     @Inject(method = "write", at = @At("HEAD"))
     private void hassium$captureLightWriteStart(FriendlyByteBuf buf, CallbackInfo ci) {
         hassium$lightWriteStartIdx.set(buf.writerIndex());
@@ -46,4 +50,5 @@ public abstract class MixinLightDataWrite {
             }
         }
     }
+#endif
 }

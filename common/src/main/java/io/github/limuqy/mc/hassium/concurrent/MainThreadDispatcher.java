@@ -56,7 +56,7 @@ public final class MainThreadDispatcher {
         if (pos == null) {
             return null;
         }
-        return new KeyedPriorityQueue.Key(ChunkPos.asLong(pos.x, pos.z), op);
+        return new KeyedPriorityQueue.Key(ChunkPos.pack(pos.x(), pos.z()), op);
     }
 
     private static final KeyedPriorityQueue<CallbackTask> CLIENT_QUEUE =
@@ -128,7 +128,7 @@ public final class MainThreadDispatcher {
         if (chunkPos == null || tier == null) {
             return ChunkDistancePriority.unknown();
         }
-        return priorityOf(tier, chunkPos.x, chunkPos.z);
+        return priorityOf(tier, chunkPos.x(), chunkPos.z());
     }
 
     /** review-fix: T8-29: 整数坐标核心实现（不分配 ChunkPos）；world 坐标按 /16 换算为 chunk 分式坐标。 */

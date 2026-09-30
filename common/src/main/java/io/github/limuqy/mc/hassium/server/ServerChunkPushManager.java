@@ -4,6 +4,7 @@ import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil;
 import io.github.limuqy.mc.hassium.compat.LevelChunkSectionCompat;
 import io.github.limuqy.mc.hassium.compat.ChunkPacketDataCompat;
+import io.github.limuqy.mc.hassium.compat.ChunkLightPacketCompat;
 
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.compression.CompressionService;
@@ -205,7 +206,7 @@ public class ServerChunkPushManager {
         }
         ChunkPos pos = new ChunkPos(pending.entry().chunkX(), pending.entry().chunkZ());
         // 必须带维度：票加在各自 ServerLevel 上，跨维同坐标共享 refs 会导致一维漏加票、另一维票泄漏
-        long key = DimensionKey.key(pending.dimension(), pos.x, pos.z);
+        long key = DimensionKey.key(pending.dimension(), pos.x(), pos.z());
         int refs = demandTicketRefs.merge(key, 1, Integer::sum);
         pending.ticketed = true;
         pending.ticketNanos = System.nanoTime();
@@ -228,7 +229,7 @@ public class ServerChunkPushManager {
         pending.ticketed = false;
         ChunkPos pos = new ChunkPos(pending.entry().chunkX(), pending.entry().chunkZ());
         // 与 acquireDemandTicket 同源：DimensionKey 复合键
-        long key = DimensionKey.key(pending.dimension(), pos.x, pos.z);
+        long key = DimensionKey.key(pending.dimension(), pos.x(), pos.z());
         Integer refs = demandTicketRefs.get(key);
         if (refs == null) {
             return;
@@ -294,11 +295,11 @@ public class ServerChunkPushManager {
                     i, p.entry().chunkX(), p.entry().chunkZ(), ready, p.ticketed));
         }
         for (int idx : PullPacingValve.selectLookaheadTickets(
-                candidates, center.x, center.z, ticketedUnready, lookahead)) {
+                candidates, center.x(), center.z(), ticketedUnready, lookahead)) {
             acquireDemandTicket(live.get(idx));
         }
         List<Integer> selected = PullPacingValve.selectReadyToHash(
-                candidates, center.x, center.z, hashBudget);
+                candidates, center.x(), center.z(), hashBudget);
         boolean[] completed = new boolean[live.size()];
         int unchangedLeft = PullPacingValve.UNCHANGED_PER_TICK;
         int fullLeft = fullBudget;
@@ -614,7 +615,7 @@ public class ServerChunkPushManager {
         initialPlayerChunkPos.put(player.getUUID(), pos);
         DebugLogger.info(LogType.NETWORK,
                 "[PLAY_INIT] Player {} initial position ({}, {}) → chunk ({}, {})",
-                player.getName().getString(), x, z, pos.x, pos.z);
+                player.getName().getString(), x, z, pos.x(), pos.z());
     }
 
     /**
@@ -848,18 +849,14 @@ public class ServerChunkPushManager {
 
     private ClientboundLevelChunkWithLightPacket stripLightInPlace(
             ChunkPos pos, ClientboundLevelChunkWithLightPacket packet) {
-        FriendlyByteBuf buffer = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
         try {
-            ChunkPacketDataCompat.writeEmptyLightData(buffer);
             ClientboundLightUpdatePacketData emptyLight =
-                    new ClientboundLightUpdatePacketData(buffer, pos.x, pos.z);
+                    ChunkLightPacketCompat.emptyLightData(pos.x(), pos.z());
             ((LevelChunkWithLightPacketAccessor) (Object) packet).hassium$setLightData(emptyLight);
             return packet;
         } catch (Exception e) {
             Constants.LOG.warn("[LIGHT-STRIP] Failed to replace light payload at {}; retaining vanilla light", pos, e);
             return packet;
-        } finally {
-            buffer.release();
         }
     }
 
