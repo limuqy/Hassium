@@ -12,7 +12,7 @@ import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.commands.Commands;
 import net.minecraft.network.chat.Component;
-import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
+import net.fabricmc.fabric.api.client.command.v2.ClientCommands;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.command.v2.FabricClientCommandSource;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
@@ -64,17 +64,17 @@ public class FabricHassiumCommand {
     }
 
     private static void registerClientCommandsInternal(CommandDispatcher<FabricClientCommandSource> dispatcher) {
-        LiteralArgumentBuilder<FabricClientCommandSource> hassiumc = ClientCommandManager.literal("hassiumc")
-                .then(ClientCommandManager.literal("stats")
+        LiteralArgumentBuilder<FabricClientCommandSource> hassiumc = ClientCommands.literal("hassiumc")
+                .then(ClientCommands.literal("stats")
                         .requires(source -> HassiumCommandHandler.isMetricsEnabled())
                         .executes(FabricHassiumCommand::showClientStats)
                 )
-                .then(ClientCommandManager.literal("export")
+                .then(ClientCommands.literal("export")
                         .executes(FabricHassiumCommand::exportCurrentWorld)
-                        .then(ClientCommandManager.argument("serverIp", StringArgumentType.word())
+                        .then(ClientCommands.argument("serverIp", StringArgumentType.word())
                                 .suggests(FabricHassiumCommand::suggestCachedServers)
                                 .executes(FabricHassiumCommand::exportWithArgs)
-                                .then(ClientCommandManager.argument("seed", LongArgumentType.longArg())
+                                .then(ClientCommands.argument("seed", LongArgumentType.longArg())
                                         .executes(FabricHassiumCommand::exportWithArgs)
                                 )
                         )
