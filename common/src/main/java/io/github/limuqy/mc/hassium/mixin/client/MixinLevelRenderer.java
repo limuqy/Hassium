@@ -11,11 +11,11 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 /**
  * 网格编译完成钩子：与 {@code [CHUNK_APPLY]} 对照 apply→mesh 延迟。
  * 1.20.1（&lt;1.21.1）={@code addRecentlyCompiledChunk}；1.21.1–26.2={@code addRecentlyCompiledSection}；
- * 26.3 起 LevelRenderer 该方法移除，编译完成通知迁至
+ * 26.2 起 LevelRenderer 该方法移除，编译完成通知迁至
  * {@code SectionRenderDispatcher.RenderSection.setSectionMesh}（{@code onSectionMeshUpdate} 回调点）。
  * Mixin 目标类/方法跨版本，#if 留在本类（hassium-manifold 允许）。
  */
-#if MC_VER >= MC_26_3
+#if MC_VER >= MC_26_2
 @Mixin(SectionRenderDispatcher.RenderSection.class)
 public class MixinLevelRenderer {
 
