@@ -255,8 +255,8 @@ archive/pre-baseline = 当前 HEAD 的引用（1.20.1–1.21.10 完整历史后�
 | ④ | 构建链接线到 26.x（buildSrc 双插件 + 三段 properties + 代理/JDK25） | ✅ 完成（poc 分支） | `poc/mc26-build`@`e3414a6d`；loom 门控（common/fabric）+ MDG（neoforge，含 runs 烟测接线移植）；注意事项见 §7.1 |
 | ④ | 26.3 API 机械清扫 + 结构断点修复 + 跨锚点 #if 矩阵 | ✅ 完成 | 机械 ~1350 + 结构 29 + 跨锚点 13 类收口；poc `83558c64`/`5c333110`/`6bd85c73`/`db54fa18` |
 | ④ | 三锚点编译门（compileJava ×3 锚点 ×2 loader + scan + test） | ✅ 完成 | 26.1.2/26.2/26.3 全绿；scanVersionBoundaries OK；common:test 绿 |
-| ④ | 冒烟 + 光照红线验收 | ◐ 进行中 | L2 batch（D7 四组合）：seedgen 4/4 PASS；dimension 26.1.2 fabric/neoforge + 26.2 fabric PASS、26.3 fabric FAIL（palette 撕裂竞态）→ `b25e271d` CoW 修复后 26.3/26.1.2 dimension 复跑中；Phase I classic 单跑缺口（26.1.2×2、26.2 fabric）待补；光照红线移动屋檐/洞口逐锚点做 |
-| ④ | 文档修订（version-segments ✅ / AGENTS / mod-compat）+ 合入 master + 3.0.0 发布 | ◐ 进行中 | version-segments.md 已重写为 26.x 三段矩阵；AGENTS/mod-compat/合入/发布待收尾 |
+| ④ | 冒烟 + 光照红线验收 | ◐ 冒烟✅ / 红线待用户 | **D7 矩阵全绿**：classic 4/4、seedgen 4/4、dimension 4/4（26.3 dimension CoW 修复后复验 PASS）；光照红线移动屋檐/洞口目视验收**待用户**（冒烟绿不豁免） |
+| ④ | 文档修订 + 合入 master + 3.0.0 发布 | ◐ 合入✅ / 发布待批 | version-segments/AGENTS/mod-compat/README/runtime-smoke-test 均已同步 26.x + D7；**poc/mc26-build 已合入 master**（`2fc0f990`）；3.0.0 发布与 master push **待显式批准** |
 
 ## 10. 风险与回退
 
