@@ -230,6 +230,7 @@ archive/pre-baseline = 当前 HEAD 的引用（1.20.1–1.21.10 完整历史后�
 | 2026-09-30 | 阶段③执行：tag `baseline/1.21.11`@`570ab7f3`、分支 `archive/pre-baseline`@`c589088a`（阶段①前最后提交，即 mod_version 2.0.3 bump）、分支 `legacy-1.21`@baseline + `MAINTENANCE.md`（`41a81aa1`）。基线发布（可选步骤）暂缓——对外发布需显式批准。注：仓库另有用户自建 `2.0.0` 分支亦指 `c589088a`，语义近似，未触碰 | 阶段③提交 |
 | 2026-09-30 | **M0 定论**：26.x 构建链 = `net.fabricmc.fabric-loom` 1.17.21（fabric）+ ModDevGradle 2.0.148（neoforge）；architectury-loom 实证死刑（#328）；Unimined 列 B 方案（tpamod 验证可行）；环境 = JDK 25 自动供给 + 本机代理 7890（CI 直连正常）；新增断点 7/8/9 见 §2.3 | poc/mc26-build@`175abc93` |
 | 2026-09-30 | 阶段④接线落地（poc 分支）：构建链工程化 + 三段 properties + 机械清扫完成（ChunkPos record 1092+ 等，编译器兜底）；**教训两条**：① loom 类插件必须走 `plugins{}` 声明，晚置 `apply plugin:` 缺 ClassLoaderScope 直接崩；② javac 默认 100 错误上限，阶段④一开始就要 `-Xmaxerrs` 放开，否则目录严重失真 | poc/mc26-build@`e3414a6d` |
+| 2026-09-30 | 阶段④编译门收官（poc 分支）：① 结构断点 29 处清零（MinecraftServer 族 ctor+抽象方法、LevelSettings/PrimaryLevelData/WorldStem 链、光包 record、replaceWithPacketData、write/readCollection、Gui/Hud chat-screen 迁移、GameProtocols.Context、authlib）→ 26.3 三模块编译绿（`83558c64`/`5c333110`/`6bd85c73`）；② 跨锚点实测 **26.1.2↔26.2↔26.3 漂移 13 类**——§7.2「差异集中在客户端渲染/输入域」估计偏乐观，实际含三包 record、MinecraftServer ctor 尾参（NotificationManager 26.2+ 才有）、Gui/Hud 屏幕聊天迁移（K 过线）、authlib 包（yggdrasil→services）、FML 12 枚举（COMMON→LOCAL）、PositionPath 插值；③ 按 hassium-manifold 收口：compat 门面（ChunkLightPacketCompat/ClientHudCompat/EntityInterpCompat/ChunkPacketDataCompat.applyToChunk/ShadowServerCompat.datapackWorldGen）+ Mixin 目标 #if（Vec3↔PositionPath、setScreen 分家）+ NeoForge FML 枚举 #if + spam 抽象方法去 @Override 零 #if 跨 J；④ **三锚点编译全绿**（26.1.2/26.2/26.3 × fabric/neoforge，`db54fa18`）+ scanVersionBoundaries OK + common:test 绿（测试源补扫 135 处 pos.x→x()、asLong→pack）；⑤ 测试源漏扫教训：机械清扫要含 `src/test` | poc/mc26-build@`db54fa18` |
 
 ## 9. 进度表（滚动更新，收工必更）
 
@@ -248,11 +249,10 @@ archive/pre-baseline = 当前 HEAD 的引用（1.20.1–1.21.10 完整历史后�
 | ③ | legacy MAINTENANCE.md + （可选）基线发布 | ✅ 完成（发布暂缓） | MAINTENANCE.md=`41a81aa1`；对外发布待显式批准 |
 | ④ | M0 构建链 PoC + 选型回填 §8 | ✅ 完成 | `poc/mc26-build`@`175abc93`；结论见 §7.1，断点 §2.3/7/8/9 |
 | ④ | 构建链接线到 26.x（buildSrc 双插件 + 三段 properties + 代理/JDK25） | ✅ 完成（poc 分支） | `poc/mc26-build`@`e3414a6d`；loom 门控（common/fabric）+ MDG（neoforge，含 runs 烟测接线移植）；注意事项见 §7.1 |
-| ④ | 26.3 API 机械清扫 + 结构断点修复 + 三锚点编译清零 | ◐ 进行中 | 机械类清零（ChunkPos record 1092+、pack/unpack 30、区块包 record 访问器 27、authlib 迁移）；**残余 40 symbol + 12 类结构断点**，目录与工具链在 poc 分支 `scripts/poc26/`；MinecraftServer 构造/抽象方法、LevelSettings record、Context、writeCollection/readCollection、Vec3/PositionPath、light 包 STREAM_CODEC 化等待逐个攻 |
-| ④ | 删 1.21.11 properties + 加 26.x 三段 + 插件切换 | ☐ 未开始 | |
-| ④ | 六断点修复 + §2.4 复核清单 | ☐ 未开始 | |
-| ④ | 三锚点编译 + 冒烟 + 光照红线验收 | ☐ 未开始 | |
-| ④ | 文档修订（version-segments/AGENTS/mod-compat）+ 3.0.0 发布 | ☐ 未开始 | |
+| ④ | 26.3 API 机械清扫 + 结构断点修复 + 跨锚点 #if 矩阵 | ✅ 完成 | 机械 ~1350 + 结构 29 + 跨锚点 13 类收口；poc `83558c64`/`5c333110`/`6bd85c73`/`db54fa18` |
+| ④ | 三锚点编译门（compileJava ×3 锚点 ×2 loader + scan + test） | ✅ 完成 | 26.1.2/26.2/26.3 全绿；scanVersionBoundaries OK；common:test 绿 |
+| ④ | 冒烟 + 光照红线验收 | ☐ 未开始 | batch 锚点待换 26.x 三锚点 × 双 loader；§7.4 每锚点 seedgen,dimension；光照红线移动屋檐/洞口逐锚点做 |
+| ④ | 文档修订（version-segments ✅ / AGENTS / mod-compat）+ 合入 master + 3.0.0 发布 | ◐ 进行中 | version-segments.md 已重写为 26.x 三段矩阵；AGENTS/mod-compat/合入/发布待收尾 |
 
 ## 10. 风险与回退
 
