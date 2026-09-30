@@ -1,10 +1,8 @@
 # 有效版本区间（Version Segments）
 
-本文档是 Hassium 多版本适配的**唯一真相源**。工作单位不是「12 个 MC 版本 × 3 加载器」，而是 **7 个有效代码段 × `builds_for` 中的加载器**。
+本文档是 Hassium 多版本适配的**唯一真相源**。工作单位不是「3 个 MC 版本 × 2 加载器」，而是 **3 个有效代码段 × `builds_for` 中的加载器**。
 
-> **2026-09-30 起：Forge 加载器已移除**（`forge/` 子项目删除，全部 `builds_for` 不再含 forge；1.20.1 仅构建 fabric）。本文中 forge 列与 Forge 附录均为**历史记录**；加载器矩阵的运行时真相源 = `versionProperties/*.properties` 的 `builds_for`。分叉与 26.x 升级的统筹计划见 [`mc26-upgrade-plan.md`](mc26-upgrade-plan.md)。
->
-> **2026-09-30 起：基线收缩为 1.21.11 单版本**——七段全部坍缩、源码零 `#if`（阶段②提交 `e8104135`），1.20.1–1.21.10 退役（完整历史保留在 `archive/pre-baseline` 引用）。26.x 段（J/K/L）按 [`mc26-upgrade-plan.md`](mc26-upgrade-plan.md) §7 重建后本文的分界表需随之重写；本文其余内容在此前为历史语境。
+> **2026-09-30 起：26.x 三段（J/K/L）为现行矩阵**——Forge 已移除；1.20.1–1.21.10 退役；1.21.11 基线冻结于 `legacy-1.21` 分支（tag `baseline/1.21.11`）。旧七段与 Forge 附录为历史记录，见文末。26.x 升级统筹见 [`mc26-upgrade-plan.md`](mc26-upgrade-plan.md)。
 
 相关：Manifold `#if MC_VER`（多版本源码预处理，见 AGENTS.md 与 [`.omp/skills/hassium-manifold/SKILL.md`](../.omp/skills/hassium-manifold/SKILL.md)）、`versionProperties/*.properties`。
 
@@ -14,76 +12,48 @@
 
 1. **一段只做一次代码适配**；段内版本默认「锚点编译通过即继承」，不单独排期。
 2. **人力只跟锚点走**；发布仍可保留全部 `versionProperties`（Manifold 便宜）。
-3. Mojang API 差异必须进 [`common/.../compat/`](../common/src/main/java/io/github/limuqy/mc/hassium/compat/)；业务 / Mixin **禁止**新增散落 `#if MC_VER`（网络适配器内的整段版本块除外，见下文）。
-4. **合法分界常量**仅限下表；禁止随手引入 `MC_1_21_3` 等碎片边界（扫描任务会失败）。
+3. Mojang API 差异必须进 [`common/.../compat/`](../common/src/main/java/io/github/limuqy/mc/hassium/compat/)；业务类 **禁止**新增散落 `#if MC_VER`（Mixin 目标描述符/参数签名、加载器网络适配器内的整段版本块除外）。
+4. **合法分界常量**仅限下表；扫描任务（`scanVersionBoundaries`，模式 `MC_\d+(?:_\d+)+`）会拒绝其它 token。
 
 ---
 
-## 有效分界点
+## 有效分界点（26.x）
 
-| 分界常量 | common 变因 | fabric 特有 | forge 特有 | neoforge 特有 |
-|----------|-------------|-------------|------------|---------------|
-| `MC_1_21_1` | 1.20.1 vs 现代基线总缝：`CustomPayload` 包路径（game→common）、`createPacket`/`getPacketId` 移除（改 codec）、`onDisconnect` 上移、`Packet.write()` 移除、`BlockEntity.load()` 移除、`getPacketsByIds` 移除、Fabric 网络改 StreamCodec、NeoForge 改 Payload + `RegisterPayloadHandlersEvent`、`Component` → `DisconnectionDetails`；RL 构造私有化；`GameProtocols.CLIENTBOUND/SERVERBOUND` → `*_TEMPLATE`；`ChunkHolder.pos` 上移至 `GenerationChunkHolder`；`ProtocolInfo.Unbound.listPackets` | — | — | — |
-| `MC_1_21_2` | `ChunkSerializer` → `SerializableChunkData`、`registryOrThrow` → `lookupOrThrow` | — | — | — |
-| `MC_1_21_5` | `CompoundTag` API（`getAllKeys`→`keySet` 等）；`ProtocolInfo.Unbound` → `SimpleUnboundProtocol` / `UnboundProtocol`（SERVERBOUND 需 `GameProtocols.Context`）；`ClientboundLevelChunkPacketData` heightmaps NBT→StreamCodec | — | — | — |
-| `MC_1_21_6` | `serverLevel()` → `level()`；`ServerPlayer` 构造精简；`Connection.send` 监听器 `PacketSendListener`→`ChannelFutureListener`；`BlockEntity.load*` → `ValueInput` | — | `SubscribeEvent` 包路径 | `EventBusSubscriber.bus` 移除（按事件自动选总线） |
-| `MC_1_21_9` | `LevelChunkSection` 构造、`PalettedContainerFactory`；`Entity.getServer()` 移除；`Minecraft.setLevel` 去掉 Reason | — | — | `FMLLoader.getCurrent()` |
-| `MC_1_21_11` | `ResourceLocation` → `Identifier`；`FriendlyByteBuf.read/writeResourceLocation` → `read/writeIdentifier` | import + 返回值 | import | — |
+| 分界常量 | common 变因 | fabric 特有 | neoforge 特有 |
+|----------|-------------|-------------|---------------|
+| `MC_26_1_2` | 段 J 起点（段内继承 26.1/26.1.1）。相对 1.21.11：`ChunkPos` record 化（`x()/z()/pack/unpack`）、`ClientboundLevelChunkPacketData.forEachBlockEntityTag`、`WorldStem` 携 `LevelDataAndDimensions.WorldDataAndGenSettings`（`PrimaryLevelData` 去 `WorldOptions`）、`LevelSettings` record、`saveDataTag(WorldData)` 单参、`replaceWithPacketData`、authlib `yggdrasil.ServicesKeySet`、`MinecraftServer` ctor `Optional<GameRules>+propagatesCrashes`、`DataLoadContext.datapackWorldgen`、`Entity.moveOrInterpolateTo(Vec3…)`、`InterpolationHandler.setInterpolationLength`、`Minecraft.screen/setScreen`、`Gui.getChat()` | fabric-api 0.155.3 起 networking 6.x / command 3.x（`clientboundPlay/packetListener/ClientCommands`） | NeoForge 26.1.2.112（FML 11：`ModConfig.Type.COMMON`） |
+| `MC_26_2` | 屏幕状态迁入 `Gui`（`gui.screen()/setScreen`）；聊天迁入 `gui.hud.getChat()`；`MinecraftServer` 尾参 `NotificationManager`；`getChat/CommandSpamThresholdSeconds` 抽象方法出现 | — | NeoForge 26.2.0.88（FML 11：仍 `COMMON`） |
+| `MC_26_3` | 三包 record 化（`ClientboundLevelChunkWithLightPacket`/`ClientboundLightUpdatePacketData`/`ClientboundLightUpdatePacket` 访问器与直构）；`replaceWithPacketData(chunkX,chunkZ,chunkData)`；`GameProtocols.Context` 增 `canUseCommandBlocks`；`DataLoadContext.datapackWorldRegistries`；authlib `services.ServicesKeySet`；`Entity.moveOrInterpolateTo(PositionPath…)`（插值窗口改服务端 `PositionPath.Stepped` 编码） | — | NeoForge 26.3.0.37-beta（**FML 12：`COMMON→LOCAL`**） |
 
-另：`MC_1_21_4` / `PermissionCompat` 等若与上表冲突，以 **compat 类内注释的实际切分点**为准，并应并入上表后再使用。
+跨版本访问一律经 compat 门面：`ChunkLightPacketCompat`（三包访问器/空光工厂）、`ChunkPacketDataCompat.applyToChunk`、`ClientHudCompat`（屏幕/聊天）、`EntityInterpCompat`、`ShadowServerCompat.datapackWorldGen`。
 
 ### 合法 `#if` 边界白名单（扫描用）
 
 ```
-MC_1_20_1
-MC_1_21_1
-MC_1_21_2
-MC_1_21_5
-MC_1_21_6
-MC_1_21_9
-MC_1_21_11
+MC_26_1_2
+MC_26_2
+MC_26_3
 ```
-
-（比较式用 `< MC_1_21_1` 表达 1.20.1。）
-
-
-历史遗留：代码中偶见 `MC_1_21_4`（与 `MC_1_21_5` 等价边界）。新代码禁止新增；清扫时统一为 `MC_1_21_5`。
-
-> **历史（2026-08-22 版本收缩前）**：`MC_1_20_2/3/4/5/6` 子分界已随 1.20.2–1.20.6 支持裁剪全部退役（原 NeoForge 网络 4 段 / Fabric·Forge 3 段归拢为「1.20.1 vs ≥1.21.1」两段；tick 计时、NbtIo 等微补丁并入 `< MC_1_21_1`）。
 
 ---
 
-## 七段 × 锚点
+## 三段 × 锚点
 
 | 段 | 锚点（必编 / 必测） | 段内其余版本 | 进入本段后的关键变化 |
 |----|---------------------|--------------|----------------------|
-| A | **1.20.1** | — | 基准：login query 握手 + 全部旧 API（Java 17） |
-| D | **1.21.1** | — | 现代基线：StreamCodec、`DisconnectionDetails`；RL 构造私有化；`GameProtocols.*_TEMPLATE`（Java 21） |
-| E | **1.21.2** | 1.21.3, 1.21.4 | `SerializableChunkData`、`lookupOrThrow` |
-| F | **1.21.5** | — | CompoundTag API；ProtocolInfo Unbound 拆分；chunk heightmaps 线格式；**客户端缓存不跨 MC 版本兼容**（见文末附录） |
-| G | **1.21.6** | 1.21.7, 1.21.8 | `serverLevel()`→`level()`；Connection.send 监听器；NeoForge EBS.bus 移除 |
-| H | **1.21.9** | 1.21.10 | LevelChunkSection / PalettedContainerFactory；getServer 移除；setLevel 单参 |
-| I | **1.21.11** | — | Identifier |
+| J | **26.1.2** | 26.1, 26.1.1 | 无映射直出（26.1 起 obfuscation 移除）；Java 25；fabric-loom `net.fabricmc.fabric-loom` + NeoForge ModDevGradle；见上表 `MC_26_1_2` 行 |
+| K | **26.2** | — | 屏幕/聊天迁 Gui/Hud；MinecraftServer NotificationManager；spam 抽象方法 |
+| L | **26.3** | — | 三包 record；PositionPath 插值；datapackWorldRegistries；FML 12 |
 
 ### 锚点 × `builds_for`（编译矩阵）
 
-以各 `versionProperties/<ver>.properties` 的 `builds_for` 为准；下表为当前快照：
+以各 `versionProperties/<ver>.properties` 的 `builds_for` 为准（当前均为 `fabric,neoforge`）：
 
 | 锚点 | 加载器 |
 |------|--------|
-| 1.20.1 | fabric, forge |
-| 1.21.1 | fabric, neoforge, forge |
-| 1.21.2 | fabric, neoforge |
-| 1.21.5 | fabric, neoforge, forge |
-| 1.21.6 | fabric, neoforge, forge |
-| 1.21.9 | fabric, neoforge, forge |
-| 1.21.11 | fabric, neoforge |
-
-> **1.20.1 不构建 neoforge**：NeoForge 47.x 原生兼容 Forge mod，NeoForge 用户直接使用 forge 子项目的 Forge 产物（2026-09-11 起）。
->
-> **Forge 支持 1.20.1 / 1.21.1 / 1.21.3 / 1.21.4 / 1.21.5 / 1.21.6 / 1.21.7 / 1.21.8 / 1.21.9 / 1.21.10**；**1.21.11 起 sunset**（architectury-loom 在 merged jar 重映射阶段打散 anonymous inner class `$N` 编号，outer class `<clinit>` 调用方与实际 class 文件名错位：loom 1.13.469 崩点在 `ByteBufCodecs$N`，loom 1.17.491（2026-07-29 验证 + Gradle 9.6.1）漂移到 `CompoundTag$N` 且 1.21.10 runServer 证实到 `Done`，root cause 同源未修复，详见附录「Forge 1.21.x 适配」）。**1.21.2 上游未发布 Forge userdev**（官方跳过），1.21.11 及后续不构建 Forge，1.21.x 请用 NeoForge。Forge 1.20.6 支持已随 1.20.x 收缩退役（2026-08-22）。
->
-> **Fabric 配置**：自管 toml + Cloth/Mod Menu，**不依赖 FCAP**。FCAP Forge 桥已随 Forge 1.20.6 退役。
+| 26.1.2 | fabric, neoforge |
+| 26.2 | fabric, neoforge |
+| 26.3 | fabric, neoforge |
 
 本地 / CI：
 
@@ -91,11 +61,14 @@ MC_1_21_11
 ./gradlew scanVersionBoundaries
 ```
 
-推进顺序：按 **A → D → I** 锚点推进；禁止并行铺满七段。当前状态见文末附录。
+推进顺序：按 **J → K → L** 锚点推进（锚点编译通过即继承）；禁止并行铺满三段。
 
 ---
 
 ## 分界线 Checklist（改完必勾）
+
+> 本节及其后（网络子系统分段、Compat 对照表、附录）为 **1.21.x 七段时代的历史语境**；
+> 26.x 现行网络/Compat 约定见 AGENTS.md 与 mc26-upgrade-plan.md。逐项迁移时再重写。
 
 每完成一条分界相关改动：
 

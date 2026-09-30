@@ -56,9 +56,11 @@ New-Item -ItemType Directory -Force -Path $logRoot | Out-Null
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 New-Item -ItemType Directory -Force -Path $resultsDir | Out-Null
 
-# 版本顺序（低到高）：1.21.11-only 基线（阶段②，见 docs/mc26-upgrade-plan.md；26.x 段在阶段④恢复多版本）
+# 版本顺序（低到高）：26.x 三锚点（阶段④，见 docs/mc26-upgrade-plan.md §7.4）
 $allVersions = @(
-    "1.21.11"
+    "26.1.2",
+    "26.2",
+    "26.3"
 )
 
 if ($Versions) {
@@ -69,10 +71,14 @@ if ($Versions) {
 
 # T8 场景锚点集（硬编码）：非 classic 场景只在锚点 (Ver, Loader) 组合上跑，
 # 再与 -Versions / -Loaders / versionProperties builds_for 取交集。
-# 1.21.11-only 基线：每加载器一个锚点，覆盖 fabric + neoforge。
+# 26.x 三锚点 × 双加载器（§7.4 每锚点 fabric + neoforge 都要跑）。
 $smokeScenarioAnchors = @(
-    @{ Ver = "1.21.11"; Loader = "fabric" },
-    @{ Ver = "1.21.11"; Loader = "neoforge" }
+    @{ Ver = "26.1.2"; Loader = "fabric" },
+    @{ Ver = "26.1.2"; Loader = "neoforge" },
+    @{ Ver = "26.2"; Loader = "fabric" },
+    @{ Ver = "26.2"; Loader = "neoforge" },
+    @{ Ver = "26.3"; Loader = "fabric" },
+    @{ Ver = "26.3"; Loader = "neoforge" }
 )
 
 # 预展开场景计划：classic=全矩阵 targetVersions（Loader 空=该版本全部 -Loaders）；
