@@ -155,23 +155,26 @@ public final class ChunkPacketDataCompat {
     }
 
     /**
-     * 写入空的 {@code ClientboundLightUpdatePacketData} 线格式。
+     * 写 byte[] 列表（{@code varInt count} + 逐个 {@code writeByteArray}）。
      * <p>
-     * 磁盘 NBT 不存光照（{@code is_light_on=0}），HIT apply 重组
-     * {@link net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket} 时必须带上合法的
-     * 空光照尾部，否则构造函数在 {@code readBitSet} 处越界。客户端侧由原版光照引擎重算。
+     * 26.3 {@code FriendlyByteBuf} 移除了 {@code writeCollection}/{{@code readCollection}} 全家，
+     * 自行展开保持既有线格式（varInt 长度前缀 + 元素）。
      */
-    public static void writeEmptyLightData(FriendlyByteBuf buf) {
-        BitSet empty = new BitSet();
-        buf.writeBitSet(empty); // skyYMask
-        buf.writeBitSet(empty); // blockYMask
-        buf.writeBitSet(empty); // emptySkyYMask
-        buf.writeBitSet(empty); // emptyBlockYMask
-        // skyUpdates / blockUpdates：空列表（varint count = 0）
-        // 1.20.2+ writeCollection 签名变为 StreamEncoder，且 writeByteArray 与
-        // writeByteArray(ByteBuf, byte[]) 重载导致方法引用歧义，用 lambda 显式消除
-        buf.writeCollection(List.<byte[]>of(), (b, arr) -> b.writeByteArray(arr));
-        buf.writeCollection(List.<byte[]>of(), (b, arr) -> b.writeByteArray(arr));
+    private static void writeByteArrayList(FriendlyByteBuf buf, java.util.List<byte[]> list) {
+        buf.writeVarInt(list.size());
+        for (byte[] arr : list) {
+            buf.writeByteArray(arr);
+        }
+    }
+
+    /** 读 byte[] 列表（{@code varInt count} + 逐个 {@code readByteArray}），与 {@link #writeByteArrayList} 对偶。 */
+    private static java.util.List<byte[]> readByteArrayList(FriendlyByteBuf buf) {
+        int count = buf.readVarInt();
+        java.util.List<byte[]> list = new java.util.ArrayList<>(Math.max(0, count));
+        for (int i = 0; i < count; i++) {
+            list.add(buf.readByteArray());
+        }
+        return list;
     }
 
     /**
@@ -269,8 +272,8 @@ public final class ChunkPacketDataCompat {
         buf.writeBitSet(blockYMask);
         buf.writeBitSet(emptySkyYMask);
         buf.writeBitSet(emptyBlockYMask);
-        buf.writeCollection(skyUpdates, (b, arr) -> b.writeByteArray(arr));
-        buf.writeCollection(blockUpdates, (b, arr) -> b.writeByteArray(arr));
+        writeByteArrayList(buf, skyUpdates);
+        writeByteArrayList(buf, blockUpdates);
     }
 
     /**
@@ -289,8 +292,8 @@ public final class ChunkPacketDataCompat {
         BitSet emptySkyYMask = buf.readBitSet();
         BitSet emptyBlockYMask = buf.readBitSet();
 
-        List<byte[]> skyUpdates = buf.readCollection(java.util.ArrayList::new, ChunkPacketDataCompat::readLightArray);
-        List<byte[]> blockUpdates = buf.readCollection(java.util.ArrayList::new, ChunkPacketDataCompat::readLightArray);
+        List<byte[]> skyUpdates = readByteArrayList(buf);
+        List<byte[]> blockUpdates = readByteArrayList(buf);
 
         int skyIdx = 0;
         int blockIdx = 0;
@@ -322,10 +325,6 @@ public final class ChunkPacketDataCompat {
         return true;
     }
 
-    /** 读取光照数组（varint-length-prefixed byte array），避免 1.20.5+ 的 readByteArray 重载歧义。 */
-    private static byte[] readLightArray(FriendlyByteBuf buf) {
-        return buf.readByteArray();
-    }
 
     @SuppressWarnings("deprecation") // Forge: BuiltInRegistries 字段在 Forge patched jar 中被标记 @Deprecated
     private static CompoundTag toBlockEntityNbt(int packedXZ, int y, BlockEntityType<?> type,

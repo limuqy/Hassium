@@ -848,18 +848,17 @@ public class ServerChunkPushManager {
 
     private ClientboundLevelChunkWithLightPacket stripLightInPlace(
             ChunkPos pos, ClientboundLevelChunkWithLightPacket packet) {
-        FriendlyByteBuf buffer = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+        // 26.3：ClientboundLightUpdatePacketData 是纯 record——直接构造空光数据，
+        // 不再走「写 buffer → 包构造器读回」的中转。
         try {
-            ChunkPacketDataCompat.writeEmptyLightData(buffer);
-            ClientboundLightUpdatePacketData emptyLight =
-                    new ClientboundLightUpdatePacketData(buffer, pos.x(), pos.z());
+            java.util.BitSet empty = new java.util.BitSet();
+            ClientboundLightUpdatePacketData emptyLight = new ClientboundLightUpdatePacketData(
+                    empty, empty, empty, empty, java.util.List.<byte[]>of(), java.util.List.<byte[]>of());
             ((LevelChunkWithLightPacketAccessor) (Object) packet).hassium$setLightData(emptyLight);
             return packet;
         } catch (Exception e) {
             Constants.LOG.warn("[LIGHT-STRIP] Failed to replace light payload at {}; retaining vanilla light", pos, e);
             return packet;
-        } finally {
-            buffer.release();
         }
     }
 

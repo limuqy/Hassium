@@ -30,6 +30,7 @@ import java.net.Proxy;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.locks.LockSupport;
 import java.util.function.BooleanSupplier;
 import net.minecraft.CrashReport;
@@ -42,6 +43,7 @@ import net.minecraft.core.SectionPos;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.notifications.NotificationManager;
 import net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket;
 import net.minecraft.network.protocol.game.ClientboundBlockUpdatePacket;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkPacketData;
@@ -176,11 +178,25 @@ public class ShadowSeedServer extends MinecraftServer {
                              WorldStem stem,
                              long seed,
                              java.nio.file.Path worldRoot) {
-        super(thread, access, repo, stem, Proxy.NO_PROXY, DataFixers.getDataFixer(), NO_SERVICES,
-                SeedGenLevelCompat.chunkProgressArg());
+        // 26.3：ctor 增加 Optional<GameRules>（empty → 按 worldData 特性集取默认规则）、
+        // propagatesCrashes=false（影子线程异常不外溢宿主 JVM）、NotificationManager（无通知服务）。
+        super(thread, access, repo, stem, Optional.empty(), Proxy.NO_PROXY, DataFixers.getDataFixer(),
+                NO_SERVICES, SeedGenLevelCompat.chunkProgressArg(), false, new NotificationManager());
         this.stem = stem;
         this.worldSeed = seed;
         this.worldRoot = worldRoot;
+    }
+
+    /** 影子端无玩家聊天；GameTestServer 同款返回 0。 */
+    @Override
+    public int getChatSpamThresholdSeconds() {
+        return 0;
+    }
+
+    /** 影子端无命令转发；GameTestServer 同款返回 0。 */
+    @Override
+    public int getCommandSpamThresholdSeconds() {
+        return 0;
     }
 
     static ShadowSeedServer create(Thread thread,
@@ -248,7 +264,8 @@ public class ShadowSeedServer extends MinecraftServer {
      */
     void saveWorldData() {
         try {
-            this.storageSource.saveDataTag(this.registryAccess(), this.worldData);
+            // 26.3：saveDataTag 收窄为单参（WorldData），registryAccess 由内部自取
+            this.storageSource.saveDataTag(this.worldData);
             LOGGER.info("Hassium: Shadow level.dat saved (seed={})", worldSeed);
         } catch (Throwable t) {
             LOGGER.warn("Hassium: Shadow level.dat save failed", t);
@@ -512,29 +529,17 @@ public class ShadowSeedServer extends MinecraftServer {
         // 必须先让 getChunk mixin 命中本柱，decode 失败再还原。
         this.injectedChunks.put(key, chunk);
         ClientboundLevelChunkPacketData data = packet.chunkData();
-        // 显式把 section 读游标复位到 0：getReadBuffer() 返回的是包内 byte[] 的
-        // 新包装，正常应本来就是 0，但这里不依赖该假设——防止某些 Netty/FriendlyByteBuf
-        // 路径把 readerIndex 留在尾部导致整柱 section 全部被跳过（区块只剩高度图/空气）。
-        FriendlyByteBuf sectionBuf = data.getReadBuffer();
-        sectionBuf.readerIndex(0);
-        int sectionBytes = sectionBuf.readableBytes();
-        chunk.replaceWithPacketData(sectionBuf, data.getHeightmaps(),
-                data.getBlockEntitiesTagsConsumer(pos.x(), pos.z()));
+        int sectionBytes = data.getReadBuffer().readableBytes();
+        // 26.3：replaceWithPacketData(chunkX, chunkZ, chunkData) 自管 read buffer
+        //（每次调用取包内 byte[] 的新包装）+ heightmaps + BE tags；
+        // 旧的「游标复位 + 空柱污染重试」针对的是共享 wrapper 推进污染，已无对象。
+        chunk.replaceWithPacketData(pos.x(), pos.z(), data);
         int nonAirSections = countNonAirSections(chunk);
-        // 防御：包内确实有 section 字节却解析成整柱空气时，用全新的 LevelChunk 和
-        // 全新的 read buffer 再试一次（不沿用可能已被推进/污染的包装）。
         if (nonAirSections == 0 && sectionBytes > 0) {
             DebugLogger.warn(DebugLogger.LogType.ASYNC,
-                    "[SHADOW_INJECT] Empty sections detected for ({}, {}), retrying with fresh read buffer "
+                    "[SHADOW_INJECT] Empty sections detected for ({}, {}) "
                             + "(sections={}, sectionBytes={}, heightmapKeys={})",
                     pos.x(), pos.z(), chunk.getSections().length, sectionBytes, data.getHeightmaps().size());
-            chunk = new LevelChunk(level, pos);
-            this.injectedChunks.put(key, chunk);
-            FriendlyByteBuf retryBuf = data.getReadBuffer();
-            retryBuf.readerIndex(0);
-            chunk.replaceWithPacketData(retryBuf, data.getHeightmaps(),
-                    data.getBlockEntitiesTagsConsumer(pos.x(), pos.z()));
-            nonAirSections = countNonAirSections(chunk);
         }
         DebugLogger.debug(DebugLogger.LogType.ASYNC,
                 "[SHADOW_INJECT] pos=({},{}) sections={} nonAirSections={} sectionBytes={} heightmapKeys={}",
@@ -1010,7 +1015,7 @@ public class ShadowSeedServer extends MinecraftServer {
                             long key = DimensionKey.key(dimension, pos.getX() >> 4, pos.getZ() >> 4);
                             LevelChunk chunk = injectedChunks.get(key);
                             if (chunk != null) {
-                                ChunkPos cp = ChunkPos.unpack(pos);
+                                ChunkPos cp = new ChunkPos(pos.getX() >> 4, pos.getZ() >> 4);
                                 // 禁止 level.setBlock：会邻接更新并 scheduleTick，
                                 // 影子端 ChunkMap 未加载邻柱时 1.21.2+ 刷
                                 // "Trying to schedule tick in not loaded position" ERROR。

@@ -191,8 +191,8 @@ public final class ShadowLightProbe {
             return;
         }
         try {
-            java.util.List<?> sky = packet.lightData().getSkyUpdates();
-            java.util.List<?> block = packet.lightData().getBlockUpdates();
+            java.util.List<?> sky = packet.lightData().skyUpdates();
+            java.util.List<?> block = packet.lightData().blockUpdates();
             int probeIdx = engine == null ? -1 : SECTION_Y - engine.getMinLightSection();
             Constants.LOG.info("{}PACKET probeIndex={} skyUpdates({}): {}",
                     PREFIX, probeIdx, sky.size(), dumpLightList(sky));

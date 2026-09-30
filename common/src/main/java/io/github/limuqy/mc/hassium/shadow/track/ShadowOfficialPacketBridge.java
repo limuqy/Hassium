@@ -75,7 +75,7 @@ public final class ShadowOfficialPacketBridge {
         // 光照增量已随光桥删除不再产生（保留判据为防御）。
         if (dimension != null && packet instanceof ClientboundLightUpdatePacket lightPacket
                 && io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
-                        .blockClientDelivery(dimension, lightPacket.getX(), lightPacket.getZ())) {
+                        .blockClientDelivery(dimension, lightPacket.x(), lightPacket.z())) {
             return false;
         }
         try {

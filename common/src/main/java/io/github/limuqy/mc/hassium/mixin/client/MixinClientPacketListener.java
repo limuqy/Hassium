@@ -175,9 +175,9 @@ public class MixinClientPacketListener {
     }
 
     @Redirect(method = "handleMoveEntity", at = @At(value = "INVOKE",
-            target = "Lnet/minecraft/world/entity/Entity;moveOrInterpolateTo(Lnet/minecraft/world/phys/Vec3;)V"))
+            target = "Lnet/minecraft/world/entity/Entity;moveOrInterpolateTo(Lnet/minecraft/world/entity/PositionPath;)V"))
     private void hassium$adaptiveEntityStepsNoRotation(net.minecraft.world.entity.Entity entity,
-            net.minecraft.world.phys.Vec3 pos) {
+            net.minecraft.world.entity.PositionPath pos) {
         hassium$applyAdaptiveEntitySteps(entity);
         entity.moveOrInterpolateTo(pos);
     }
@@ -193,14 +193,12 @@ public class MixinClientPacketListener {
     /**
      * 1.21.5+：窗口存放于 {@code InterpolationHandler.interpolationSteps}（构造默认 3），
      * 收包时先写入自适应步数，随后原版 moveOrInterpolateTo 按该步数插值。
-     * null（无插值处理器的实体）走原版直接 setPos 路径，无需干预。
+     * 26.3：步数不再由客户端 {@code setInterpolationLength} 控制——插值窗口随服务端
+     * {@code PositionPath.Stepped} 在包内编码（{@code SteppedInterpolationTracker}），
+     * 适配点移到服务端实体包构建（见 mc26-upgrade-plan.md §8）；客户端侧仅保留节奏表观测。
      */
     private void hassium$applyAdaptiveEntitySteps(net.minecraft.world.entity.Entity entity) {
-        int steps = EntityLerpPacing.observeAndPlan(entity.getId(), entity.level().getGameTime());
-        net.minecraft.world.entity.InterpolationHandler interpolation = entity.getInterpolation();
-        if (interpolation != null) {
-            interpolation.setInterpolationLength(steps);
-        }
+        EntityLerpPacing.observeAndPlan(entity.getId(), entity.level().getGameTime());
     }
 
     /** 头旋转包：lerpHeadTo 描述符全版本一致，与位置包共用同一节奏表（同 tick 第二包 gap=0 幂等）。 */

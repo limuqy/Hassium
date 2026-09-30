@@ -35,6 +35,7 @@
     ],
     "client": [
         "client.MixinMinecraft",
+        "client.MixinGui",
         "client.MixinConnectScreen",
         "client.MixinClientPacketListener",
         "client.MixinClientCommonPacketListenerImpl",

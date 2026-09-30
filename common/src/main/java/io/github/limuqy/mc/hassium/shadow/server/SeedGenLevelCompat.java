@@ -40,8 +40,9 @@ import net.minecraft.server.permissions.LevelBasedPermissionSet;
 import net.minecraft.world.Difficulty;
 import net.minecraft.world.flag.FeatureFlags;
 import net.minecraft.world.level.DataPackConfig;
-import net.minecraft.world.level.gamerules.GameRules;
 import net.minecraft.world.level.GameType;
+import net.minecraft.world.level.levelgen.WorldGenSettings;
+import net.minecraft.world.level.storage.LevelDataAndDimensions;
 import net.minecraft.world.level.LevelSettings;
 import net.minecraft.world.level.WorldDataConfiguration;
 import net.minecraft.world.level.dimension.LevelStem;
@@ -158,10 +159,11 @@ public final class SeedGenLevelCompat {
                     packIds);
             WorldDataConfiguration dataConfig = new WorldDataConfiguration(
                     new DataPackConfig(packIds, List.of()), FeatureFlags.REGISTRY.allFlags());
-            LevelSettings settings = new LevelSettings("HassiumSeedGen", GameType.CREATIVE, false,
-                    Difficulty.NORMAL, true,
-                    new GameRules(FeatureFlags.REGISTRY.allFlags()),
-                    dataConfig);
+            // 26.3：LevelSettings 变 record（name, gameType, DifficultySettings, allowCommands, dataConfig）；
+            // GameRules 从 LevelSettings 移除——影子端在 MinecraftServer ctor 传 empty 走默认规则。
+            LevelSettings settings = new LevelSettings("HassiumSeedGen", GameType.CREATIVE,
+                    new LevelSettings.DifficultySettings(Difficulty.NORMAL, false, false),
+                    true, dataConfig);
             WorldLoader.PackConfig packConfig = new WorldLoader.PackConfig(repo, dataConfig, false, true);
             WorldLoader.InitConfig initConfig = new WorldLoader.InitConfig(
                     packConfig, Commands.CommandSelection.DEDICATED, LevelBasedPermissionSet.OWNER);
@@ -245,7 +247,7 @@ public final class SeedGenLevelCompat {
                 }
                 if (tag != null) {
                     RegistryOps<net.minecraft.nbt.Tag> ops =
-                            RegistryOps.create(NbtOps.INSTANCE, dataLoadContext.datapackWorldgen());
+                            RegistryOps.create(NbtOps.INSTANCE, dataLoadContext.datapackWorldRegistries());
                     java.util.Optional<LevelStem> decoded = LevelStem.CODEC.parse(ops, tag).result();
                     if (decoded.isPresent()) {
                         Constants.LOG.info("Hassium: Shadow server consuming server LevelStem "
@@ -286,11 +288,17 @@ public final class SeedGenLevelCompat {
                                                     new MappedRegistry<>(Registries.LEVEL_STEM, Lifecycle.stable()).freeze();
                                             WorldDimensions.Complete complete = buildWorldDimensions(
                                                     dataLoadContext, stemRegistry);
+                                            // 26.3：PrimaryLevelData 不再携带 WorldOptions；
+                                            // WorldOptions 并入 WorldGenSettings（SavedData），经
+                                            // WorldDataAndGenSettings 一起交给 WorldStem。
                                             PrimaryLevelData worldData = new PrimaryLevelData(
-                                                    settings, worldOptions, complete.specialWorldProperty(), complete.lifecycle());
+                                                    settings, complete.specialWorldProperty(), complete.lifecycle());
                                             worldData.setInitialized(true);
+                                            WorldGenSettings genSettings =
+                                                    new WorldGenSettings(worldOptions, new WorldDimensions(complete.dimensions()));
                                             return new WorldLoader.DataLoadOutput<>(
-                                                    worldData, complete.dimensionsRegistryAccess());
+                                                    new LevelDataAndDimensions.WorldDataAndGenSettings(worldData, genSettings),
+                                                    complete.dimensionsRegistryAccess());
                                         },
                                         WorldStem::new,
                                         Util.backgroundExecutor(),
@@ -340,7 +348,7 @@ public final class SeedGenLevelCompat {
 
     /** NORMAL preset 的 WorldDimensions（两版本 registry/lookup 形态差异封装）。 */
     private static WorldDimensions normalPresetDimensions(WorldLoader.DataLoadContext dataLoadContext) {
-        return dataLoadContext.datapackWorldgen()
+        return dataLoadContext.datapackWorldRegistries()
                 .lookupOrThrow(Registries.WORLD_PRESET)
                 .getOrThrow(WorldPresets.NORMAL)
                 .value()
