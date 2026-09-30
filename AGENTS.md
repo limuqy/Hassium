@@ -4,7 +4,7 @@ AI Agent 速查。多版本真相源见 [`docs/version-segments.md`](docs/versio
 
 ## 项目身份
 
-Minecraft **26.1.2 / 26.2 / 26.3** 多加载器模组（**Fabric / NeoForge**），ZSTD 优化存档与网络。**Forge 加载器已移除**（2026-09-30）；**同日起26.x 三锚点基线（J=26.1.2 / K=26.2 / L=26.3，legacy-1.21 分支维护 1.21.11）**（1.20.1–1.21.10 退役、全部 `#if` 剥离，分叉与 26.x 升级计划见 [`docs/mc26-upgrade-plan.md`](docs/mc26-upgrade-plan.md)）。**回归直连拓扑**：客户端↔服务端唯一 vanilla TCP（登录期能力握手 + Play 期 `play_init_s2c` 激活）；网络核心/UDP 数据面/续流迁移已裁剪，不复活。
+Minecraft **26.1.2 / 26.2 / 26.3** 多加载器模组（**Fabric 全锚点；NeoForge 仅 26.1.2**），ZSTD 优化存档与网络。**Forge 加载器已移除**（2026-09-30）；**同日起26.x 三锚点基线（J=26.1.2 / K=26.2 / L=26.3，legacy-1.21 分支维护 1.21.11）**（1.20.1–1.21.10 退役、全部 `#if` 剥离，分叉与 26.x 升级计划见 [`docs/mc26-upgrade-plan.md`](docs/mc26-upgrade-plan.md)）。**NeoForge 26.2/26.3 已取消**（2026-09-30：非正式版本弹窗警告挡自动进服，`builds_for=fabric`；代码兼容保留，见 [`docs/version-segments.md`](docs/version-segments.md)）。**回归直连拓扑**：客户端↔服务端唯一 vanilla TCP（登录期能力握手 + Play 期 `play_init_s2c` 激活）；网络核心/UDP 数据面/续流迁移已裁剪，不复活。
 
 ## 关键构建命令
 
