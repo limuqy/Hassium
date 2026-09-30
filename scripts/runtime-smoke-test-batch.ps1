@@ -3,9 +3,10 @@
 #   .\scripts\runtime-smoke-test-batch.ps1 -Phase I                              # 全量初始轮（串行）
 #   .\scripts\runtime-smoke-test-batch.ps1 -Phase I -Versions @("1.20.1","1.21.1")
 #   .\scripts\runtime-smoke-test-batch.ps1 -Phase R                              # 回归轮
+#   .\scripts\runtime-smoke-test-batch.ps1 -Phase I -Scenarios classic,seedgen,dimension
 # 每个版本×加载器 1 个会话（客户端自动两轮：VD=20 + VD=10）
 # T8 场景加载: -Scenarios classic,seedgen,dimension（默认仅 classic）。classic 走全矩阵
-# （-Versions × -Loaders）；非 classic 场景只在锚点集跑（硬编码：1.20.1 fabric、
+# （-Versions × -Loaders）；非 classic 场景只在锚点集跑（硬编码：1.21.11 fabric、
 # 1.21.1 neoforge、1.21.11 fabric，再与 -Versions/-Loaders/versionProperties builds_for
 # 取交集）。非 classic 会话 sessionId 追加 _<scenario> 后缀避免 result JSON 冲突；
 # CSV 增 Scenario 列。
@@ -55,11 +56,9 @@ New-Item -ItemType Directory -Force -Path $logRoot | Out-Null
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 New-Item -ItemType Directory -Force -Path $resultsDir | Out-Null
 
-# 版本顺序（低到高）
+# 版本顺序（低到高）：1.21.11-only 基线（阶段②，见 docs/mc26-upgrade-plan.md；26.x 段在阶段④恢复多版本）
 $allVersions = @(
-    "1.20.1",
-    "1.21.1","1.21.2","1.21.3","1.21.4","1.21.5","1.21.6",
-    "1.21.7","1.21.8","1.21.9","1.21.10","1.21.11"
+    "1.21.11"
 )
 
 if ($Versions) {
@@ -70,11 +69,10 @@ if ($Versions) {
 
 # T8 场景锚点集（硬编码）：非 classic 场景只在锚点 (Ver, Loader) 组合上跑，
 # 再与 -Versions / -Loaders / versionProperties builds_for 取交集。
-# 最简锚点：覆盖 1.20.1 / 1.21.1 / 1.21.11 版本段边界（fabric ×2 + neoforge ×1）。
+# 1.21.11-only 基线：每加载器一个锚点，覆盖 fabric + neoforge。
 $smokeScenarioAnchors = @(
-    @{ Ver = "1.20.1";  Loader = "fabric" },
-    @{ Ver = "1.21.1";  Loader = "neoforge" },
-    @{ Ver = "1.21.11"; Loader = "fabric" }
+    @{ Ver = "1.21.11"; Loader = "fabric" },
+    @{ Ver = "1.21.11"; Loader = "neoforge" }
 )
 
 # 预展开场景计划：classic=全矩阵 targetVersions（Loader 空=该版本全部 -Loaders）；

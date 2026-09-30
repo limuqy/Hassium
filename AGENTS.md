@@ -4,7 +4,7 @@ AI Agent 速查。多版本真相源见 [`docs/version-segments.md`](docs/versio
 
 ## 项目身份
 
-Minecraft 1.20.1 / 1.21.1–1.21.11 多加载器模组（**Fabric / NeoForge**），ZSTD 优化存档与网络。**Forge 加载器已移除**（2026-09-30，分叉升级计划见 [`docs/mc26-upgrade-plan.md`](docs/mc26-upgrade-plan.md)）；**1.20.1 仅构建 fabric**。**回归直连拓扑**：客户端↔服务端唯一 vanilla TCP（登录期能力握手 + Play 期 `play_init_s2c` 激活）；网络核心/UDP 数据面/续流迁移已裁剪，不复活。
+Minecraft **1.21.11** 多加载器模组（**Fabric / NeoForge**），ZSTD 优化存档与网络。**Forge 加载器已移除**（2026-09-30）；**同日起源码收缩为 1.21.11 单版本基线**（1.20.1–1.21.10 退役、全部 `#if` 剥离，分叉与 26.x 升级计划见 [`docs/mc26-upgrade-plan.md`](docs/mc26-upgrade-plan.md)）。**回归直连拓扑**：客户端↔服务端唯一 vanilla TCP（登录期能力握手 + Play 期 `play_init_s2c` 激活）；网络核心/UDP 数据面/续流迁移已裁剪，不复活。
 
 ## 关键构建命令
 
@@ -85,9 +85,8 @@ fabric/ | neoforge/
 
 - **为什么不用锁**：与 `chunkLock`/`flushLock` 共存产生锁序 → 实测两次 ABBA 死锁/停摆
 - **新增碰 POI / SectionStorage 的路径必须走 `ShadowPoiGate.callExclusive`**；`withChunkLock` 放在调度**之内**
-- **1.20.1 注册表重建用「窗口」不用锁**：`ShadowRegistryWindow`（窗口内新访问直接跳过返回 null）；断连保存在 `clearLevel` TAIL 关窗后主线程同步执行
 - **旧转储症状指纹**：`Light timeout (10000ms)` 刷屏、`[STALL-DIAG] ... ready=0` 不降、`shadow save shutdown still running` → 查是否有人绕过调度直接拿锁
-- 锚点：`compat/ShadowPoiGate`、`compat/ShadowRegistryWindow`、`ClientLifecycleHelper.saveShadowOnDisconnect`、`ShadowLightCompute.withChunkLock`
+- 锚点：`compat/ShadowPoiGate`、`ClientLifecycleHelper.saveShadowOnDisconnect`、`ShadowLightCompute.withChunkLock`
 
 ## 配置红线
 
@@ -98,7 +97,7 @@ fabric/ | neoforge/
 | `storage.enabled` | **false** | 开启改存档格式（type 126）→ 提醒备份；**运行时仅专用服生效**，单人/LAN 保持原版格式；客户端影子端固定写 126 |
 | `master.enabled` | true | 专用服网络通道总开关 |
 | `master.enabledOnLan` | **false** | 集成服对**远程**玩家启用网络面；本机 memory 恒原版 |
-| `master.maxChunksPerTick` | 5 | 每玩家每 tick 区块下发上限。**原版整柱钩子勿删**：1.20.1=`MixinServerPlayer`；1.21.1+=`MixinPlayerChunkSender`（删了等于既不抑制也不限速） |
+| `master.maxChunksPerTick` | 5 | 每玩家每 tick 区块下发上限。**原版整柱钩子勿删**：`MixinPlayerChunkSender`（删了等于既不抑制也不限速） |
 | `master.entity*` | 见文档 | 实体域降帧 9 键（默认全开；vanilla 兼容、不要求握手）。键值与语义见 [`docs/config-audit.md`](docs/config-audit.md) |
 | `chunk.enabled` | true | 区块核心总开关；关后全程原版路径 |
 | `chunk.seedGenEnabled` | **false** | 双端同版本；**服务端开启会泄露世界种子** |
@@ -112,7 +111,7 @@ fabric/ | neoforge/
 
 ```
 Mod 客户端 ←──唯一 vanilla TCP（登录期握手 + Play 期自定义 payload）──→ Mod 服务端
-   ├ 登录期：login_hello（1.20.1）/ 配置任务 hello + PreHandshakePayload（1.21.1+）
+   ├ 登录期：配置任务 hello + PreHandshakePayload（能力预声明）
    ├ Play 期：dict/index → 聚合 PENDING → play_init 激活 → ACK → 聚合 ENABLED
    └ 区块/实体/业务 payload 全走 vanilla 通道（shadow_pull/section_delta）
 ```
@@ -128,14 +127,14 @@ Mod 客户端 ←──唯一 vanilla TCP（登录期握手 + Play 期自定义 
 
 ```powershell
 # pwsh
-.\scripts\runtime-smoke-test.ps1 -Ver 1.20.1 -Loader fabric -Phase I -SessionId "1.20.1_fabric_I"
-.\scripts\runtime-smoke-test-batch.ps1 -Phase I -Scenarios seedgen,dimension   # L2 三锚点
+.\scripts\runtime-smoke-test.ps1 -Ver 1.21.11 -Loader fabric -Phase I -SessionId "1.21.11_fabric_I"
+.\scripts\runtime-smoke-test-batch.ps1 -Phase I -Scenarios seedgen,dimension   # L2 锚点
 ```
 
 ```bash
 # Git Bash：多场景必须 -Command（-File 不拆逗号）
 pwsh -Command '& "./scripts/runtime-smoke-test-batch.ps1" -Phase I -Scenarios seedgen,dimension'
-pwsh -File ./scripts/runtime-smoke-test.ps1 -Ver 1.20.1 -Loader fabric -Phase I -SessionId "1.20.1_fabric_I"
+pwsh -File ./scripts/runtime-smoke-test.ps1 -Ver 1.21.11 -Loader fabric -Phase I -SessionId "1.21.11_fabric_I"
 ```
 
 **脚本会自己结束**并印 `=== RESULT: PASS|FAIL ===`（典型 4–12 min）。前台 `block_until_ms ≥ 600000`，后台 Await **本次 ps1 job** + pattern `=== RESULT:`；结果读 `build/smoke-test/results/result_<SessionId>.json`，日志 `logs/server|client_<id>.log`。不要另开端口会话，不要 `gradlew --stop`。

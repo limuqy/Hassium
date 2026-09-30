@@ -19,11 +19,9 @@ def writePreprocessorDefinitions() {
 }
 writePreprocessorDefinitions()
 
-// 合法 #if 分界（与 docs/version-segments.md 同步）
+// 合法 #if 分界（与 docs/version-segments.md 同步；1.21.11-only 基线，26.x 段见 mc26-upgrade-plan.md）
 def ALLOWED_MC_BOUNDARIES = [
-        'MC_1_20_1',
-        'MC_1_21_1', 'MC_1_21_2', 'MC_1_21_5', 'MC_1_21_6',
-        'MC_1_21_9', 'MC_1_21_11'
+        'MC_1_21_11'
 ] as Set
 
 tasks.register('scanVersionBoundaries') {
