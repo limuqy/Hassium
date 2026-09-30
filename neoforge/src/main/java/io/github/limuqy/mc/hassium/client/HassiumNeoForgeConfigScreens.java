@@ -26,7 +26,10 @@ public final class HassiumNeoForgeConfigScreens {
             return;
         }
         ModList.get().getModContainerById(Constants.MOD_ID).ifPresentOrElse(container -> {
-            IConfigScreenFactory factory = (a, parent) -> HassiumClothConfigScreen.create(parent);
+            // 26.x：cloth-config 暂无构建，cloth-ui（HassiumClothConfigScreen）未编入——
+            // isClothAvailable() 已反射拦截，本工厂不会执行；cloth 就绪后恢复
+            // (a, parent) -> HassiumClothConfigScreen.create(parent)（历史见 git 与 mc26-upgrade-plan.md）。
+            IConfigScreenFactory factory = (a, parent) -> null;
             container.registerExtensionPoint(IConfigScreenFactory.class, factory);
             LOGGER.info("Hassium: NeoForge 配置屏已注册（Cloth）");
         }, () -> LOGGER.warn("Hassium: 未找到模组容器，跳过配置屏注册"));
