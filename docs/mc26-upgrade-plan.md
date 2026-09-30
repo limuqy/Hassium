@@ -214,6 +214,7 @@ PoC 结论回填 §8 决策记录（选定的插件组合与版本号），然�
 | 2026-09-30 | D1–D5 定案（见 §1） | 本文档建立 |
 | 2026-09-30 | 阶段①执行补充：① SRG 生产映射预检（`Invoke-MappingFieldPrecheck` 整段）随 Forge 移除删除（neoforge mojmap 原生、fabric 类型匹配免疫，原为 Forge SRG 专属）；② batch 非 classic 锚点 `1.20.1 forge` → `1.20.1 fabric`（保留段 A 覆盖）；③ gradle.properties 工作区已有的 mod_version 2.0.2→2.0.3 外部改动随阶段①提交一并带入 | 阶段①提交 |
 | 2026-09-30 | 阶段②执行补充：① 提交拆分微调——`gradle.properties` 默认 mc_ver=1.21.11 提前并入提交 1（剥离后旧锚点不可编译，保持每笔提交默认配置可构建）；② 剥离以一次性脚本 `build/strip-manifold.mjs`（未入库）按 MC_VER=11 求值，254 块/70 文件；③ ShadowRegistryWindow + 测试确认为整文件 `#if <MC_1_21_1` 门控，随剥离整体删除；④ 基线冒烟 `1.21.11_fabric_I_dimension` 首跑触发影子世界 `MissingPaletteEntryException`（hassium-shadow-worldgen 线程），同代码 neoforge PASS + fabric 重跑 PASS ⇒ 判定既有偶发竞态、非剥离回归（风险表 R8） | 阶段②提交 |
+| 2026-09-30 | 阶段③执行：tag `baseline/1.21.11`@`570ab7f3`、分支 `archive/pre-baseline`@`c589088a`（阶段①前最后提交，即 mod_version 2.0.3 bump）、分支 `legacy-1.21`@baseline + `MAINTENANCE.md`（`41a81aa1`）。基线发布（可选步骤）暂缓——对外发布需显式批准。注：仓库另有用户自建 `2.0.0` 分支亦指 `c589088a`，语义近似，未触碰 | 阶段③提交 |
 
 ## 9. 进度表（滚动更新，收工必更）
 
@@ -228,8 +229,8 @@ PoC 结论回填 §8 决策记录（选定的插件组合与版本号），然�
 | ② | versionProperties/白名单/mc_ver 默认收缩 | ✅ 完成 | mc_ver 并入提交 1；properties×11 删除；白名单 ×3 = MC_1_21_11 |
 | ② | 双 loader 编译 + common:test + scanVersionBoundaries | ✅ 完成 | 提交 1 前后各一轮全绿（默认配置 MC_1_21_11=0） |
 | ② | Phase I 冒烟 ×2（fabric/neoforge）+ 提交 | ✅ 完成 | seedgen×2 PASS；dimension neoforge PASS、fabric 首跑偶发 FAIL 重跑 PASS（R8）；batch 锚点收缩为 1.21.11×双 loader |
-| ③ | tag baseline/1.21.11 + archive/pre-baseline + 切 legacy-1.21 | ☐ 未开始 | |
-| ③ | legacy MAINTENANCE.md + （可选）基线发布 | ☐ 未开始 | |
+| ③ | tag baseline/1.21.11 + archive/pre-baseline + 切 legacy-1.21 | ✅ 完成 | tag@`570ab7f3`；archive@`c589088a`；legacy-1.21@baseline |
+| ③ | legacy MAINTENANCE.md + （可选）基线发布 | ✅ 完成（发布暂缓） | MAINTENANCE.md=`41a81aa1`；对外发布待显式批准 |
 | ④ | M0 构建链 PoC + 选型回填 §8 | ☐ 未开始 | |
 | ④ | 删 1.21.11 properties + 加 26.x 三段 + 插件切换 | ☐ 未开始 | |
 | ④ | 六断点修复 + §2.4 复核清单 | ☐ 未开始 | |
