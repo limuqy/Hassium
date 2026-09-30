@@ -20,7 +20,12 @@ import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.storage.PlayerDataStorage;
+// authlib：26.3 ServicesKeySet 迁入 com.mojang.authlib.services
+#if MC_VER >= MC_26_3
 import com.mojang.authlib.services.ServicesKeySet;
+#else
+import com.mojang.authlib.yggdrasil.ServicesKeySet;
+#endif
 import net.minecraft.world.level.chunk.PalettedContainerFactory;
 import net.minecraft.server.level.ChunkResult;
 import net.minecraft.world.level.chunk.status.ChunkStatus;
@@ -238,6 +243,19 @@ public final class ShadowServerCompat {
     public static Services noServices() {
         return new Services(null, ServicesKeySet.EMPTY, null,
                 new MockUserNameToIdResolver(), new MockProfileResolver());
+    }
+
+    /**
+     * WorldLoader.DataLoadContext 的 worldgen 注册表 lookup。
+     * 26.3 记录组件改名 {@code datapackWorldgen}→{@code datapackWorldRegistries}。
+     */
+    public static net.minecraft.core.HolderLookup.Provider datapackWorldGen(
+            net.minecraft.server.WorldLoader.DataLoadContext dataLoadContext) {
+#if MC_VER >= MC_26_3
+        return dataLoadContext.datapackWorldRegistries();
+#else
+        return dataLoadContext.datapackWorldgen();
+#endif
     }
 
     /**

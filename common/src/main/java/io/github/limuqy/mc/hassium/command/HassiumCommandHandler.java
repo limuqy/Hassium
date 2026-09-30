@@ -290,20 +290,13 @@ public class HassiumCommandHandler {
 
     private static void copyTreeAsync(Path src, Path dst, String cacheId) {
         Thread t = new Thread(() -> {
-            // 26.3：Gui.getChat() 迁入 Hud（gui.hud.getChat()），addMessage → addClientSystemMessage
             try {
                 copyTree(src, dst);
-                Minecraft mc = Minecraft.getInstance();
-                if (mc != null && mc.gui != null) {
-                    mc.gui.hud.getChat().addClientSystemMessage(
-                            Component.translatable("hassium.command.export.done", dst.toString()));
-                }
+                io.github.limuqy.mc.hassium.compat.ClientHudCompat.sendSystemMessage(
+                        Component.translatable("hassium.command.export.done", dst.toString()));
             } catch (Exception e) {
-                Minecraft mc = Minecraft.getInstance();
-                if (mc != null && mc.gui != null) {
-                    mc.gui.hud.getChat().addClientSystemMessage(
-                            Component.translatable("hassium.command.export.failed", String.valueOf(e.getMessage())));
-                }
+                io.github.limuqy.mc.hassium.compat.ClientHudCompat.sendSystemMessage(
+                        Component.translatable("hassium.command.export.failed", String.valueOf(e.getMessage())));
             }
         }, "hassium-export-" + cacheId);
         t.setDaemon(true);

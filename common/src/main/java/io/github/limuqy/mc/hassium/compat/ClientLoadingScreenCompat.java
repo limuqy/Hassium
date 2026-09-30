@@ -23,8 +23,6 @@ public final class ClientLoadingScreenCompat {
 
     /** 当前客户端是否仍停在进服地形加载屏。 */
     public static boolean isVisible() {
-        Minecraft mc = Minecraft.getInstance();
-        // 26.3：当前屏幕从 mc.screen 迁入 Gui（mc.gui.screen()）
-        return mc != null && mc.gui != null && isTerrainLoadingScreen(mc.gui.screen());
+        return isTerrainLoadingScreen(ClientHudCompat.currentScreen());
     }
 }

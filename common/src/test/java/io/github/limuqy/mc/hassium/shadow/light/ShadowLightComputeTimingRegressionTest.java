@@ -296,7 +296,7 @@ class ShadowLightComputeTimingRegressionTest {
             ChunkPos pos = new ChunkPos(8, 8);
             assertTrue(ShadowLightCompute.tryRequestMiss(DimensionKey.OVERWORLD, pos));
             assertFalse(ShadowLightCompute.isAuthoritativeIngressInFlight(
-                    DimensionKey.key(DimensionKey.OVERWORLD, pos.x, pos.z)));
+                    DimensionKey.key(DimensionKey.OVERWORLD, pos.x(), pos.z())));
             ShadowLightCompute.accountVisibleNetworkIngress(DimensionKey.OVERWORLD, pos);
             assertEquals(1, NetworkStats.getMetrics().getFullChunkRequestCount());
             assertEquals(1, NetworkStats.getMetrics().getClientAppliedChunkCount());

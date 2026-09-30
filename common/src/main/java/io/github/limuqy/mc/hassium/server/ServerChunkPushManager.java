@@ -4,6 +4,7 @@ import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil;
 import io.github.limuqy.mc.hassium.compat.LevelChunkSectionCompat;
 import io.github.limuqy.mc.hassium.compat.ChunkPacketDataCompat;
+import io.github.limuqy.mc.hassium.compat.ChunkLightPacketCompat;
 
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.compression.CompressionService;
@@ -848,12 +849,9 @@ public class ServerChunkPushManager {
 
     private ClientboundLevelChunkWithLightPacket stripLightInPlace(
             ChunkPos pos, ClientboundLevelChunkWithLightPacket packet) {
-        // 26.3：ClientboundLightUpdatePacketData 是纯 record——直接构造空光数据，
-        // 不再走「写 buffer → 包构造器读回」的中转。
         try {
-            java.util.BitSet empty = new java.util.BitSet();
-            ClientboundLightUpdatePacketData emptyLight = new ClientboundLightUpdatePacketData(
-                    empty, empty, empty, empty, java.util.List.<byte[]>of(), java.util.List.<byte[]>of());
+            ClientboundLightUpdatePacketData emptyLight =
+                    ChunkLightPacketCompat.emptyLightData(pos.x(), pos.z());
             ((LevelChunkWithLightPacketAccessor) (Object) packet).hassium$setLightData(emptyLight);
             return packet;
         } catch (Exception e) {

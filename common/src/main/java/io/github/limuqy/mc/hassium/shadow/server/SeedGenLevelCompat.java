@@ -247,7 +247,7 @@ public final class SeedGenLevelCompat {
                 }
                 if (tag != null) {
                     RegistryOps<net.minecraft.nbt.Tag> ops =
-                            RegistryOps.create(NbtOps.INSTANCE, dataLoadContext.datapackWorldRegistries());
+                            RegistryOps.create(NbtOps.INSTANCE, ShadowServerCompat.datapackWorldGen(dataLoadContext));
                     java.util.Optional<LevelStem> decoded = LevelStem.CODEC.parse(ops, tag).result();
                     if (decoded.isPresent()) {
                         Constants.LOG.info("Hassium: Shadow server consuming server LevelStem "
@@ -348,7 +348,7 @@ public final class SeedGenLevelCompat {
 
     /** NORMAL preset 的 WorldDimensions（两版本 registry/lookup 形态差异封装）。 */
     private static WorldDimensions normalPresetDimensions(WorldLoader.DataLoadContext dataLoadContext) {
-        return dataLoadContext.datapackWorldRegistries()
+        return ShadowServerCompat.datapackWorldGen(dataLoadContext)
                 .lookupOrThrow(Registries.WORLD_PRESET)
                 .getOrThrow(WorldPresets.NORMAL)
                 .value()

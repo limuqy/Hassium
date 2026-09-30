@@ -24,6 +24,24 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 public abstract class MixinMinecraft {
 
     /**
+     * T0b 诊断：加载屏消退时刻（ReceivingLevelScreen/LevelLoadingScreen 被替换为非加载屏）。
+     * 仅 26.1.2：屏幕状态在 Minecraft.screen + Minecraft.setScreen；26.2+ 迁入 Gui（见 MixinGui）。
+     */
+#if MC_VER < MC_26_2
+    @Inject(method = "setScreen(Lnet/minecraft/client/gui/screens/Screen;)V", at = @At("HEAD"))
+    private void hassium$onSetScreen(net.minecraft.client.gui.screens.Screen screen, CallbackInfo ci) {
+        net.minecraft.client.gui.screens.Screen current = ((Minecraft) (Object) this).screen;
+        if (current instanceof net.minecraft.client.gui.screens.ConnectScreen) {
+            ClientLifecycleHelper.onConnectScreenDismissed(screen);
+        }
+        if (current instanceof net.minecraft.client.gui.screens.LevelLoadingScreen
+                && !(screen instanceof net.minecraft.client.gui.screens.LevelLoadingScreen)) {
+            io.github.limuqy.mc.hassium.utils.LoginTiming.onLoadingScreenDismissed();
+        }
+    }
+#endif
+
+    /**
      * 断连缓存落盘（dump），在世界拆除之前触发——手动登出（PauseScreen 保存并退出 →
      * 主线程 {@code Minecraft.disconnect(Screen[,Z])} / {@code clearLevel}）时同步执行，
      * 解决「onDisconnect（Netty 线程）→ mc.execute 排队」晚于 {@code disconnect} TAIL

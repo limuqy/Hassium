@@ -1,5 +1,7 @@
 package io.github.limuqy.mc.hassium.shadow.light;
 
+import io.github.limuqy.mc.hassium.compat.ChunkLightPacketCompat;
+
 import io.github.limuqy.mc.hassium.platform.client.ShadowClientApi;
 import io.github.limuqy.mc.hassium.platform.client.ShadowClientBridge;
 import io.github.limuqy.mc.hassium.platform.client.TraceOrigin;
@@ -2981,8 +2983,8 @@ public final class ShadowLightCompute {
         if (packet == null || dimension == null) {
             return false;
         }
-        int x = packet.x();
-        int z = packet.z();
+        int x = ChunkLightPacketCompat.chunkX(packet);
+        int z = ChunkLightPacketCompat.chunkZ(packet);
         // B6 统一交付门：与 pushReady 同一判据（ServerVD + 余量 ∪ OVD）
         if (!ShadowTrackingSession.isDeliverableToClient(x, z)) {
             DebugLogger.info(DebugLogger.LogType.LIGHT,
@@ -3148,8 +3150,8 @@ public final class ShadowLightCompute {
     /** @return true=本条目可 release；false=权威包被原版忽略，帧尾重入队 */
     private static boolean applyReadyChunk(Minecraft mc, ClientPacketListener connection,
                                            KeyedPriorityQueue.Entry<ReadyItem> entry, ReadyItem item) {
-        int chunkX = item.chunkPacket.x();
-        int chunkZ = item.chunkPacket.z();
+        int chunkX = ChunkLightPacketCompat.chunkX(item.chunkPacket);
+        int chunkZ = ChunkLightPacketCompat.chunkZ(item.chunkPacket);
         // 维度闸（投递点复检）：publish 时已按客户端维拒过，但柱可能在 ready 队列里等到
         // 客户端切维之后才被投递——原版区块包**不带维度字段**，handleLevelChunkWithLight
         // 会把它落进「当前」level。丢弃即可；显式 tracking 波前在新维度重新选柱并投递。

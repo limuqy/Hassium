@@ -155,6 +155,27 @@ public final class ChunkPacketDataCompat {
     }
 
     /**
+     * 把 {@code ClientboundLevelChunkPacketData} 应用到空壳/已载柱上（跨版本收口）。
+     * <p>
+     * 26.3：{@code replaceWithPacketData(chunkX, chunkZ, chunkData)} 自管 read buffer、
+     * heightmaps 与 BE tags；26.1.2–26.2：三参旧式（read buffer + heightmaps + BE 消费者），
+     * 且 {@code getReadBuffer()} 返回包内 byte[] 的新包装——显式 {@code readerIndex(0)}
+     * 防止游标留在尾部导致整柱 section 被跳过（区块只剩高度图/空气）。
+     */
+    public static void applyToChunk(net.minecraft.world.level.chunk.LevelChunk chunk,
+                                    int chunkX, int chunkZ,
+                                    net.minecraft.network.protocol.game.ClientboundLevelChunkPacketData data) {
+#if MC_VER >= MC_26_3
+        chunk.replaceWithPacketData(chunkX, chunkZ, data);
+#else
+        FriendlyByteBuf sectionBuf = data.getReadBuffer();
+        sectionBuf.readerIndex(0);
+        chunk.replaceWithPacketData(sectionBuf, data.getHeightmaps(),
+                data.getBlockEntitiesTagsConsumer(chunkX, chunkZ));
+#endif
+    }
+
+    /**
      * 写 byte[] 列表（{@code varInt count} + 逐个 {@code writeByteArray}）。
      * <p>
      * 26.3 {@code FriendlyByteBuf} 移除了 {@code writeCollection}/{{@code readCollection}} 全家，

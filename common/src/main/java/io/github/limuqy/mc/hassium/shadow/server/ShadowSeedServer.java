@@ -1,5 +1,7 @@
 package io.github.limuqy.mc.hassium.shadow.server;
 
+import io.github.limuqy.mc.hassium.compat.ChunkLightPacketCompat;
+
 import io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession;
 import io.github.limuqy.mc.hassium.shadow.track.ShadowChunkSource;
 import io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute;
@@ -15,6 +17,7 @@ import io.github.limuqy.mc.hassium.shadow.storage.RegionCache;
 import com.mojang.logging.LogUtils;
 import io.github.limuqy.mc.hassium.compat.BlockEntityCompat;
 import io.github.limuqy.mc.hassium.compat.ChunkDataCompat;
+import io.github.limuqy.mc.hassium.compat.ChunkPacketDataCompat;
 import io.github.limuqy.mc.hassium.compat.LevelCompat;
 import io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat;
 import io.github.limuqy.mc.hassium.compat.ShadowServerCompat;
@@ -178,23 +181,28 @@ public class ShadowSeedServer extends MinecraftServer {
                              WorldStem stem,
                              long seed,
                              java.nio.file.Path worldRoot) {
-        // 26.3：ctor 增加 Optional<GameRules>（empty → 按 worldData 特性集取默认规则）、
-        // propagatesCrashes=false（影子线程异常不外溢宿主 JVM）、NotificationManager（无通知服务）。
+        // 26.x：ctor 含 Optional<GameRules>（empty → 按 worldData 特性集取默认规则）与
+        // propagatesCrashes=false（影子线程异常不外溢宿主 JVM）；
+        // 26.2+ 尾参再加 NotificationManager（无通知服务），26.1.2 无此形参。
+        // super() 参数表 arity 不可经 compat 收口，#if 留在本类（同 createLevels 豁免）。
+#if MC_VER >= MC_26_2
         super(thread, access, repo, stem, Optional.empty(), Proxy.NO_PROXY, DataFixers.getDataFixer(),
                 NO_SERVICES, SeedGenLevelCompat.chunkProgressArg(), false, new NotificationManager());
+#else
+        super(thread, access, repo, stem, Optional.empty(), Proxy.NO_PROXY, DataFixers.getDataFixer(),
+                NO_SERVICES, SeedGenLevelCompat.chunkProgressArg(), false);
+#endif
         this.stem = stem;
         this.worldSeed = seed;
         this.worldRoot = worldRoot;
     }
 
-    /** 影子端无玩家聊天；GameTestServer 同款返回 0。 */
-    @Override
+    // 以下两个方法覆写 26.2+ MinecraftServer 的抽象方法（GameTestServer 同款返回 0）；
+    // 26.1.2 无此抽象——不加 @Override 以零 #if 跨锚点（影子端无聊天/命令转发）。
     public int getChatSpamThresholdSeconds() {
         return 0;
     }
 
-    /** 影子端无命令转发；GameTestServer 同款返回 0。 */
-    @Override
     public int getCommandSpamThresholdSeconds() {
         return 0;
     }
@@ -528,18 +536,21 @@ public class ShadowSeedServer extends MinecraftServer {
         // initializeLightSources / BE → ServerLevel.getChunk，把 Proto 强转 LevelChunk。
         // 必须先让 getChunk mixin 命中本柱，decode 失败再还原。
         this.injectedChunks.put(key, chunk);
-        ClientboundLevelChunkPacketData data = packet.chunkData();
+        ClientboundLevelChunkPacketData data = ChunkLightPacketCompat.chunkData(packet);
         int sectionBytes = data.getReadBuffer().readableBytes();
-        // 26.3：replaceWithPacketData(chunkX, chunkZ, chunkData) 自管 read buffer
-        //（每次调用取包内 byte[] 的新包装）+ heightmaps + BE tags；
-        // 旧的「游标复位 + 空柱污染重试」针对的是共享 wrapper 推进污染，已无对象。
-        chunk.replaceWithPacketData(pos.x(), pos.z(), data);
+        ChunkPacketDataCompat.applyToChunk(chunk, pos.x(), pos.z(), data);
         int nonAirSections = countNonAirSections(chunk);
+        // 防御：包内确实有 section 字节却解析成整柱空气时，用全新的 LevelChunk 重试一次
+        //（26.1.2–26.2 的 getReadBuffer() 包装可能被推进污染；26.3 重试无害）。
         if (nonAirSections == 0 && sectionBytes > 0) {
             DebugLogger.warn(DebugLogger.LogType.ASYNC,
-                    "[SHADOW_INJECT] Empty sections detected for ({}, {}) "
+                    "[SHADOW_INJECT] Empty sections detected for ({}, {}), retrying with fresh chunk "
                             + "(sections={}, sectionBytes={}, heightmapKeys={})",
                     pos.x(), pos.z(), chunk.getSections().length, sectionBytes, data.getHeightmaps().size());
+            chunk = new LevelChunk(level, pos);
+            this.injectedChunks.put(key, chunk);
+            ChunkPacketDataCompat.applyToChunk(chunk, pos.x(), pos.z(), data);
+            nonAirSections = countNonAirSections(chunk);
         }
         DebugLogger.debug(DebugLogger.LogType.ASYNC,
                 "[SHADOW_INJECT] pos=({},{}) sections={} nonAirSections={} sectionBytes={} heightmapKeys={}",

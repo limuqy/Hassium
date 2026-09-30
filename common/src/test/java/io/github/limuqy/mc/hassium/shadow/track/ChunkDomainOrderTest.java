@@ -53,7 +53,7 @@ class ChunkDomainOrderTest {
                 new ChunkPos(5, 0));  // T(1,0)
         List<Long> domainSeq = new ArrayList<>();
         for (ChunkPos p : out) {
-            long id = ShadowTrackingSession.domainId(p.x, p.z);
+            long id = ShadowTrackingSession.domainId(p.x(), p.z());
             if (domainSeq.isEmpty() || domainSeq.get(domainSeq.size() - 1) != id) {
                 domainSeq.add(id);
             }

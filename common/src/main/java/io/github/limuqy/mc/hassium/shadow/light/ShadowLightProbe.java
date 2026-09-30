@@ -1,5 +1,7 @@
 package io.github.limuqy.mc.hassium.shadow.light;
 
+import io.github.limuqy.mc.hassium.compat.ChunkLightPacketCompat;
+
 import io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer;
 import io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry;
 
@@ -191,8 +193,9 @@ public final class ShadowLightProbe {
             return;
         }
         try {
-            java.util.List<?> sky = packet.lightData().skyUpdates();
-            java.util.List<?> block = packet.lightData().blockUpdates();
+            var ld = ChunkLightPacketCompat.lightData(packet);
+            java.util.List<?> sky = ChunkLightPacketCompat.skyUpdates(ld);
+            java.util.List<?> block = ChunkLightPacketCompat.blockUpdates(ld);
             int probeIdx = engine == null ? -1 : SECTION_Y - engine.getMinLightSection();
             Constants.LOG.info("{}PACKET probeIndex={} skyUpdates({}): {}",
                     PREFIX, probeIdx, sky.size(), dumpLightList(sky));

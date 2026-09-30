@@ -1,5 +1,7 @@
 package io.github.limuqy.mc.hassium.client;
 
+import io.github.limuqy.mc.hassium.compat.ChunkLightPacketCompat;
+
 import io.github.limuqy.mc.hassium.platform.client.TraceOrigin;
 import io.github.limuqy.mc.hassium.shadow.light.ShadowVanillaLightPipeline;
 import io.github.limuqy.mc.hassium.Constants;
@@ -97,7 +99,7 @@ public class ClientChunkHandler {
         if (packet == null) {
             return false;
         }
-        markPullApply(packet.x(), packet.z());
+        markPullApply(ChunkLightPacketCompat.chunkX(packet), ChunkLightPacketCompat.chunkZ(packet));
         net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
         net.minecraft.client.multiplayer.ClientPacketListener listener = mc.getConnection();
         if (listener == null) {

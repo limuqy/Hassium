@@ -1,5 +1,7 @@
 package io.github.limuqy.mc.hassium.protocol;
 
+import io.github.limuqy.mc.hassium.compat.ChunkLightPacketCompat;
+
 import io.github.limuqy.mc.hassium.platform.client.TraceOrigin;
 
 import io.github.limuqy.mc.hassium.Constants;
@@ -289,7 +291,7 @@ public final class ShadowPullClient {
      *  pull FULL 回放（{@link ClientChunkHandler#applyShadowPullFull}）必须放行：
      *  否则会把刚收到的权威包当成原版首包再打一次空基线 Pull，落地被标成 SERVER_PUSH。 */
     public static boolean handleNativeChunk(net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket packet) {
-        if (packet != null && ClientChunkHandler.isPendingPullApply(packet.x(), packet.z())) {
+        if (packet != null && ClientChunkHandler.isPendingPullApply(ChunkLightPacketCompat.chunkX(packet), ChunkLightPacketCompat.chunkZ(packet))) {
             nativeBypassPendingPull.incrementAndGet();
             return false;
         }
@@ -308,7 +310,7 @@ public final class ShadowPullClient {
             return false;
         }
         String dimension = LevelCompat.getDimensionId(minecraft.level);
-        ChunkPos pos = new ChunkPos(packet.x(), packet.z());
+        ChunkPos pos = new ChunkPos(ChunkLightPacketCompat.chunkX(packet), ChunkLightPacketCompat.chunkZ(packet));
         if (dimension == null) {
             nativeBypassEngineOff.incrementAndGet();
             return false;

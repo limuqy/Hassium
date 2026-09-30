@@ -70,7 +70,7 @@ class ShadowStorageHashesTest {
     void markLightDirtyDoesNotSetLightReady() {
         ChunkPos pos = new ChunkPos(4, 4);
         ShadowStorageHashes.markLightDirty(pos);
-        long key = DimensionKey.key(DimensionKey.OVERWORLD, pos.x, pos.z);
+        long key = DimensionKey.key(DimensionKey.OVERWORLD, pos.x(), pos.z());
         assertTrue(ShadowStorageHashes.isLightDirty(key));
         assertFalse(ShadowStorageHashes.isLightReady(key));
         assertFalse(ShadowStorageHashes.isMutation(key), "未 persist 不得兼标 mutation");
@@ -80,7 +80,7 @@ class ShadowStorageHashesTest {
     @DisplayName("已 persist 后再 markLightDirty 兼标 mutation")
     void markLightDirtyAfterPersistSetsMutation() {
         ChunkPos pos = new ChunkPos(6, 6);
-        long key = DimensionKey.key(DimensionKey.OVERWORLD, pos.x, pos.z);
+        long key = DimensionKey.key(DimensionKey.OVERWORLD, pos.x(), pos.z());
         ShadowStorageHashes.markContentDirty(pos);
         ShadowStorageHashes.claimDirty(key);
         ShadowStorageHashes.markPersisted(key);
@@ -96,7 +96,7 @@ class ShadowStorageHashesTest {
     @DisplayName("已落盘后再 markContentDirty 才是 mutation")
     void mutationOnlyAfterPersisted() {
         ChunkPos pos = new ChunkPos(5, 5);
-        long key = DimensionKey.key(DimensionKey.OVERWORLD, pos.x, pos.z);
+        long key = DimensionKey.key(DimensionKey.OVERWORLD, pos.x(), pos.z());
         ShadowStorageHashes.markContentDirty(pos);
         assertFalse(ShadowStorageHashes.isMutation(key));
         ShadowStorageHashes.claimDirty(key);
@@ -114,7 +114,7 @@ class ShadowStorageHashesTest {
         assertTrue(ShadowStorageHashes.isContentDirty(pos));
         assertNull(ShadowStorageHashes.get(pos));
         assertTrue(ShadowStorageHashes.claimDirty(
-                DimensionKey.key(DimensionKey.OVERWORLD, pos.x, pos.z)), "旧裸键布局已废弃：脏键为复合键");
+                DimensionKey.key(DimensionKey.OVERWORLD, pos.x(), pos.z())), "旧裸键布局已废弃：脏键为复合键");
         assertFalse(ShadowStorageHashes.isDirty(pos));
     }
 
@@ -130,11 +130,11 @@ class ShadowStorageHashesTest {
         assertEquals(Boolean.TRUE, ShadowStorageHashes.matchesRemote(DimensionKey.OVERWORLD, pos, 0xAAL));
         assertEquals(Boolean.FALSE, ShadowStorageHashes.matchesRemote(DimensionKey.NETHER, pos, 0xAAL));
 
-        long owKey = DimensionKey.key(DimensionKey.OVERWORLD, pos.x, pos.z);
-        long neKey = DimensionKey.key(DimensionKey.NETHER, pos.x, pos.z);
+        long owKey = DimensionKey.key(DimensionKey.OVERWORLD, pos.x(), pos.z());
+        long neKey = DimensionKey.key(DimensionKey.NETHER, pos.x(), pos.z());
         assertTrue(owKey != neKey);
-        assertEquals(pos.x, DimensionKey.chunkXOf(owKey));
-        assertEquals(pos.z, DimensionKey.chunkZOf(neKey));
+        assertEquals(pos.x(), DimensionKey.chunkXOf(owKey));
+        assertEquals(pos.z(), DimensionKey.chunkZOf(neKey));
     }
 
     @Test
@@ -146,9 +146,9 @@ class ShadowStorageHashesTest {
         assertFalse(ShadowStorageHashes.isDirty(DimensionKey.NETHER, pos));
         assertTrue(ShadowStorageHashes.isContentDirty(DimensionKey.OVERWORLD, pos));
 
-        long owKey = DimensionKey.key(DimensionKey.OVERWORLD, pos.x, pos.z);
+        long owKey = DimensionKey.key(DimensionKey.OVERWORLD, pos.x(), pos.z());
         assertTrue(ShadowStorageHashes.claimDirty(owKey));
-        long neKey = DimensionKey.key(DimensionKey.NETHER, pos.x, pos.z);
+        long neKey = DimensionKey.key(DimensionKey.NETHER, pos.x(), pos.z());
         assertFalse(ShadowStorageHashes.claimDirty(neKey));
 
         // remove 只删本维度，另一维度数据保留

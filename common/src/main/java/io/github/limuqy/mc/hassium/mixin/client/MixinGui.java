@@ -20,7 +20,9 @@ public abstract class MixinGui {
 
     /**
      * T0b 诊断：加载屏消退时刻（加载屏被替换为非加载屏，含 setScreen(null)）。
+     * 26.2+：屏幕状态迁入 Gui；26.1.2 在 Minecraft.setScreen（见 MixinMinecraft）。
      */
+#if MC_VER >= MC_26_2
     @Inject(method = "setScreen(Lnet/minecraft/client/gui/screens/Screen;)V", at = @At("HEAD"))
     private void hassium$onSetScreen(Screen screen, CallbackInfo ci) {
         Screen current = ((Gui) (Object) this).screen();
@@ -32,4 +34,5 @@ public abstract class MixinGui {
             io.github.limuqy.mc.hassium.utils.LoginTiming.onLoadingScreenDismissed();
         }
     }
+#endif
 }
