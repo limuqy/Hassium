@@ -5,7 +5,7 @@
 </p>
 
 **Hassium** — high-performance chunk compression and client-side chunk storage for Minecraft, providing **efficient compression, network optimization, chunk cache, local generation, and lighting optimization**.
-Smaller world saves and bandwidth than vanilla, local chunk reuse, and smoother joins. Supports Fabric / Forge / NeoForge across Minecraft 1.20.1–1.21.11.
+Smaller world saves and bandwidth than vanilla, local chunk reuse, and smoother joins. Supports Fabric / NeoForge across Minecraft 26.x (26.1.2 / 26.2 / 26.3).
 
 [简体中文](README.md) · **English**
 
@@ -13,8 +13,8 @@ Smaller world saves and bandwidth than vanilla, local chunk reuse, and smoother 
 > User documentation: [GitHub Wiki](https://github.com/limuqy/Hassium/wiki/Home-en) · [简体中文 Wiki](https://github.com/limuqy/Hassium/wiki)
 
 ![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)
-![Minecraft](https://img.shields.io/badge/Minecraft-1.20.1--1.21.11-green.svg)
-![Loaders](https://img.shields.io/badge/Loaders-Fabric%20%7C%20Forge%20%7C%20NeoForge-orange.svg)
+![Minecraft](https://img.shields.io/badge/Minecraft-26.1.2--26.3-green.svg)
+![Loaders](https://img.shields.io/badge/Loaders-Fabric%20%7C%20NeoForge-orange.svg)
 [![CurseForge](https://img.shields.io/badge/CurseForge-Hassium-644DF4.svg?logo=curseforge)](https://www.curseforge.com/minecraft/mc-mods/hassium)
 [![Modrinth](https://img.shields.io/badge/Modrinth-Hassium-00AF5C.svg?logo=modrinth)](https://modrinth.com/mod/hassium-limuqy)
 
@@ -45,15 +45,13 @@ Vanilla clients can join by default (`compat.requireClientMod = false`); install
 
 ## Support matrix
 
-| Minecraft | Fabric | Forge | NeoForge |
-| --- | --- | --- | --- |
-| 1.20.1 | ✅ | ✅ | — |
-| 1.21.1 | ✅ | ✅ | ✅ |
-| 1.21.2 | ✅ | — | ✅ |
-| 1.21.3–1.21.10 | ✅ | ✅ | ✅ |
-| 1.21.11 | ✅ | — | ✅ |
+| Minecraft | Fabric | NeoForge |
+| --- | --- | --- |
+| 26.1.2 | ✅ | ✅ |
+| 26.2 | ✅ | — |
+| 26.3 | ✅ | — |
 
-Forge supports 1.20.1 / 1.21.1 / 1.21.3–1.21.10 (no upstream Forge userdev for 1.21.2; **sunset from 1.21.11** — use NeoForge there). **No separate NeoForge build for 1.20.1**: NeoForge 47.x natively loads Forge mods, so NeoForge users install the Forge build. Full anchor matrix: [`docs/version-segments.md`](docs/version-segments.md).
+**NeoForge support for test versions is dropped** (2026-09-30): on non-release versions NeoForge shows a startup warning dialog that blocks unattended joins, so 26.2/26.3 ship Fabric builds only. The 1.20.1–1.21.11 line (incl. Forge) is frozen on the `legacy-1.21` branch and existing releases. Full anchor matrix: [`docs/version-segments.md`](docs/version-segments.md).
 
 ---
 
@@ -61,9 +59,9 @@ Forge supports 1.20.1 / 1.21.1 / 1.21.3–1.21.10 (no upstream Forge userdev for
 
 1. Download the JAR for your loader from [Releases](https://github.com/limuqy/Hassium/releases).
 2. Drop it into the client or server `mods/`.
-3. On first launch the mod generates `config/hassium/hassium-client.toml` and `config/hassium/hassium-server.toml` (Fabric: Mod Menu + Cloth; Forge/NeoForge: Cloth screen from the mod list, or edit the toml directly).
+3. On first launch the mod generates `config/hassium/hassium-client.toml` and `config/hassium/hassium-server.toml` (edit the toml directly; GUI config screens depend on Cloth availability, see [`docs/mod-compat.md`](docs/mod-compat.md)).
 
-**Dependencies:** Fabric API on Fabric (Cloth is jiJ'd); no extra prerequisites on Forge / NeoForge. Install on both sides for negotiated compression and caching.
+**Dependencies:** Fabric API on Fabric; no extra prerequisites on NeoForge. Install on both sides for negotiated compression and caching.
 
 ---
 
@@ -82,7 +80,7 @@ Enabled by default:
 
 ## Configuration summary
 
-Files: `config/hassium/hassium-client.toml`, `config/hassium/hassium-server.toml` (Fabric: the file matching the physical side wins; Forge/NeoForge registers both specs but only the physical side's applies). Key-set source of truth: `ConfigSchema`.
+Files: `config/hassium/hassium-client.toml`, `config/hassium/hassium-server.toml` (Fabric: the file matching the physical side wins; NeoForge registers both specs but only the physical side's applies). Key-set source of truth: `ConfigSchema`.
 
 | Key | Default | Description |
 | --- | --- | --- |
@@ -143,7 +141,7 @@ Descriptions match the TOML comments (from `ConfigSchema`). Full key reference: 
 flowchart LR
     client["Mod client"] <-->|"single vanilla TCP<br/>login handshake + Play custom payloads"| server["Mod server"]
     subgraph Handshake & activation
-        hs["login_hello (1.20.1) /<br/>PreHandshakePayload (1.21.1+)<br/>bitwise capability negotiation"]
+        hs["PreHandshakePayload<br/>bitwise capability negotiation"]
         act["play_init_s2c activation<br/>dict/index → aggregation PENDING → ACK → ENABLED"]
     end
     subgraph Chunk data plane
@@ -170,13 +168,13 @@ Details: [`docs/architecture.md`](docs/architecture.md).
 
 ## Building from source
 
-Requires JDK 17+ (newer targets may need a higher Java; see the matching `versionProperties`).
+Requires JDK 25 (toolchain auto-provisioned).
 
 ```bash
 ./gradlew build
-./gradlew build "-Pmc_ver=1.21.1"   # quote -Pmc_ver in PowerShell
+./gradlew build "-Pmc_ver=26.3"   # quote -Pmc_ver in PowerShell
 ./gradlew :fabric:runClient
-./gradlew :forge:runServer
+./gradlew :neoforge:runServer
 ```
 
 Developer entry point: [`AGENTS.md`](AGENTS.md).

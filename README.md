@@ -5,7 +5,7 @@
 </p>
 
 **Hassium** · 高性能区块压缩与客户端区块存储模组，提供**高效压缩、网络优化、区块缓存、本地生成与光照优化**。
-相对原版缩小存档与带宽、减轻进服卡顿。支持 Fabric / Forge / NeoForge，覆盖 Minecraft 1.20.1–1.21.11。
+相对原版缩小存档与带宽、减轻进服卡顿。支持 Fabric / NeoForge，覆盖 Minecraft 26.x（26.1.2 / 26.2 / 26.3）。
 
 [English](README-en.md) · **简体中文**
 
@@ -13,8 +13,8 @@
 > 用户文档：[GitHub Wiki](https://github.com/limuqy/Hassium/wiki) · [English Wiki](https://github.com/limuqy/Hassium/wiki/Home-en)
 
 ![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-blue.svg)
-![Minecraft](https://img.shields.io/badge/Minecraft-1.20.1--1.21.11-green.svg)
-![Loaders](https://img.shields.io/badge/Loaders-Fabric%20%7C%20Forge%20%7C%20NeoForge-orange.svg)
+![Minecraft](https://img.shields.io/badge/Minecraft-26.1.2--26.3-green.svg)
+![Loaders](https://img.shields.io/badge/Loaders-Fabric%20%7C%20NeoForge-orange.svg)
 [![CurseForge](https://img.shields.io/badge/CurseForge-Hassium-644DF4.svg?logo=curseforge)](https://www.curseforge.com/minecraft/mc-mods/hassium)
 [![Modrinth](https://img.shields.io/badge/Modrinth-Hassium-00AF5C.svg?logo=modrinth)](https://modrinth.com/mod/hassium-limuqy)
 
@@ -45,15 +45,13 @@
 
 ## 支持矩阵
 
-| Minecraft | Fabric | Forge | NeoForge |
-| --- | --- | --- | --- |
-| 1.20.1 | ✅ | ✅ | — |
-| 1.21.1 | ✅ | ✅ | ✅ |
-| 1.21.2 | ✅ | — | ✅ |
-| 1.21.3–1.21.10 | ✅ | ✅ | ✅ |
-| 1.21.11 | ✅ | — | ✅ |
+| Minecraft | Fabric | NeoForge |
+| --- | --- | --- |
+| 26.1.2 | ✅ | ✅ |
+| 26.2 | ✅ | — |
+| 26.3 | ✅ | — |
 
-Forge 支持 1.20.1 / 1.21.1 / 1.21.3–1.21.10（1.21.2 上游无 Forge userdev；**1.21.11 起 sunset**，该段用 NeoForge）。**1.20.1 不单独发 NeoForge 文件**：NeoForge 47.x 原生兼容 Forge mod，NeoForge 用户直接使用 Forge 版。完整七段锚点与编译矩阵见 [`docs/version-segments.md`](docs/version-segments.md)。
+**NeoForge 测试版本支持已取消**（2026-09-30）：非正式版本下 NeoForge 启动会弹窗警告、挡住自动进服，26.2/26.3 仅发布 Fabric 构建。1.20.1–1.21.11 旧版本线（含 Forge）冻结于 `legacy-1.21` 分支与既有发布。完整三段锚点与编译矩阵见 [`docs/version-segments.md`](docs/version-segments.md)。
 
 ---
 
@@ -61,9 +59,9 @@ Forge 支持 1.20.1 / 1.21.1 / 1.21.3–1.21.10（1.21.2 上游无 Forge userdev
 
 1. 从 [Releases](https://github.com/limuqy/Hassium/releases) 下载对应加载器的 JAR。
 2. 放入客户端或服务端 `mods/`。
-3. 启动后生成 `config/hassium/hassium-client.toml` 与 `config/hassium/hassium-server.toml`（Fabric：Mod Menu + Cloth；Forge/NeoForge：模组列表 Cloth 配置屏，亦可手改 toml）。
+3. 启动后生成 `config/hassium/hassium-client.toml` 与 `config/hassium/hassium-server.toml`（可手改 toml；GUI 配置屏视 Cloth 构建可用性，见 [`docs/mod-compat.md`](docs/mod-compat.md)）。
 
-**依赖：** Fabric 需 Fabric API（Cloth 已 jiJ）；Forge / NeoForge 无额外前置。建议双端均安装以启用协商压缩与缓存。
+**依赖：** Fabric 需 Fabric API；NeoForge 无额外前置。建议双端均安装以启用协商压缩与缓存。
 
 ---
 
@@ -82,7 +80,7 @@ Forge 支持 1.20.1 / 1.21.1 / 1.21.3–1.21.10（1.21.2 上游无 Forge userdev
 
 ## 配置摘要
 
-文件：`config/hassium/hassium-client.toml`、`config/hassium/hassium-server.toml`（Fabric 按物理端二选一生效；Forge/NeoForge 双 spec 亦按物理端二选一注册）。键集真相源：`ConfigSchema`。
+文件：`config/hassium/hassium-client.toml`、`config/hassium/hassium-server.toml`（Fabric 按物理端二选一生效；NeoForge 双 spec 亦按物理端二选一注册）。键集真相源：`ConfigSchema`。
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
@@ -170,13 +168,13 @@ flowchart LR
 
 ## 从源码构建
 
-需要 JDK 17+（部分新版本需更高 Java，见对应 `versionProperties`）。
+需要 JDK 25（toolchain 自动供给）。
 
 ```bash
 ./gradlew build
-./gradlew build "-Pmc_ver=1.21.1"   # PowerShell 必须给 -Pmc_ver 加引号
+./gradlew build "-Pmc_ver=26.3"   # PowerShell 必须给 -Pmc_ver 加引号
 ./gradlew :fabric:runClient
-./gradlew :forge:runServer
+./gradlew :neoforge:runServer
 ```
 
 开发者入口：[`AGENTS.md`](AGENTS.md)。
@@ -206,7 +204,7 @@ flowchart LR
 | [`docs/chunk-cache.md`](docs/chunk-cache.md) | 区块缓存推送（ShadowPull 统一 Compare+Pull）、磁盘 NBT（§11）、导出（§12） |
 | [`docs/client-chunk-light-flow.md`](docs/client-chunk-light-flow.md) | 客户端收包 → apply → 光照落地全链路 |
 | [`docs/chunk-load-optimization.md`](docs/chunk-load-optimization.md) | 进服/重连加载路径与速率锚点 |
-| [`docs/version-segments.md`](docs/version-segments.md) | 多版本七段适配真相源 |
+| [`docs/version-segments.md`](docs/version-segments.md) | 26.x 三段适配真相源 |
 | [`docs/mod-compat.md`](docs/mod-compat.md) | 多 Mod 兼容边界与配置逃生 |
 | [`docs/config-audit.md`](docs/config-audit.md) | 配置项审计 |
 | [`docs/runtime-smoke-test.md`](docs/runtime-smoke-test.md) | 运行时冒烟（L0–L2、PROBE、场景引擎） |
