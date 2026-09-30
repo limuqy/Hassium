@@ -67,6 +67,12 @@
 5. **时间域 API**：`Level.getDayTime` → `getOverworldClockTime` / `clockManager()`；`ServerLevel.setDayTime/getDayCount` 移除；`ClientboundSetTimePacket` 改收 clocks map。审计 `SeedGenLevelCompat`、`ShadowServerCompat` 内全部时间引用。
 6. **setScreen 迁移**：`Minecraft.screen`/`setScreen` → `Gui`（26.2）。`mixin/client/MixinMinecraft` L29 的 setScreen 钩子迁移目标类；`clearLevel`/`disconnect` 重载已核对健在。
 
+**M0 实测新增断点（26.3 编译错误目录 200 行，poc 分支 `build/mc26.3-common-errors.txt` / `mc26.3-symbols.txt`）**：
+
+7. **ChunkPos record 化**（132 处，量最大但机械）：26.3 为 `public record ChunkPos(int x, int z)` —— `pos.x`/`pos.z` 字段访问改 `pos.x()`/`pos.z()`；静态 `asLong(int,int)` 与实例 `toLong()` 移除（源码现见 `pack(int,int)`/`unpack(long)`，替代关系需对源核对）。
+8. **authlib 重组**（2 处）：`com.mojang.authlib.yggdrasil.ServicesKeySet` 包不存在（authlib 10.0.77）——`ShadowServerCompat.noServices` 等按 26.3 authlib API 重写。
+9. **零散符号缺失**（54 处）：`FriendlyByteBuf`（6 处）、`ClientboundLevelChunkWithLightPacket.getChunkData`、`Gui.getChat`（26.2 Gui/Hud 拆分延续）、`writeCollection/readCollection` 签名变化（`ChunkPacketDataCompat`）等，逐条对源核对。
+
 ### 2.4 实施期待复核清单（阶段④逐项打勾）
 
 - [ ] `PlayerChunkSender` 在 26.1.2 的包名（决定段 J 是否已换包）
@@ -177,13 +183,20 @@ archive/pre-baseline = 当前 HEAD 的引用（1.20.1–1.21.10 完整历史后�
 
 ## 7. 阶段④：26.x 升级（master）
 
-### 7.1 M0 构建链 PoC（先行，最大不确定度，scratch 分支/临时目录做，不污染 master）
+### 7.1 M0 构建链 PoC（✅ 2026-09-30 已完成，scratch 分支 `poc/mc26-build`，提交 `175abc93`）
 
-按序尝试，成功即停：
-1. **architectury-loom 1.17.491 直出 26.3**（最省：无构建手术）——空 mod + 现有 common 引用面 `compileJava`；失败（大概率，#328 开放）→
-2. **fabric-loom 新插件（`net.fabricmc.fabric-loom`，Loom 1.17）+ ModDevGradle（NeoForge 26.3）**——验证点：无 mappings 块、`implementation` 坐标、`jar` 任务、Manifold javac 插件在 Java 25 下工作、mixin 无 refmap 生效。
+| 候选 | 结果 | 证据 |
+|------|------|------|
+| architectury-loom 1.17.491 直出 26.3 | **✗ 定论** | `Failed to find official mojang mappings for 26.3`；去掉 mappings 行则 `Configuration 'mappings' has no dependencies`——loom 硬性要求映射依赖而 26.x 无映射（issue #328 实锤） |
+| fabric-loom 新插件 `net.fabricmc.fabric-loom` 1.17.21（fabric 线） | **✅ 工具链可行** | 无 mappings 配置通过；`:common` 编译进到真实 26.3 API 差异层（200 错误行 = 阶段④断点目录，见 §2.3 补充）；Manifold 预处理 + 零 refmap + JDK 25 全部工作 |
+| ModDevGradle 2.0.148（neoforge 线） | **✅ 全绿** | neoforge 26.3.0.37-beta neoForm 管线完整走通、record API 编译通过；官方模板 examplemod-template-26.3 同款接线（settings 无需额外仓库） |
 
-PoC 结论回填 §8 决策记录（选定的插件组合与版本号），然后 master 硬切换。
+**环境前置（已验证）**：
+- **JDK 25 供给**：settings 加 `foojay-resolver-convention 1.0.0` + `gradle/gradle-daemon-jvm.properties`（`toolchainVersion=25`）→ Gradle 9.6 daemon 自动供给；本机也可钉 `D:/app/graalvm-jdk-25.0.1+8.1`（tpamod 方案）。
+- **网络**：maven.neoforged.net 直连 TLS 不可达（重试/降级全 reset，WebFetch 亦超时）→ **本机构建需走本地代理 `127.0.0.1:7890`**（`systemProp.http(s).proxyHost/Port` + `systemProp.jdk.tls.client.protocols=TLSv1.2`，tpamod 同款）；forgecdn 镜像可解 neoforge 主构件但**缺** `net.neoforged:minecraft-dependencies`。CI（GitHub Actions）直连正常，代理仅本机需要。
+- **坑**：settings 级 `dependencyResolutionManagement.PREFER_SETTINGS` 会剥掉 MDG 的内部解析仓（本机曾因此误判 minecraft-dependencies 不存在）——26.x 接线**禁止** settings 级仓库接管。
+- **已否决/备选**：Unimined（tpamod 用其构建 26.1.2 三加载器全通，可行但需全量 DSL 迁移 + smoke runConfig 重写）→ 列 B 方案。情报：**Forge 64.1.0 在 26.1.2 有 userdev 可构建**（不改变 D3 移除 Forge 决策，仅修正「Forge 已死」认知）。
+- 26.3 依赖版本实测：fabric-api `0.161.0+26.3`、modmenu/cloth 暂无 26.3 构建（fabric GUI 依赖届时处理）。
 
 ### 7.2 版本段与边界
 
@@ -215,6 +228,7 @@ PoC 结论回填 §8 决策记录（选定的插件组合与版本号），然�
 | 2026-09-30 | 阶段①执行补充：① SRG 生产映射预检（`Invoke-MappingFieldPrecheck` 整段）随 Forge 移除删除（neoforge mojmap 原生、fabric 类型匹配免疫，原为 Forge SRG 专属）；② batch 非 classic 锚点 `1.20.1 forge` → `1.20.1 fabric`（保留段 A 覆盖）；③ gradle.properties 工作区已有的 mod_version 2.0.2→2.0.3 外部改动随阶段①提交一并带入 | 阶段①提交 |
 | 2026-09-30 | 阶段②执行补充：① 提交拆分微调——`gradle.properties` 默认 mc_ver=1.21.11 提前并入提交 1（剥离后旧锚点不可编译，保持每笔提交默认配置可构建）；② 剥离以一次性脚本 `build/strip-manifold.mjs`（未入库）按 MC_VER=11 求值，254 块/70 文件；③ ShadowRegistryWindow + 测试确认为整文件 `#if <MC_1_21_1` 门控，随剥离整体删除；④ 基线冒烟 `1.21.11_fabric_I_dimension` 首跑触发影子世界 `MissingPaletteEntryException`（hassium-shadow-worldgen 线程），同代码 neoforge PASS + fabric 重跑 PASS ⇒ 判定既有偶发竞态、非剥离回归（风险表 R8） | 阶段②提交 |
 | 2026-09-30 | 阶段③执行：tag `baseline/1.21.11`@`570ab7f3`、分支 `archive/pre-baseline`@`c589088a`（阶段①前最后提交，即 mod_version 2.0.3 bump）、分支 `legacy-1.21`@baseline + `MAINTENANCE.md`（`41a81aa1`）。基线发布（可选步骤）暂缓——对外发布需显式批准。注：仓库另有用户自建 `2.0.0` 分支亦指 `c589088a`，语义近似，未触碰 | 阶段③提交 |
+| 2026-09-30 | **M0 定论**：26.x 构建链 = `net.fabricmc.fabric-loom` 1.17.21（fabric）+ ModDevGradle 2.0.148（neoforge）；architectury-loom 实证死刑（#328）；Unimined 列 B 方案（tpamod 验证可行）；环境 = JDK 25 自动供给 + 本机代理 7890（CI 直连正常）；新增断点 7/8/9 见 §2.3 | poc/mc26-build@`175abc93` |
 
 ## 9. 进度表（滚动更新，收工必更）
 
@@ -231,7 +245,7 @@ PoC 结论回填 §8 决策记录（选定的插件组合与版本号），然�
 | ② | Phase I 冒烟 ×2（fabric/neoforge）+ 提交 | ✅ 完成 | seedgen×2 PASS；dimension neoforge PASS、fabric 首跑偶发 FAIL 重跑 PASS（R8）；batch 锚点收缩为 1.21.11×双 loader |
 | ③ | tag baseline/1.21.11 + archive/pre-baseline + 切 legacy-1.21 | ✅ 完成 | tag@`570ab7f3`；archive@`c589088a`；legacy-1.21@baseline |
 | ③ | legacy MAINTENANCE.md + （可选）基线发布 | ✅ 完成（发布暂缓） | MAINTENANCE.md=`41a81aa1`；对外发布待显式批准 |
-| ④ | M0 构建链 PoC + 选型回填 §8 | ☐ 未开始 | |
+| ④ | M0 构建链 PoC + 选型回填 §8 | ✅ 完成 | `poc/mc26-build`@`175abc93`；结论见 §7.1，断点 §2.3/7/8/9 |
 | ④ | 删 1.21.11 properties + 加 26.x 三段 + 插件切换 | ☐ 未开始 | |
 | ④ | 六断点修复 + §2.4 复核清单 | ☐ 未开始 | |
 | ④ | 三锚点编译 + 冒烟 + 光照红线验收 | ☐ 未开始 | |
@@ -241,7 +255,7 @@ PoC 结论回填 §8 决策记录（选定的插件组合与版本号），然�
 
 | 风险 | 等级 | 缓解/回退 |
 |------|------|-----------|
-| architectury-loom 26.x 不可用（#328 开放） | 高 | M0 PoC 先行；回退 = fabric-loom + ModDevGradle 硬切换（默认可行路径，分叉后无条件切换负担） |
+| architectury-loom 26.x 不可用（#328 开放） | ~~高~~ **已定论（M0）** | fabric-loom 1.17.21 + ModDevGradle 2.0.148 双插件方案验证可行，见 §7.1 |
 | mixin 断点超出 §2.3 六项（深钩子：sendChanges 字段重定向、移动包 Redirect 群、RegionFile） | 中 | 每锚点编译 + 反编译逐个核对；断点预算外溢则该锚点延后，不阻塞其他锚点 |
 | 剥离嵌套块出错 | 中 | 单锚点编译全量兜底 + top14 人工复核 + Phase I 冒烟；出错 revert 单笔提交 |
 | Java 25 字节码 × 混淆后旧工具（自管 ASM/reflection 桥） | 低-中 | `ReflectionCompat` 26.x 段直接用官方名（去混淆收益）；`forgeMajor` ASM 资产随 forge/ 删除 |
