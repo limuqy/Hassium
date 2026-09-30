@@ -25,6 +25,11 @@ pluginManagement {
 }
 }
 
+// JDK 供给（PoC 26.3）：MC 26.1+ 要求 Java 25；foojay 解析器使 toolchain 与 daemon JVM 可自动下载
+plugins {
+    id 'org.gradle.toolchains.foojay-resolver-convention' version '1.0.0'
+}
+
 def loadVersionProperties() {
     // Get all the files in "versionProperties", remove ".properties" to get versions
     def mcVers = fileTree("versionProperties").files.collect { it.name.replaceAll("\\.properties", "") }

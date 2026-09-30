@@ -22,6 +22,13 @@ if (!cfLoader) {
 }
 
 afterEvaluate {
+    // fabric-loom unobf（26.x）无 remapJar：退回 jar；两者皆无（极端）则跳过注册
+    def publishJar = tasks.findByName('remapJar') ?: tasks.findByName('jar')
+    if (publishJar == null) {
+        logger.warn("publish-curseforge: 未找到 remapJar/jar，跳过 ${project.name} 注册")
+        return
+    }
+
     tasks.register('publishCurseForge', TaskPublishCurseForge) {
         group = 'publishing'
         description = "将 ${project.name}（MC ${gradle.ext.minecraft_version}）上传到 CurseForge"
@@ -58,7 +65,7 @@ afterEvaluate {
             }
         }
 
-        def mainFile = upload(projectId ?: '0', tasks.named('remapJar'))
+        def mainFile = upload(projectId ?: '0', publishJar)
         mainFile.changelogType = 'markdown'
         mainFile.changelog = changelogText
         mainFile.releaseType = releaseTypeProp
@@ -85,7 +92,7 @@ afterEvaluate {
             // 幂等：同名 jar 已在该项目下 → 跳过（否则会重复上传同一文件）。
             // 只有明确 yes 才跳过；查询失败（本机常被 Cloudflare 403）照常上传并告警。
             if (skipExisting && !debugMode) {
-                def jarName = tasks.named('remapJar').get().archiveFile.get().asFile.name
+                def jarName = publishJar.archiveFile.get().asFile.name
                 def state = PublishState.curseforgeFileState(apiToken, projectId, jarName)
                 if (state == PublishState.YES) {
                     throw new StopExecutionException(

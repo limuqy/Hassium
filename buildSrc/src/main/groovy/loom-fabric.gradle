@@ -6,7 +6,7 @@ plugins {
 }
 
 dependencies {
-    modImplementation "net.fabricmc:fabric-loader:${gradle.ext.fabric_loader}"
+    implementation "net.fabricmc:fabric-loader:${gradle.ext.fabric_loader}"
 }
 
 loom {

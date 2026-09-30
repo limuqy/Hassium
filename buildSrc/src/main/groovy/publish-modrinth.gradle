@@ -28,6 +28,13 @@ if (!mrLoader) {
 }
 
 afterEvaluate {
+    // fabric-loom unobf（26.x）无 remapJar：退回 jar；两者皆无（极端）则跳过注册
+    def publishJar = tasks.findByName('remapJar') ?: tasks.findByName('jar')
+    if (publishJar == null) {
+        logger.warn("publish-modrinth: 未找到 remapJar/jar，跳过 ${project.name} 注册")
+        return
+    }
+
     def mcVer = gradle.ext.minecraft_version as String
     def projectIdValue = (findProperty('modrinth_project_id') ?: '').toString().trim()
     def releaseTypeValue = (findProperty('modrinth_release_type') ?: 'release').toString().trim()
@@ -61,8 +68,8 @@ afterEvaluate {
         versionName = "Hassium ${mod_version} — ${mcVer} ${project.name}"
         changelog = changelogText
 
-        // Loom 项目必须传 remapJar，不是 jar
-        uploadFile = tasks.named('remapJar')
+        // Loom 项目必须传 remapJar，不是 jar（26.x unobf loom 无 remapJar，退回 jar）
+        uploadFile = publishJar
 
         detectLoaders = false
         gameVersions = [mcVer]

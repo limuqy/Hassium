@@ -1,15 +1,10 @@
 plugins {
-    id 'dev.architectury.loom'
+    id 'net.fabricmc.fabric-loom'
     id 'common'
-}
-
-loom {
-    silentMojangMappingsLicense()
 }
 
 dependencies {
     minecraft "com.mojang:minecraft:${gradle.ext.minecraft_version}"
-    mappings loom.officialMojangMappings()
 }
 
 if (project.name == "common") return // Don't apply the code below to the common project
