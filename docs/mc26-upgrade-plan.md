@@ -229,6 +229,7 @@ archive/pre-baseline = 当前 HEAD 的引用（1.20.1–1.21.10 完整历史后�
 | 2026-09-30 | 阶段②执行补充：① 提交拆分微调——`gradle.properties` 默认 mc_ver=1.21.11 提前并入提交 1（剥离后旧锚点不可编译，保持每笔提交默认配置可构建）；② 剥离以一次性脚本 `build/strip-manifold.mjs`（未入库）按 MC_VER=11 求值，254 块/70 文件；③ ShadowRegistryWindow + 测试确认为整文件 `#if <MC_1_21_1` 门控，随剥离整体删除；④ 基线冒烟 `1.21.11_fabric_I_dimension` 首跑触发影子世界 `MissingPaletteEntryException`（hassium-shadow-worldgen 线程），同代码 neoforge PASS + fabric 重跑 PASS ⇒ 判定既有偶发竞态、非剥离回归（风险表 R8） | 阶段②提交 |
 | 2026-09-30 | 阶段③执行：tag `baseline/1.21.11`@`570ab7f3`、分支 `archive/pre-baseline`@`c589088a`（阶段①前最后提交，即 mod_version 2.0.3 bump）、分支 `legacy-1.21`@baseline + `MAINTENANCE.md`（`41a81aa1`）。基线发布（可选步骤）暂缓——对外发布需显式批准。注：仓库另有用户自建 `2.0.0` 分支亦指 `c589088a`，语义近似，未触碰 | 阶段③提交 |
 | 2026-09-30 | **M0 定论**：26.x 构建链 = `net.fabricmc.fabric-loom` 1.17.21（fabric）+ ModDevGradle 2.0.148（neoforge）；architectury-loom 实证死刑（#328）；Unimined 列 B 方案（tpamod 验证可行）；环境 = JDK 25 自动供给 + 本机代理 7890（CI 直连正常）；新增断点 7/8/9 见 §2.3 | poc/mc26-build@`175abc93` |
+| 2026-09-30 | 阶段④接线落地（poc 分支）：构建链工程化 + 三段 properties + 机械清扫完成（ChunkPos record 1092+ 等，编译器兜底）；**教训两条**：① loom 类插件必须走 `plugins{}` 声明，晚置 `apply plugin:` 缺 ClassLoaderScope 直接崩；② javac 默认 100 错误上限，阶段④一开始就要 `-Xmaxerrs` 放开，否则目录严重失真 | poc/mc26-build@`e3414a6d` |
 
 ## 9. 进度表（滚动更新，收工必更）
 
@@ -246,6 +247,8 @@ archive/pre-baseline = 当前 HEAD 的引用（1.20.1–1.21.10 完整历史后�
 | ③ | tag baseline/1.21.11 + archive/pre-baseline + 切 legacy-1.21 | ✅ 完成 | tag@`570ab7f3`；archive@`c589088a`；legacy-1.21@baseline |
 | ③ | legacy MAINTENANCE.md + （可选）基线发布 | ✅ 完成（发布暂缓） | MAINTENANCE.md=`41a81aa1`；对外发布待显式批准 |
 | ④ | M0 构建链 PoC + 选型回填 §8 | ✅ 完成 | `poc/mc26-build`@`175abc93`；结论见 §7.1，断点 §2.3/7/8/9 |
+| ④ | 构建链接线到 26.x（buildSrc 双插件 + 三段 properties + 代理/JDK25） | ✅ 完成（poc 分支） | `poc/mc26-build`@`e3414a6d`；loom 门控（common/fabric）+ MDG（neoforge，含 runs 烟测接线移植）；注意事项见 §7.1 |
+| ④ | 26.3 API 机械清扫 + 结构断点修复 + 三锚点编译清零 | ◐ 进行中 | 机械类清零（ChunkPos record 1092+、pack/unpack 30、区块包 record 访问器 27、authlib 迁移）；**残余 40 symbol + 12 类结构断点**，目录与工具链在 poc 分支 `scripts/poc26/`；MinecraftServer 构造/抽象方法、LevelSettings record、Context、writeCollection/readCollection、Vec3/PositionPath、light 包 STREAM_CODEC 化等待逐个攻 |
 | ④ | 删 1.21.11 properties + 加 26.x 三段 + 插件切换 | ☐ 未开始 | |
 | ④ | 六断点修复 + §2.4 复核清单 | ☐ 未开始 | |
 | ④ | 三锚点编译 + 冒烟 + 光照红线验收 | ☐ 未开始 | |
