@@ -27,6 +27,8 @@ neoForge {
                 def manualLogout = project.findProperty('hassiumSmokeManualLogout')
                 def username = project.findProperty('hassiumSmokeUsername')
                 systemProperty 'hassium.smokeTest', 'true'
+                // 冒烟崩溃诊断：关 JIT fast-throw，保证异常栈不被省略（MDG DSL：jvmArguments ListProperty）
+                jvmArguments.add('-XX:-OmitStackTraceInFastThrow')
                 systemProperty 'hassium.smokeTest.delayMs', "${delayMs}"
                 systemProperty 'hassium.smokeTest.reconnectDelayMs', "${reconnectDelayMs}"
                 systemProperty 'hassium.smokeTest.joinTimeoutMs', "${joinTimeoutMs}"

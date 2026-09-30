@@ -37,6 +37,9 @@ loom {
                 // 内部 getJvmArguments().get() 在配置阶段未 finalize 时抛 UnsupportedOperationException。
                 // 改用 ListProperty 原生 addAll/add，避开 deprecated 路径。
                 jvmArguments.addAll([
+                        // 冒烟崩溃诊断：关 JIT fast-throw，否则热路径反复抛的异常
+                        // （OmitStackTraceInFastThrow）栈为空，crash report 无法定位抛点
+                        "-XX:-OmitStackTraceInFastThrow",
                         "-Dhassium.smokeTest=true",
                         "-Dhassium.smokeTest.delayMs=${delayMs}",
                         "-Dhassium.smokeTest.reconnectDelayMs=${reconnectDelayMs}",

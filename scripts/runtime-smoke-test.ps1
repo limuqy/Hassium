@@ -637,6 +637,9 @@ if (-not $serverReady) {
 # 启动客户端前创建；ClientSmokeTest 每轮写 roundN.json，harness 解析结果时优先读这里。
 $probeDir = Join-Path $logRoot "probe\$SessionId"
 New-Item -ItemType Directory -Force -Path $probeDir | Out-Null
+# 清掉同名会话的历史 roundN.json：崩溃/中断场次留下的旧探针会被当成本次结果
+# （PROBE JSON 假阳性——客户端没跑到 dump 也报 round1=True）。
+Get-ChildItem -Path $probeDir -Filter "round*.json" -ErrorAction SilentlyContinue | Remove-Item -Force
 # 7. 启动客户端（前台阻塞，自动两轮连服）
 # 冒烟 gradle 调用统一加 daemon 组隔离（org.gradle.jvmargs 唯一化）：gradle 8.x 的
 # --no-daemon 仍是单次 daemon，且 daemon 按 JVM 参数分组复用——并行构建（其他会话/
