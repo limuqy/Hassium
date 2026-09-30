@@ -1,6 +1,6 @@
 # 运行时冒烟测试（Runtime Smoke Test）
 
-Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的实跑验证流程。在 dev 环境同时启动服务端和客户端，自动连服 → 采集统计 → 断开 → 重连 → 再采集，用于发现编译通过但运行时才暴露的回归（路径错误、Mixin 失效、跨版本 API 漂移、缓存未清理等）。
+Hassium 26.x 三锚点（26.1.2 / 26.2 / 26.3）× 加载器（fabric 全锚点；NeoForge 仅 26.1.2，D7）的实跑验证流程。在 dev 环境同时启动服务端和客户端，自动连服 → 采集统计 → 断开 → 重连 → 再采集，用于发现编译通过但运行时才暴露的回归（路径错误、Mixin 失效、跨版本 API 漂移、缓存未清理等）。
 
 ## 覆盖分层
 
@@ -9,12 +9,12 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 | 层 | 载体 | 范围 | 说明 |
 |----|------|------|------|
 | **L0** | `common:test` | 随单元测试跑 | JUnit 代码级冒烟，无 MC 实例。代表：`LoginHandshakeTest`（登录期握手编解码/协商）、`ShadowPull*Test`（统一 Compare+Pull 协议族）、`SectionDeltaProtocolTest` |
-| **L1** | classic 场景 | 全矩阵（12 版 × fabric/neoforge，按 `builds_for` 过滤；1.20.1 无 neoforge 自动 SKIP） | 两轮连服 VD 切换（VD=20 → 断开 → VD=10），核心缓存 / 分段增量 / 光照 / 聚合通道全链路验证 |
-| **L2** | 场景目录 | 锚点集：1.20.1 forge、1.21.1 neoforge、1.21.11 fabric | 数据驱动场景（seedgen / dimension），只在锚点版本×加载器组合上跑，控制总时长 |
+| **L1** | classic 场景 | 全矩阵（26.x 三锚点 × 加载器，按 `builds_for` 过滤；26.2/26.3 无 neoforge 自动 SKIP） | 两轮连服 VD 切换（VD=20 → 断开 → VD=10），核心缓存 / 分段增量 / 光照 / 聚合通道全链路验证 |
+| **L2** | 场景目录 | 锚点集：26.1.2 fabric、26.1.2 neoforge、26.2 fabric、26.3 fabric | 数据驱动场景（seedgen / dimension），只在锚点版本×加载器组合上跑，控制总时长 |
 
 ## 概述
 
-- **测试矩阵**：12 个 MC 版本 × 2 个加载器（fabric / neoforge）= 24 个默认会话；额外可显式 `-Loaders fabric,forge,neoforge` 跑 Forge，**Forge 仅 1.20.1 / 1.21.1 / 1.21.3–1.21.10 有 `builds_for`**（`forge` 子项目独立、经 `loom-forge.gradle`），其它版本会自动 SKIP。批量脚本读取每版本 `versionProperties/<ver>.properties` 的 `builds_for` 决定是否跳过该 loader，未列入 `builds_for` 的不会强行起 `:forge:runServer`（否则 `settings.gradle` 未 include forge 子项目会直接失败）。
+- **测试矩阵**：3 个 MC 版本（26.1.2 / 26.2 / 26.3）× 加载器 = 4 个默认会话（26.1.2 fabric+neoforge、26.2 fabric、26.3 fabric；NeoForge 测试版本支持已取消见 D7）。批量脚本读取每版本 `versionProperties/<ver>.properties` 的 `builds_for` 决定是否跳过该 loader。
 - **执行方式**：PowerShell 脚本驱动 Gradle `runServer` / `runClient`，注入 `-Dhassium.smokeTest=true` 等 JVM 属性
 - **场景驱动**：客户端行为由数据驱动的场景引擎执行（`hassium.smokeScenario=<name>` 加载 `.scenario` 文件）；未指定时默认 classic
 - **结构化探针**：每轮统计以 PROBE JSON 落盘（`build/smoke-test/probe/<SessionId>/roundN.json`），harness 门禁优先读探针、缺失回退日志正则
@@ -23,7 +23,7 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 
 ## 前置条件
 
-1. **JDK 21+**：Hassium 全版本编译需要
+1. **JDK 25**：26.x 编译需要（toolchain 自动供给）
 2. **Gradle wrapper**：使用项目自带的 `gradlew.bat`，无需本机全局安装
 3. **Windows + PowerShell**：脚本依赖 `Get-NetTCPConnection`、`Start-Process` 等 cmdlet
 4. **25565 端口可用**：脚本会尝试释放被占用端口，但建议预先关闭其它 MC 服务端
@@ -34,23 +34,23 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 代理等待：这条 ps1 **会退出**。等它印 `=== RESULT:`（或读 `build/smoke-test/results/result_<SessionId>.json`），不要 `sleep 240` 再 `ls logs`，也不要 `| tail`。300 是 `-ClientTimeoutSec` 内部上限，不是会话时长。Git Bash 没有对应 `.sh`，用 `pwsh -File ./scripts/runtime-smoke-test.ps1 ...`（不要 `-NoProfile`）。
 
 ```powershell
-# 单次会话（1.20.1 fabric，classic 场景）
-.\scripts\runtime-smoke-test.ps1 -Ver 1.20.1 -Loader fabric -Phase I -SessionId "1.20.1_fabric_I"
+# 单次会话（26.1.2 fabric，classic 场景）
+.\scripts\runtime-smoke-test.ps1 -Ver 26.1.2 -Loader fabric -Phase I -SessionId "26.1.2_fabric_I"
 
 # 单次会话，指定场景（seedgen / dimension）
-.\scripts\runtime-smoke-test.ps1 -Ver 1.20.1 -Loader fabric -Phase I -SessionId "1.20.1_fabric_I_seedgen" -Scenario seedgen
+.\scripts\runtime-smoke-test.ps1 -Ver 26.1.2 -Loader fabric -Phase I -SessionId "26.1.2_fabric_I_seedgen" -Scenario seedgen
 
-# 全量初始轮（12 版 × 2 加载器 classic；约 4–6 小时，固定串行）
+# 全量初始轮（3 锚点 classic；按 builds_for 过滤，固定串行）
 .\scripts\runtime-smoke-test-batch.ps1 -Phase I
 
 # 批量多场景：classic 走全矩阵，seedgen/dimension 只在锚点集跑（固定串行）
 .\scripts\runtime-smoke-test-batch.ps1 -Phase I -Scenarios classic,seedgen,dimension
 
-# B4 / 区块核心验证：只跑 L2 锚点（1.20.1 forge、1.21.1 neoforge、1.21.11 fabric）
+# B4 / 区块核心验证：只跑 L2 锚点（26.1.2 fabric、26.1.2 neoforge、26.2 fabric、26.3 fabric）
 .\scripts\runtime-smoke-test-batch.ps1 -Phase I -Scenarios seedgen,dimension
 
 # 仅指定版本×fabric
-.\scripts\runtime-smoke-test-batch.ps1 -Phase I -Versions @("1.20.1","1.21.11") -Loaders fabric
+.\scripts\runtime-smoke-test-batch.ps1 -Phase I -Versions @("26.2","26.3") -Loaders fabric
 
 # 回归轮（默认对全部版本再跑一遍；可结合初始轮结果挑选）
 .\scripts\runtime-smoke-test-batch.ps1 -Phase R -Versions @("1.20.1","1.21.6")
@@ -88,7 +88,7 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 | 参数 | 必填 | 默认 | 说明 |
 |------|------|------|------|
 | `-Phase` | 是 | — | `I` 或 `R` |
-| `-Scenarios` | 否 | `classic` | 场景列表（逗号分隔）。`classic` 走全矩阵（`-Versions` × `-Loaders`）；非 classic 场景只跑锚点集（硬编码：1.20.1 forge、1.21.1 neoforge、1.21.11 fabric，再与 `-Versions`/`-Loaders`/`builds_for` 取交集；`dictionary` 依赖 1.20.3+ 的 `/tick` 命令，**自动剔除 1.20.1 锚点**）。非 classic 会话 sessionId 追加 `_<scenario>` 后缀避免 result JSON 冲突 |
+| `-Scenarios` | 否 | `classic` | 场景列表（逗号分隔）。`classic` 走全矩阵（`-Versions` × `-Loaders`）；非 classic 场景只跑锚点集（硬编码：26.1.2 fabric、26.1.2 neoforge、26.2 fabric、26.3 fabric，再与 `-Versions`/`-Loaders`/`builds_for` 取交集）。非 classic 会话 sessionId 追加 `_<scenario>` 后缀避免 result JSON 冲突 |
 | `-Versions` | 否 | 全部 12 版 | 指定版本子集 |
 | `-Loaders` | 否 | `fabric,neoforge` | 加载器子集 |
 | `-MaxRetries` | 否 | `3` | 仅游戏打不开时重试（服务端未就绪 / 客户端没写出 ROUND1）。进过世界的业务 FAIL 不重跑 |
@@ -301,7 +301,7 @@ Starlight 与 ScalableLux **互斥**（后者 `provides: ["starlight"]`），且
     -SessionId "1.20.1_fabric_I_baseline" -Scenario modcompat
 ```
 
-**不要用 batch 脚本**：它把非 classic 场景限定在锚点集（1.20.1 forge / 1.21.1 neoforge / 1.21.11 fabric），而本矩阵全是 fabric jar。
+**不要用 batch 脚本**：它把非 classic 场景限定在锚点集（26.1.2 fabric、26.1.2 neoforge、26.2 fabric、26.3 fabric），而本矩阵全是 fabric jar。
 
 ### PROBE 新增段（`modCompat`，只增不改）
 
