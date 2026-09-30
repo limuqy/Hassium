@@ -157,22 +157,62 @@ public final class ChunkPacketDataCompat {
     /**
      * 把 {@code ClientboundLevelChunkPacketData} 应用到空壳/已载柱上（跨版本收口）。
      * <p>
-     * 26.3：{@code replaceWithPacketData(chunkX, chunkZ, chunkData)} 自管 read buffer、
-     * heightmaps 与 BE tags；26.1.2–26.2：三参旧式（read buffer + heightmaps + BE 消费者），
-     * 且 {@code getReadBuffer()} 返回包内 byte[] 的新包装——显式 {@code readerIndex(0)}
-     * 防止游标留在尾部导致整柱 section 被跳过（区块只剩高度图/空气）。
+     * <b>写时复制（CoW）换节——禁止改回原版 {@code replaceWithPacketData} 原地写</b>：
+     * {@code PalettedContainer.read} 在 bits 未变时复用旧 {@code Data}，经
+     * {@code palette.read}/{@code storage.getRaw()} 原地改写<b>已发布</b>的 palette/storage；
+     * 影子端注入柱在 decode 前已入 {@code injectedChunks} 表（见
+     * {@code ShadowSeedServer.decodeInjectedPacketLocked}），光引擎/世界生成工作线程并发
+     * {@code getBlockState} 会读到撕裂状态——HashMapPalette 抛
+     * {@code MissingPaletteEntryException}、LinearPalette 抛
+     * {@code ArrayIndexOutOfBoundsException}（2026-09-30 冒烟实证：26.3 dimension 光引擎
+     * 线程未捕获异常、26.1.2 dimension applyStep 崩溃，R8 同族竞态）。本方法把每节填进
+     * <b>未发布</b>的新实例后逐节数组槽换新：并发读者要么拿完整旧节、要么拿完整新节，
+     * 无撕裂窗口（中途可见空节属预期，光照屏障/compare 链路会重算重触发）。
+     * <p>
+     * 尾段（heightmap / 光源初始化 / BE 还原）与原版 {@code replaceWithPacketData} 同构；
+     * 仅 BE 迭代 API 跨版本分叉（{@code forEachBlockEntityTag} vs
+     * {@code getBlockEntitiesTagsConsumer(...).accept}）收口于 {@code #if}。
+     * {@code getReadBuffer()} 统一 {@code readerIndex(0)}：防游标残留跳节（整柱空气），
+     * 也使 {@code decodeInjectedPacketLocked} 的空节重试幂等。
      */
     public static void applyToChunk(net.minecraft.world.level.chunk.LevelChunk chunk,
                                     int chunkX, int chunkZ,
                                     net.minecraft.network.protocol.game.ClientboundLevelChunkPacketData data) {
+        FriendlyByteBuf buffer = data.getReadBuffer();
+        buffer.readerIndex(0);
+        LevelChunkSection[] live = chunk.getSections();
+        LevelChunkSection[] fresh = new LevelChunkSection[live.length];
+        RegistryAccess registryAccess = chunk.getLevel().registryAccess();
+        for (int i = 0; i < fresh.length; i++) {
+            fresh[i] = LevelChunkSectionCompat.create(registryAccess);
+            fresh[i].read(buffer);
+        }
+        for (int i = 0; i < fresh.length; i++) {
+            live[i] = fresh[i];
+        }
+
+        chunk.clearAllBlockEntities();
+        data.getHeightmaps().forEach(chunk::setHeightmap);
+        chunk.initializeLightSources();
+
+        try (net.minecraft.util.ProblemReporter.ScopedCollector reporter =
+                     new net.minecraft.util.ProblemReporter.ScopedCollector(chunk.problemPath(), LOGGER)) {
+            net.minecraft.network.protocol.game.ClientboundLevelChunkPacketData.BlockEntityTagOutput beApplier =
+                    (pos, type, tag) -> {
+                        net.minecraft.world.level.block.entity.BlockEntity blockEntity =
+                                chunk.getBlockEntity(pos, net.minecraft.world.level.chunk.LevelChunk.EntityCreationType.IMMEDIATE);
+                        if (blockEntity != null && tag != null && blockEntity.getType() == type) {
+                            blockEntity.loadWithComponents(net.minecraft.world.level.storage.TagValueInput.create(
+                                    reporter.forChild(blockEntity.problemPath()),
+                                    chunk.getLevel().registryAccess(), tag));
+                        }
+                    };
 #if MC_VER >= MC_26_3
-        chunk.replaceWithPacketData(chunkX, chunkZ, data);
+            data.forEachBlockEntityTag(chunkX, chunkZ, beApplier);
 #else
-        FriendlyByteBuf sectionBuf = data.getReadBuffer();
-        sectionBuf.readerIndex(0);
-        chunk.replaceWithPacketData(sectionBuf, data.getHeightmaps(),
-                data.getBlockEntitiesTagsConsumer(chunkX, chunkZ));
+            data.getBlockEntitiesTagsConsumer(chunkX, chunkZ).accept(beApplier);
 #endif
+        }
     }
 
     /**
