@@ -641,6 +641,7 @@ public final class ShadowLightCompute {
         accountedIngress.clear();
         shadowApplyEpochs.clear();
         ignoredApplyRetries.clear();
+        io.github.limuqy.mc.hassium.client.OcclusionGraphHealer.reset();
     }
 
     /** 直推已在影子管线里：hash miss 不得再打全量，否则和进服推送抢 4/tick 配额留下虚空。 */
@@ -2565,14 +2566,18 @@ public final class ShadowLightCompute {
         ShadowSeedServer server = ShadowServerRegistry.getInstance().get();
         String dimension = DimensionKey.dimensionOf(task.key);
         if (isSuperseded(task)) {
-            // 同柱已有更新的整柱投递在队：本柱不单独回传。
-            // 【2026-09-19】原此处以纯光包（pushLightReady）兜底，防「客户端停在 standing 首包欠光
-            //（skyTop=0）」。光桥整体删除后不再有 light-only 路径——若真出现欠光，属投递/算光侧问题，
-            // 应修源头（见 docs/client-chunk-light-flow.md §7），不在交付侧补票。
-            if (server != null && task.chunk != null) {
-                server.persistAfterClientLightPush(task.chunk, converged);
-            }
-            return;
+            // 同柱仍有 pending/generated 排队工作。原设计（2026-09-19）在此丢弃本次光结果，
+            // 指望「更新的投递」随后带着光打包；但 compare/delta 的包在光完成**前**就已构建/
+            // 落地（实测 2026-10-05：1571 柱中 1293 柱终态 skyTop=0，亮光重交付只覆盖 278 柱），
+            // 而光不是 hash 的一部分——delta 永远不会因「光变了」再发一次 → 客户端永久停在欠光首包。
+            // 且此 early-return 还跳过了下方 S2c 的 pendingAuthoritative 登记，暗柱连
+            // 「邻域补齐后重算重交付」的补救链都进不去。
+            // 修法：不再丢弃，落入正常路径（syncLightCorrect + pushReady + 登记）。此时引擎层
+            // 刚算完、数据齐全，重推的整柱包必带完整光；队列里更旧的包由 ready 队列 REPLACE
+            // 语义让位，客户端最终态 = 本包（带光）。persist 统一由下方路径执行，避免双写。
+            DebugLogger.info(DebugLogger.LogType.LIGHT,
+                    "[SHADOW_LIGHT] superseded light completed -> re-push full packet ({}, {}) dim={}",
+                    pos.x(), pos.z(), dimension);
         }
         if (task.metric == LightMetric.RECOMPUTE) {
             long elapsedNs = task.submittedAtNs > 0L
@@ -3047,6 +3052,7 @@ public final class ShadowLightCompute {
             server.confirmLightsCorrectIfConverged();
         }
         ShadowLightProbe.onEngineTick(); // T3 探针：引擎终态周期快照（debug.lightVerify 门控）
+        io.github.limuqy.mc.hassium.client.OcclusionGraphHealer.onFrameTail(); // 遮挡图侵蚀自愈（渲染线程帧尾）
         sweepLightTimeouts(); // per-chunk 光屏障 5s 超时兜底（主扫描点；低帧率由消费轮顶兜底）
         // 齐套门控扫描：邻柱后到 / 超时降级。无新工作时 consumeLoop 不会被 pump，
         // 门控条目需要由帧尾 drain 主动扫描，否则永久等待。
@@ -3182,6 +3188,9 @@ public final class ShadowLightCompute {
             if (mc.level != null) {
                 client().markChunkSectionsDirty(mc.level, chunkX, chunkZ);
             }
+            // 遮挡图侵蚀自愈记账：26.x 渲染图的编译涟漪会被非连续交付卡死（详见该类 doc）
+            io.github.limuqy.mc.hassium.client.OcclusionGraphHealer
+                    .onChunkApplied(entry.key().dimension(), chunkX, chunkZ);
             client().probeChunkState(chunkPos, mc.level, "shadow");
             client().scheduleProbeRecheck(chunkPos);
             return true;

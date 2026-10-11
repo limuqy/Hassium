@@ -23,6 +23,8 @@ public final class ChunkMeshCompileLog {
 
     private static final Set<Long> FIRST_COLUMN = ConcurrentHashMap.newKeySet();
     private static final ConcurrentHashMap<Long, AtomicInteger> EYE_SEQ = new ConcurrentHashMap<>();
+    /** 最近一次任意 mesh 编译的墙钟（遮挡图自愈的「编译是否停摆」判据）。 */
+    private static volatile long lastMeshCompileMs;
 
     private ChunkMeshCompileLog() {
     }
@@ -30,9 +32,27 @@ public final class ChunkMeshCompileLog {
     public static void reset() {
         FIRST_COLUMN.clear();
         EYE_SEQ.clear();
+        lastMeshCompileMs = 0L;
+    }
+
+    /** 已编译过至少一个 section 的柱数（本会话，维度切换时 reset）。 */
+    public static int meshedColumnCount() {
+        return FIRST_COLUMN.size();
+    }
+
+    /** 最近一次 mesh 编译的墙钟；0 = 本会话尚无编译。 */
+    public static long lastMeshCompileMs() {
+        return lastMeshCompileMs;
+    }
+
+    /** 该柱本会话是否编译过至少一个 section。 */
+    public static boolean hasMeshedColumn(int cx, int cz) {
+        return FIRST_COLUMN.contains(ChunkPos.pack(cx, cz));
     }
 
     public static void onCompiled(int originX, int originY, int originZ) {
+        // 编译停摆判据必须在 enabled() 短路之前记：自愈不依赖 debug 日志开关。
+        lastMeshCompileMs = System.currentTimeMillis();
         if (!enabled()) {
             return;
         }

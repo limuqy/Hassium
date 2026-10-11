@@ -37,5 +37,13 @@ public class MixinThreadedLevelLightEngine {
                 "[LIGHT_CALL] pos=({},{}) lit={} class={} thread={}",
                 pos.x(), pos.z(), lit, chunk.getClass().getSimpleName(),
                 Thread.currentThread().getName());
+        // T3 探针 Hook 2 重挂（2026-10-05）：本注入点是全部 lightChunk 的唯一咽喉——
+        // 影子金字塔（ChunkStatus.LIGHT，ProtoChunk）与 Hassium 屏障（completeNativeLight，
+        // native clone）都过这里；原 submitLightChunkLocked 挂点随光桥重构失联。
+        // 探针内部再查 isProbeChunk，非探针柱零开销。
+        io.github.limuqy.mc.hassium.shadow.light.ShadowLightProbe.onBeforeLightChunk(
+                io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry.getInstance().get(),
+                (net.minecraft.server.level.ThreadedLevelLightEngine) (Object) this,
+                chunk, null);
     }
 }

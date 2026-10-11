@@ -315,7 +315,14 @@ public final class ShadowServerCompat {
         net.minecraft.server.level.ThreadedLevelLightEngine engine =
                 (net.minecraft.server.level.ThreadedLevelLightEngine)
                         level.getChunkSource().getLightEngine();
-        return engine.lightChunk(chunk, chunk.isLightCorrect());
+        // T3 探针（2026-10-05 重挂）：Hook 2 由 MixinThreadedLevelLightEngine(lightChunk HEAD)
+        // 统一覆盖（金字塔路径与屏障路径都在此过），此处只补 Hook 3——Hassium 屏障路径的
+        // 完成态（金字塔路径无 Hassium 侧完成钩子，由 Hook 5 引擎快照兜底）。
+        // 门控在探针内部，关闭时零开销。
+        return engine.lightChunk(chunk, chunk.isLightCorrect())
+                .whenComplete((ignored, throwable) ->
+                        io.github.limuqy.mc.hassium.shadow.light.ShadowLightProbe
+                                .onLightChunkComplete(engine, chunk, throwable, true));
     }
 
 

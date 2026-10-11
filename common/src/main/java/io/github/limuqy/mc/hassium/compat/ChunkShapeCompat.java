@@ -28,6 +28,20 @@ public final class ChunkShapeCompat {
     }
 
     /**
+     * 客户端<strong>渲染可达</strong>形状（不含邻接缓冲，buffer=1）：遮挡图
+     * {@code SectionOcclusionGraph.getRelativeFrom} 的 {@code isInViewDistance} 折算——
+     * 26.x 遮挡图只会遍历此形状内的 section，外圈柱即使已交付也永不编译（天空视角即
+     * 视距圆外的虚空环，vanilla 同款边缘）。交付域保持 {@link #contains}（buffer=2）不变：
+     * 边缘 mesh 需要邻柱数据。本谓词仅供「哪些柱应当被渲染」的判定
+     * （{@code OcclusionGraphHealer} 的差额口径）。
+     */
+    public static boolean renderReachContains(int cx, int cz, int range, int x, int z) {
+        return net.minecraft.server.level.ChunkTrackingView
+                .of(new net.minecraft.world.level.ChunkPos(cx, cz), range)
+                .contains(x, z, false);
+    }
+
+    /**
      * 原版形状的切比雪夫外接半径 = {@code range + 1}。
      * <p>
      * {@link #contains} 对齐的 {@code ChunkMap.isChunkInRange} 内含 {@code |d| - 1} 折算，故沿四条

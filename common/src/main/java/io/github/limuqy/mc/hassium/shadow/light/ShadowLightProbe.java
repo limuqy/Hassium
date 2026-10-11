@@ -1,6 +1,7 @@
 package io.github.limuqy.mc.hassium.shadow.light;
 
 import io.github.limuqy.mc.hassium.compat.ChunkLightPacketCompat;
+import io.github.limuqy.mc.hassium.compat.LevelHeightCompat;
 
 import io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer;
 import io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry;
@@ -13,7 +14,9 @@ import java.util.BitSet;
 import net.minecraft.core.SectionPos;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.LevelHeightAccessor;
 import net.minecraft.world.level.LightLayer;
+import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.chunk.DataLayer;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.chunk.LevelChunkSection;
@@ -37,6 +40,12 @@ import net.minecraft.world.level.lighting.LevelLightEngine;
  *       sky/block 数据层（base64 全量 + 东缘列人读网格）——引擎输出</li>
  *   <li>{@link #onReturnPacket}：回传包内该 section 的 sky/block 字节数组——实际下发值</li>
  * </ol>
+ * <p>
+ * <b>挂点（2026-10-05 重挂）</b>：Hook 2 挂在
+ * {@code MixinThreadedLevelLightEngine}（{@code ThreadedLevelLightEngine.lightChunk} HEAD，
+ * 覆盖影子金字塔 ChunkStatus.LIGHT 与 Hassium 屏障两条真实路径——原 submitLightChunkLocked
+ * 挂点在光桥重构后失联，实测两轮会话零触发）；Hook 3 挂在
+ * {@code ShadowServerCompat.completeNativeLight} 的 whenComplete（Hassium 屏障路径）。
  * <p>
  * 门控：{@code debug.lightVerify}（CLIENT scope，默认 false）。关闭时每个钩子第一行即
  * 返回（一次配置读），零开销；开启后仅命中探针柱 SectionPos(-13,5,3)→区块(-13,3) 时输出，
@@ -103,12 +112,13 @@ public final class ShadowLightProbe {
             return;
         }
         try {
+            int minSection = LevelHeightCompat.getMinSection(chunk.getLevel());
             StringBuilder sb = new StringBuilder();
             sb.append(PREFIX).append("DECODE dim=").append(dimension).append(" pos=(")
                     .append(pos.x()).append(',').append(pos.z()).append(")\n");
-            appendSectionProfile(sb, "DECODE", chunk);
+            appendSectionProfile(sb, "DECODE", chunk, minSection);
             appendHeightmap(sb, "DECODE", chunk);
-            appendSectionDump(sb, "DECODE-SECTION", chunk, SECTION_Y);
+            appendSectionDump(sb, "DECODE-SECTION", chunk, SECTION_Y, minSection);
             Constants.LOG.info("{}", sb);
         } catch (Throwable t) {
             warnHookFailure("onInjected", t);
@@ -116,41 +126,45 @@ public final class ShadowLightProbe {
     }
 
     /**
-     * Hook 2：lightChunk 提交前（ShadowLightCompute.submitLightChunkLocked）。
-     * 输出引擎输入面：本柱与四邻的注入状态、空-实剖面、四向边界平面的非空气方块
-     * （isFromEmptyShape 边缘行为的决定面）、本柱与东邻高度图。
+     * Hook 2：{@code lightChunk} 提交前引擎输入面。挂点 = MixinThreadedLevelLightEngine
+     * （{@code ThreadedLevelLightEngine.lightChunk} HEAD）——金字塔路径 chunk 是 ProtoChunk，
+     * 故签名收 {@link ChunkAccess}；height 信息无法从 ProtoChunk 取得时传 null（回落
+     * {@code server.overworld()}，探针柱固定主世界，行为不变）。
      */
-    public static void onBeforeLightChunk(ShadowSeedServer server, LevelLightEngine engine, LevelChunk chunk) {
+    public static void onBeforeLightChunk(ShadowSeedServer server, LevelLightEngine engine,
+                                          ChunkAccess chunk, LevelHeightAccessor heightInfo) {
         if (!enabled() || !isProbeChunk(chunk.getPos()) || server == null || engine == null) {
             return;
         }
         try {
+            LevelHeightAccessor heights = heightInfo != null ? heightInfo : server.overworld();
+            int minSection = LevelHeightCompat.getMinSection(heights);
             StringBuilder sb = new StringBuilder();
             sb.append(PREFIX).append("LIGHTCHUNK-IN pos=(").append(CHUNK_X).append(',').append(CHUNK_Z)
                     .append(")\n");
-            appendSectionProfile(sb, "SELF", chunk);
+            appendSectionProfile(sb, "SELF", chunk, minSection);
             appendHeightmap(sb, "SELF", chunk);
             // 本柱探针 section 四向边界平面（跨柱蔓延 / empty-shape 判定的接缝）
-            appendPlane(sb, "SELF-E(x=15)", chunk, SECTION_Y, 'x', 15);
-            appendPlane(sb, "SELF-W(x=0)", chunk, SECTION_Y, 'x', 0);
-            appendPlane(sb, "SELF-N(z=0)", chunk, SECTION_Y, 'z', 0);
-            appendPlane(sb, "SELF-S(z=15)", chunk, SECTION_Y, 'z', 15);
+            appendPlane(sb, "SELF-E(x=15)", chunk, SECTION_Y, 'x', 15, minSection);
+            appendPlane(sb, "SELF-W(x=0)", chunk, SECTION_Y, 'x', 0, minSection);
+            appendPlane(sb, "SELF-N(z=0)", chunk, SECTION_Y, 'z', 0, minSection);
+            appendPlane(sb, "SELF-S(z=15)", chunk, SECTION_Y, 'z', 15, minSection);
             // 四邻：E 邻是残差方向（E=3 vs vanilla 5），全剖面+接缝面+高度图；
             // 其余三邻只给接缝面。
             LevelChunk e = server.injectedChunk(DimensionKey.OVERWORLD, CHUNK_X + 1, CHUNK_Z);
             if (e != null) {
-                appendSectionProfile(sb, "E-NEIGHBOR", e);
+                appendSectionProfile(sb, "E-NEIGHBOR", e, minSection);
                 appendHeightmap(sb, "E-NEIGHBOR", e);
-                appendPlane(sb, "E-NEIGHBOR-W(x=0)", e, SECTION_Y, 'x', 0);
+                appendPlane(sb, "E-NEIGHBOR-W(x=0)", e, SECTION_Y, 'x', 0, minSection);
             } else {
                 sb.append("E-NEIGHBOR: <not injected>\n");
             }
             LevelChunk w = server.injectedChunk(DimensionKey.OVERWORLD, CHUNK_X - 1, CHUNK_Z);
-            appendPlaneOrMissing(sb, "W-NEIGHBOR-E(x=15)", w, 'x', 15);
+            appendPlaneOrMissing(sb, "W-NEIGHBOR-E(x=15)", w, 'x', 15, minSection);
             LevelChunk n = server.injectedChunk(DimensionKey.OVERWORLD, CHUNK_X, CHUNK_Z - 1);
-            appendPlaneOrMissing(sb, "N-NEIGHBOR-S(z=15)", n, 'z', 15);
+            appendPlaneOrMissing(sb, "N-NEIGHBOR-S(z=15)", n, 'z', 15, minSection);
             LevelChunk s = server.injectedChunk(DimensionKey.OVERWORLD, CHUNK_X, CHUNK_Z + 1);
-            appendPlaneOrMissing(sb, "S-NEIGHBOR-N(z=0)", s, 'z', 0);
+            appendPlaneOrMissing(sb, "S-NEIGHBOR-N(z=0)", s, 'z', 0, minSection);
             Constants.LOG.info("{}", sb);
         } catch (Throwable t) {
             warnHookFailure("onBeforeLightChunk", t);
@@ -158,11 +172,11 @@ public final class ShadowLightProbe {
     }
 
     /**
-     * Hook 3：lightChunk 完成后（submitLightChunkLocked 的 whenComplete 回调）。
-     * 输出引擎输出面：探针 section 的 sky/block 数据层 base64 全量 + 东缘列
-     * (x=15) sky 光人读网格（行=z，列=y）。
+     * Hook 3：{@code lightChunk} 完成后引擎输出面。挂点 =
+     * {@code ShadowServerCompat.completeNativeLight} 的 whenComplete（Hassium 屏障路径）。
+     * 输出引擎对探针 section 的 sky/block 数据层（base64 全量 + 东缘列人读网格）。
      */
-    public static void onLightChunkComplete(LevelLightEngine engine, LevelChunk chunk,
+    public static void onLightChunkComplete(LevelLightEngine engine, ChunkAccess chunk,
                                             Throwable error, boolean converged) {
         if (!enabled() || !isProbeChunk(chunk.getPos()) || engine == null) {
             return;
@@ -290,34 +304,42 @@ public final class ShadowLightProbe {
     }
 
     /** 全柱 section 空-实剖面：sectionY:air / sectionY:*（非空）。 */
-    private static void appendSectionProfile(StringBuilder sb, String tag, LevelChunk chunk) {
-        int base = io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(chunk.getLevel());
+    private static void appendSectionProfile(StringBuilder sb, String tag, ChunkAccess chunk,
+                                             int minSection) {
         LevelChunkSection[] sections = chunk.getSections();
         sb.append(tag).append(" sections[").append(sections.length).append("]:");
         for (int i = 0; i < sections.length; i++) {
-            sb.append(' ').append(base + i).append(sections[i].hasOnlyAir() ? ":air" : ":*");
+            sb.append(' ').append(minSection + i).append(sections[i].hasOnlyAir() ? ":air" : ":*");
         }
         sb.append('\n');
     }
-    /** WORLD_SURFACE 高度图：16 行（z=0..15）×16 列（x=0..15）。 */
-    private static void appendHeightmap(StringBuilder sb, String tag, LevelChunk chunk) {
+    /** WORLD_SURFACE 高度图：16 行（z=0..15）×16 列（x=0..15）。金字塔路径的 ProtoChunk
+     *  高度图可能未就绪（实测 2026-10-05 一次 getHeight 抛异常中断整个 dump），逐格容错。 */
+    private static void appendHeightmap(StringBuilder sb, String tag, ChunkAccess chunk) {
         sb.append(tag).append(" heightmap[WORLD_SURFACE] rows=z cols=x:\n");
         for (int z = 0; z < 16; z++) {
             sb.append(tag).append("  z").append(z).append(':');
             for (int x = 0; x < 16; x++) {
-                sb.append(' ').append(chunk.getHeight(
-                        net.minecraft.world.level.levelgen.Heightmap.Types.WORLD_SURFACE, x, z));
+                int h;
+                try {
+                    h = chunk.getHeight(
+                            net.minecraft.world.level.levelgen.Heightmap.Types.WORLD_SURFACE, x, z);
+                } catch (Throwable t) {
+                    h = Integer.MIN_VALUE; // 高度图未就绪
+                }
+                sb.append(' ').append(h);
             }
             sb.append('\n');
         }
     }
 
     /**
-     * 探针 section 逐 y 平面非空气方块清单（完整，无截断）：每行一个 y，
+     * section 内逐 y 平面非空气方块清单（完整，无截断）：每行一个 y，
      * 列出全部非空气 {@code (x,z)=state}。
      */
-    private static void appendSectionDump(StringBuilder sb, String tag, LevelChunk chunk, int sectionY) {
-        int idx = sectionY - io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(chunk.getLevel());
+    private static void appendSectionDump(StringBuilder sb, String tag, ChunkAccess chunk,
+                                          int sectionY, int minSection) {
+        int idx = sectionY - minSection;
         LevelChunkSection[] sections = chunk.getSections();
         if (idx < 0 || idx >= sections.length) {
             sb.append(tag).append(" section ").append(sectionY).append(": <out of range>\n");
@@ -350,9 +372,9 @@ public final class ShadowLightProbe {
      * section 内边界平面非空气清单：axis='x' 固定 localX=fixed 遍历 (y,z)；
      * axis='z' 固定 localZ=fixed 遍历 (y,x)。仅列非空气行。
      */
-    private static void appendPlane(StringBuilder sb, String tag, LevelChunk chunk,
-                                    int sectionY, char axis, int fixed) {
-        int idx = sectionY - io.github.limuqy.mc.hassium.compat.LevelHeightCompat.getMinSection(chunk.getLevel());
+    private static void appendPlane(StringBuilder sb, String tag, ChunkAccess chunk,
+                                    int sectionY, char axis, int fixed, int minSection) {
+        int idx = sectionY - minSection;
         LevelChunkSection[] sections = chunk.getSections();
         if (idx < 0 || idx >= sections.length) {
             sb.append(tag).append(": <out of range>\n");
@@ -379,13 +401,13 @@ public final class ShadowLightProbe {
         }
     }
 
-    private static void appendPlaneOrMissing(StringBuilder sb, String tag, LevelChunk neighbor,
-                                             char axis, int fixed) {
+    private static void appendPlaneOrMissing(StringBuilder sb, String tag, ChunkAccess neighbor,
+                                             char axis, int fixed, int minSection) {
         if (neighbor == null) {
             sb.append(tag).append(": <neighbor not injected>\n");
             return;
         }
-        appendPlane(sb, tag, neighbor, SECTION_Y, axis, fixed);
+        appendPlane(sb, tag, neighbor, SECTION_Y, axis, fixed, minSection);
     }
 
     /** 引擎当前对探针 section 的 sky/block 数据层：base64 全量 + 东缘列 sky 人读网格。 */
