@@ -70,6 +70,7 @@ public class ClientChunkHandler {
 
     public static void onDimensionChanged() {
         PENDING_PULL_APPLY.clear();
+        resetLightProbeState();
     }
 
     /**
@@ -77,6 +78,7 @@ public class ClientChunkHandler {
      */
     public static void resetStorage() {
         PENDING_PULL_APPLY.clear();
+        resetLightProbeState();
         ClientChunkPipeline.getInstance().resetStorage();
     }
 
@@ -203,6 +205,15 @@ public class ClientChunkHandler {
             new java.util.concurrent.ConcurrentHashMap<>();
     private static final int PROBE_RECHECK_MAX_FRAMES = 8;
 
+    /** 探针历史只属于当前维度；保留同维度卸载历史供往返飞行判定。 */
+    private static void resetLightProbeState() {
+        APPLY_COUNT.clear();
+        PROBE_LAST_SKY.clear();
+        PROBE_EVER_LIT.clear();
+        PROBE_PENDING_RECHECK.clear();
+        darkLightProbeSamples.set(0L);
+    }
+
     /** 「skyTop==0」采样总数（含「首次落地瞬态」，仅诊断）。 */
     public static long darkLightProbeSampleCount() {
         return darkLightProbeSamples.get();
@@ -237,8 +248,11 @@ public class ClientChunkHandler {
      * 客户端卸载该柱：清掉「最新采样」与待复检记录（仍黑统计不该含已不可见的柱），
      * 但保留「曾亮」标记——回程重新落地若变黑，必须仍算回归。
      */
-    public static void onProbeChunkUnloaded(ChunkPos pos) {
-        if (pos != null) {
+    public static void onProbeChunkUnloaded(ChunkPos pos, String dimension) {
+        Minecraft mc = Minecraft.getInstance();
+        if (pos != null && mc.level != null
+                && java.util.Objects.equals(dimension, mc.level.dimension().identifier().toString())) {
+            io.github.limuqy.mc.hassium.client.scenario.ScenarioEngine.onFlightAnchorUnloaded(pos, dimension);
             PROBE_LAST_SKY.remove(pos.pack());
             PROBE_PENDING_RECHECK.remove(pos.pack());
         }
@@ -262,7 +276,7 @@ public class ClientChunkHandler {
         if (PROBE_PENDING_RECHECK.isEmpty()) {
             return;
         }
-        if (level == null) {
+        if (level == null || !level.dimensionType().hasSkyLight()) {
             PROBE_PENDING_RECHECK.clear(); // 断连/切维竞态：旧维度的待复检全部作废
             return;
         }
@@ -391,7 +405,8 @@ public class ClientChunkHandler {
         // 自检：若高度图过期（topY 落在地面内）会采到 0，那不是黑块而是取样点错，必须剔除。
         // 即时读数是光队列 flush 前的旧值（§7.1 假阳性）：这里只记观测计数与「曾亮」，
         // 判定状态由下一帧 runProbeRecheck 的 post-apply 采样写入。
-        if (lightProbe && topY > minY && "block.minecraft.air".equals(topBlock)) {
+        if (lightProbe && level.dimensionType().hasSkyLight()
+                && topY > minY && "block.minecraft.air".equals(topBlock)) {
             if (skyTop > 0) {
                 PROBE_EVER_LIT.add(pos.pack());
             } else {

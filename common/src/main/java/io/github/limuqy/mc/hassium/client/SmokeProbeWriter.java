@@ -37,7 +37,7 @@ public final class SmokeProbeWriter {
     /**
      * 写一轮探针文件。任何内部失败只记 warn，绝不影响冒烟状态机判定/退出码。
      *
-     * @param round 轮次（1 或 2；文件名 roundN.json）
+     * @param round 轮次（切维为 1–4；文件名 roundN.json）
      * @param mc    客户端实例（player 为空按 joined=false 处理）
      */
     public static void writeRound(int round, net.minecraft.client.Minecraft mc) {
@@ -76,6 +76,7 @@ public final class SmokeProbeWriter {
             io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.appendLightProbeJson(sb);
             appendClientCache(sb, mc, dimension);
             appendContentCheck(sb, mc);
+            io.github.limuqy.mc.hassium.client.scenario.ScenarioEngine.appendFlightProbeJson(sb, mc);
             appendCounters(sb);
             appendDisk(sb);
             appendChunkTrace(sb, dimension);
@@ -363,12 +364,13 @@ public final class SmokeProbeWriter {
     /**
      * disk：影子端存档 {@code hassium_cache/<serverId>/world} 检查；位置未知时数值皆 null/false。
      * T7 追加 {@code dimensions} 子对象（只增不改既有键）：影子端为原版存档结构，
-     * 维度目录 overworld=region、nether=DIM-1/region、end=DIM1/region（docs/chunk-cache.md §12）。
+     * 26.x 维度目录统一为 dimensions/<namespace>/<path>/region。
      */
     private static void appendDisk(StringBuilder sb) {
         boolean shadowRegionExists = false;
         long regionFileCount = 0L;
         String cacheDir = null;
+        String worldDir = null;
         long overworldRegions = -1L;
         long netherRegions = -1L;
         long endRegions = -1L;
@@ -377,18 +379,19 @@ public final class SmokeProbeWriter {
             Path gameDir = ClientChunkPipeline.getInstance().getGameDir();
             String serverId = ClientChunkPipeline.getInstance().getServerId();
             if (gameDir != null && serverId != null) {
-                Path world = gameDir.resolve("hassium_cache").resolve(serverId).resolve("world");
-                Path region = world.resolve("region");
+                Path world = gameDir.resolve("hassium_cache").resolve(serverId).resolve("world")
+                        .toAbsolutePath().normalize();
+                worldDir = world.toString();
+                Path dimensions = world.resolve("dimensions").resolve("minecraft");
+                Path region = dimensions.resolve("overworld").resolve("region");
                 cacheDir = region.toString();
                 shadowRegionExists = Files.isDirectory(region);
                 if (shadowRegionExists) {
-                    try (Stream<Path> files = Files.list(region)) {
-                        regionFileCount = files.filter(Files::isRegularFile).count();
-                    }
+                    regionFileCount = countRegionFiles(region);
                 }
-                overworldRegions = countRegionFiles(world.resolve("region"));
-                netherRegions = countRegionFiles(world.resolve("DIM-1").resolve("region"));
-                endRegions = countRegionFiles(world.resolve("DIM1").resolve("region"));
+                overworldRegions = countRegionFiles(region);
+                netherRegions = countRegionFiles(dimensions.resolve("the_nether").resolve("region"));
+                endRegions = countRegionFiles(dimensions.resolve("the_end").resolve("region"));
                 dimCounts.put("overworld", overworldRegions);
                 dimCounts.put("nether", netherRegions);
                 dimCounts.put("end", endRegions);
@@ -426,6 +429,7 @@ public final class SmokeProbeWriter {
             // 保持默认值（false/0/null/-1）
         }
         sb.append("  \"disk\": {\n");
+        sb.append("    \"worldDir\": ").append(worldDir == null ? "null" : jsonString(worldDir)).append(",\n");
         sb.append("    \"shadowRegionExists\": ").append(shadowRegionExists).append(",\n");
         field(sb, "regionFileCount", regionFileCount);
         sb.append("    \"cacheDir\": ").append(cacheDir == null ? "null" : jsonString(cacheDir)).append(",\n");
@@ -560,13 +564,14 @@ public final class SmokeProbeWriter {
         sb.append('\n');
     }
 
-    /** 统计维度 region 目录下的常规文件数；目录不存在返回 -1（与未知/未落盘区分）。 */
+    /** 统计维度 region 目录下的 .mca 常规文件数；目录不存在返回 -1。 */
     private static long countRegionFiles(Path regionDir) {
         if (!Files.isDirectory(regionDir)) {
             return -1L;
         }
         try (Stream<Path> files = Files.list(regionDir)) {
-            return files.filter(Files::isRegularFile).count();
+            return files.filter(Files::isRegularFile)
+                    .filter(p -> p.getFileName().toString().endsWith(".mca")).count();
         } catch (Throwable t) {
             return -1L;
         }

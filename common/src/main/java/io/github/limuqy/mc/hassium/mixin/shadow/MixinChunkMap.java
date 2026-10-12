@@ -36,6 +36,24 @@ public class MixinChunkMap {
     @Final
     ServerLevel level;
 
+    @Shadow
+    @Final
+    private it.unimi.dsi.fastutil.longs.LongSet chunksToEagerlySave;
+
+    /**
+     * 光照/注入线程也会触发 LevelChunk 的 unsaved listener；原版待保存集合不是并发容器。
+     * 只向所属影子端主循环提交标记，不同步等待（调用方可能持有 chunkLock）。
+     */
+    @Inject(method = "setChunkUnsaved(Lnet/minecraft/world/level/ChunkPos;)V",
+            at = @At("HEAD"), cancellable = true)
+    private void hassium$dispatchShadowUnsaved(ChunkPos pos, CallbackInfo ci) {
+        if (level.getServer() instanceof ShadowSeedServer shadow && !shadow.isMainLoopThread()) {
+            long key = pos.pack();
+            shadow.execute(() -> chunksToEagerlySave.add(key));
+            ci.cancel();
+        }
+    }
+
 
     @Inject(method = "scheduleChunkLoad", at = @At("HEAD"), cancellable = true)
     private void hassium$shortCircuitInjectLoad(ChunkPos pos,

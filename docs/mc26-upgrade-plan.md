@@ -251,6 +251,17 @@ archive/pre-baseline = 当前 HEAD 的引用（1.20.1–1.21.10 完整历史后�
 - 本地验证：正式四组合 `build` 与 zstd-jni 包装检查通过，JAR 文件名及包内元数据均为 3.0.0；三锚点各 382 项单测全过、边界扫描通过。四组合 Modrinth 版本号 / MC 版本 / loader 配置断言通过，`publishAll --dry-run` 任务图按 D7 正确选择加载器。
 - 两份发布脚本语法检查与隔离模拟执行通过：AnchorsOnly 确实执行三锚点，两平台 debug 参数均传到 Gradle。模拟使用假 Gradle 与占位 token，未访问发布平台；GitHub Actions 冷环境 / 真实平台上传尚未实跑，移动光照验收状态不变。
 
+### 2026-10-12 冒烟门禁修复
+
+- 经典、往返、切维按 D7 四组合复验。26.2/26.3 的原始 FAIL 包含 OSHI 启动采集 Perflib 009 环境错误与退出线程造成的看门狗误报；仅精确匹配该条环境错误，退出宽限后继续取证。
+- 26.x 影子存档探针改为 `dimensions/minecraft/<dimension>/region`；切维 analyzer 必查 OW→Nether→End→OW 四份探针及本场退出后的磁盘快照，缺失证据按 FAIL。天空光历史切维时清理，无天空光维度不套用天空光回黑判据。
+- 往返须有真实卸载回调、缓存消失、回程重新到达及最终距离 ≤4 chunk 的证据。NeoForge 首次加强门禁发现复用存档场次未实际移动，失败日志保留；补上空中出发、掉头命令等待和持续按键注入。首次 dump 前的场景 FAIL 不再按启动失败重试，启动重试前归档每次日志与结果。
+- 新门禁复验发现 NeoForge 26.1.2 与 Fabric 26.2 在切末地时实际崩溃：`ChunkMap.setChunkUnsaved` 的裸 `LongLinkedOpenHashSet` 被并发写坏，`rehash` 出现 index=-1。三锚点源码确认同一入口；`MixinChunkMap` 将非主循环的影子端标记提交到所属影子端主循环，异步入队以避免持 chunkLock 同步等待，真实服务端不改变路径。26.3 编译、边界扫描及 common:test 通过，最终代码用 suffix=`gatefix2_20261012`、`MaxRetries=1` 完整复验。
+- `gatefix2` 的 NeoForge 切维四轮已完成、未再崩溃，但磁盘门禁拒绝了其 `gameDirectory=.` 相对路径；探针改为绝对规范路径，harness 兼容相对路径时以 ClientRunDir 为基准并保留缓存目录边界检查。相对路径与越界路径测试通过；该场用 suffix=`gatefix3_20261012`、`MaxRetries=1` 单独补跑，原始失败结果保留。
+- `gatefix3` 的四轮和三维度磁盘门禁通过，但严格日志审计发现算光线程 `MissingPaletteEntryException`：增量路径仍对已发布 section 原地 `read`，与已修整柱路径同族。`applySectionDelta` 的 FULL/BLOCKS 均复制基线，在副本解码或修改后发布完整新节，避免新增注册表访问；保留既有光屏障与 chunk 锁。suffix=`gatefix4_20261012`、`MaxRetries=1` 再跑完整三场景四组合，历史失败不覆盖。
+- 35 项 analyzer 测试、PowerShell 辅助门禁与脚本语法检查通过；运行时结果及复验 session 见 §9。此专项不代替移动屋檐/洞口目视验收，不改变 D1–D7。
+- 最终 `gatefix4_20261012` 批次：**classic 4/4、flyroundtrip 4/4、dimension 4/4 PASS**，有效场次均 Attempts=1；NeoForge 26.2/26.3 按 D7 SKIP。12 场致命日志与看门狗转储均为 0；28 轮原始探针、往返真实卸载/回填与最终距离、四轮切维以及退出后的三维度 region 快照独立复核通过。汇总：`build/smoke-test/smoke-summary-26x-fixed-2026-10-12.csv`；完整批次：`batch-results-R-gatefix4_20261012.csv`。三锚点单测各 382 项通过，历史失败完整保留。
+
 ## 9. 进度表（滚动更新，收工必更）
 
 | 阶段 | 任务 | 状态 | 会话备注 |
@@ -277,11 +288,12 @@ archive/pre-baseline = 当前 HEAD 的引用（1.20.1–1.21.10 完整历史后�
 
 | 任务 | 状态 | 证据 / 剩余工作 |
 |------|------|-----------------|
+| 26.x 冒烟门禁修复与三场景复验 | ✅ 修复与复验完成 | 待保存集合主循环串行化、增量复制换节及门禁修复；最终 `gatefix4_20261012` classic/flyroundtrip/dimension 各 4/4 PASS，全部一次执行，致命日志/看门狗转储 0；三锚点各 382 项单测、35 项 Python 门禁测试、PowerShell 辅助测试与 28 轮原始探针复核通过。汇总见 §8；历史 gatefix/gatefix2/gatefix3 失败保留；移动屋檐/洞口目视仍待完成 |
 | 当前 master 三锚点单测、边界扫描与正式四组合打包 | ✅ 本次复验 | 三锚点各 382 项单测全过；四组合 build 与 zstd-jni 包装检查全过；见 §8 复核记录 |
 | 发布链路 26.x 收尾 | ✅ 本地修复与验证 / CI 待实跑 | master=3.0.0；仓库默认直连、CI 显式 JDK 25、两脚本三锚点；四组合打包/元数据/发布任务图与脚本模拟通过；2.0.0 分支未改；未运行远端 Actions / 未发布 |
 | D7 取消发布后的 NeoForge 26.2/26.3 编译入口 | 待补 | 当前 settings 按 builds_for 排除了模块；需独立编译入口，保持发布/冒烟矩阵不变 |
 | GUI 与适配 skill 同步 | 待完成 | cloth-ui 与工厂未恢复；hassium-manifold 仍为旧七段；不影响本次四组合构建 |
-| 当前 master 运行时冒烟与光照红线验收 | 本次未复验 / 目视仍待完成 | 2026-09-30 的历史 PASS 不等于 ea2e9222 已重新跑过；本次未启动游戏 |
+| 当前 master 工作区运行时冒烟与光照红线验收 | ✅ 三场景冒烟复验 / 目视仍待完成 | 本轮修复后 D7 四组合 × classic/flyroundtrip/dimension 12/12 PASS；早前适配复核未启动游戏的状态已补验。移动屋檐/洞口目视验收仍未完成，冒烟 PASS 不替代该项 |
 
 ## 10. 风险与回退
 

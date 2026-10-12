@@ -46,6 +46,9 @@ Hassium 26.x 三锚点（26.1.2 / 26.2 / 26.3）× 加载器（fabric 全锚点�
 # 批量多场景：classic 走全矩阵，seedgen/dimension 只在锚点集跑（固定串行）
 .\scripts\runtime-smoke-test-batch.ps1 -Phase I -Scenarios classic,seedgen,dimension
 
+# classic + 实际卸载后往返 + 四轮切维，flyroundtrip 默认每段平飞 30 秒
+.\scripts\runtime-smoke-test-batch.ps1 -Phase R -Scenarios classic,flyroundtrip,dimension
+
 # B4 / 区块核心验证：只跑 L2 锚点（26.1.2 fabric、26.1.2 neoforge、26.2 fabric、26.3 fabric）
 .\scripts\runtime-smoke-test-batch.ps1 -Phase I -Scenarios seedgen,dimension
 
@@ -72,7 +75,7 @@ Hassium 26.x 三锚点（26.1.2 / 26.2 / 26.3）× 加载器（fabric 全锚点�
 | `-DelayMs` | 否 | `10000` | 进世界后等待毫秒（classic ROUND1 窗口=DelayMs×2=20s，ROUND2=max(3000, DelayMs)） |
 | `-ReconnectDelayMs` | 否 | `3000` | 第一轮断开后到重连的毫秒 |
 | `-JoinTimeoutMs` | 否 | `0`（→ Java 侧 120s） | 客户端进服等待超时；调大 `-DelayMs` 时须同步调大 |
-| `-MoveSeconds` | 否 | `0` | 进服后飞行移动秒数（先爬升再平飞；0=不动），驱动「进服即移动」补给顺序，非标准默认行为 |
+| `-MoveSeconds` | 否 | classic=`0`；flyroundtrip=`30` | 每段平飞秒数（先爬升 2s）；往返场景必须实际卸载目标柱、回填并返回目标柱 4 chunk 内，短距离不能靠回黑计数 0 空过 |
 | `-Vd1` / `-Vd2` | 否 | `20` / `10` | 服务端两轮视距 |
 | `-ClientRenderDistance` | 否 | `32`（且 ≥ Vd1） | 钉死 `<loader>/run/client/options.txt` 的 `renderDistance` 滑块。1.21+ 跟踪半径 = `min(滑块, 服务器 VD)`；三端必须同一值，否则新 run 目录默认 12/16，R1 只喂满 VD16 圆柱（1021 / 1.21.4+ 1057） |
 | `-ServerReadyTimeoutSec` | 否 | `180` | 服务端 `Done!` 出现超时 |
@@ -89,6 +92,7 @@ Hassium 26.x 三锚点（26.1.2 / 26.2 / 26.3）× 加载器（fabric 全锚点�
 |------|------|------|------|
 | `-Phase` | 是 | — | `I` 或 `R` |
 | `-Scenarios` | 否 | `classic` | 场景列表（逗号分隔）。`classic` 走全矩阵（`-Versions` × `-Loaders`）；非 classic 场景只跑锚点集（硬编码：26.1.2 fabric、26.1.2 neoforge、26.2 fabric、26.3 fabric，再与 `-Versions`/`-Loaders`/`builds_for` 取交集）。非 classic 会话 sessionId 追加 `_<scenario>` 后缀避免 result JSON 冲突 |
+| `-FlyRoundTripSeconds` | 否 | `30` | 只传给 flyroundtrip，classic 保持站桩；单会话脚本使用 `-MoveSeconds` |
 | `-Versions` | 否 | 全部 12 版 | 指定版本子集 |
 | `-Loaders` | 否 | `fabric,neoforge` | 加载器子集 |
 | `-MaxRetries` | 否 | `3` | 仅游戏打不开时重试（服务端未就绪 / 客户端没写出 ROUND1）。进过世界的业务 FAIL 不重跑 |
@@ -212,7 +216,7 @@ Hassium 26.x 三锚点（26.1.2 / 26.2 / 26.3）× 加载器（fabric 全锚点�
 
 > gateway 对象已随网关轮次退役删除；OVD 计数（`ovdLoaded` / `ovdPendingMiss` / `ovdShadowServed`）已随 OVD 退役删除。
 
-> 注意：dimension 场景的 dump 时刻影子世界尚未 flush（断连/退出才落盘），probe 内 `disk.dimensions` 全为 -1 属预期语义；真实磁盘校验由 harness post-exit 磁盘门禁完成（见下）。
+> dimension 的 dump 磁盘读数只是当时采样，不能证明退出后已保存。26.x 探针按 `world/dimensions/<namespace>/<path>/region` 定位，另输出 `disk.worldDir`；真实验收消费本场退出后保存到 result JSON 的 `PostExitDisk` 快照，回放不会读取后续场次已覆盖的缓存目录。
 
 ## 场景引擎
 
@@ -245,7 +249,7 @@ Hassium 26.x 三锚点（26.1.2 / 26.2 / 26.3）× 加载器（fabric 全锚点�
 | `dimension.scenario` | 四轮切维冒烟：主世界 → 下界 → 末地 → 回主世界（单连接不断开）；中段轮 `gate=false`；整体 PASS 只看 R1 统计 + 各轮 assertProbe | 每轮 `joined` 且 `dimension` 正确；harness 另加 post-exit 三维度磁盘门禁 |
 | `modcompat.scenario` | 单轮，与 seedgen 同形。锚点刻意 **mod 无关**，供「带外部 mod」与「不带」两组对照跑分 | `stats.clientAppliedChunkCount > 0`、`stats.clientLandedChunkCount > 0` |
 | `modcompat_strict.scenario` | 同上，追加兼容层 **强断言**（防空测），仅用于「带 mods」组 | 另加 `modCompat.c2meChunkIoReplaced == 1`、`modCompat.c2meCompatArmed == 1`（mixin 放行结构信号）；`c2meHookHits` / `type126Patched` 只作观测（影子主路径不经 wrap / 补丁被收编短路，见 [mod-compat.md](mod-compat.md) §7.2b/§7.3） |
-| `flyroundtrip.scenario` | **往返飞行黑块专项**（单轮）：join → settle（`round1WaitMs`）→ `fly` 飞出去 → `tp @s ~ ~ ~ 180 0` 原地掉头 → `fly` 飞回来 → settle（`dimWaitMs`）→ dump → 断言。必须配 `-MoveSeconds > 0`（=0 时只有 settle，不构成往返）。覆盖「离开视距卸载 → 重入视距重交付（redeliver / publishCached / 两阶段光照中间态）」，这是站桩 classic 与只往外飞的移动冒烟都到不了的路径 | `counters.clientDarkRegressionChunks == 0`（口径见下）；`clientDarkLightProbeChunks` / `clientDarkLightProbeSamples` 作观测 |
+| `flyroundtrip.scenario` | **往返飞行黑块专项**（单轮）：settle → 升至 Y=300、朝向归零 → 记录目标柱 → 飞出 → 断言目标柱已卸载 → 相对 yaw 掉头 → 飞回 → settle → dump。飞行期间每 tick 保持按键，避免焦点变化释放输入；默认每段平飞 30 秒，显式短距离也必须经过实际卸载/回填 | `flight.anchorUnloaded/anchorReturned/anchorPresent` 均为 true、`flight.distanceChunks <= 4`、`clientDarkRegressionChunks == 0`；Java 与 analyzer 双重验收；移动屋檐/洞口目视验收仍单独执行 |
 | `dictionary.scenario` | **字典热更 rollout 专项**（单轮，**1.21.1+ 专用**——场景内 `/tick rate 200` 依赖 1.20.3+ 的 `/tick` 命令）：join → `/tick rate 200`（十倍速 tick；聚合帧按 tick 尾冲刷，采样帧频率 ∝ tick 频率，把「4000 样本 → 首训 → offer 推送 → 客户端 hash 校验安装 → `aggregation_ready(epoch,id)` ACK → 全连接确认 → 激活 epoch 1」整链压进窗口）→ wait 120s → dump → exit。服务端以 **SMOKE 模式**运行（`hassium.serverSmokeScenario=dictionary` 自动启用）：harness 前置**删除服务端字典文件**（强制首训）+ 语料**攒批**高频采集（8KB 合并落盘），语料 ≥256KB（最低数据集）时**主动触发一次重训练** → offer epoch 2 → ACK → 切换，完整验证「语料 → 重训练 → ACK 门控切换」更新链路；重训练后语料自动清空 | analyzer `dictionary_rollout`：服务端日志出现 `Aggregation dictionary activated (epoch=2,`——epoch 1 是删档后首训，epoch 2 才是更新链路的证据；probe 基本面同 seedgen |
 **黑块判据（`flyroundtrip` 门禁口径）**：门禁主锚 `clientDarkRegressionChunks` = 「曾亮过的柱在诊断时刻仍黑」（用户报的症状原文）。探针采样「`topY`」——列内最高方块之上第一格，该点按定义无遮挡，正确光必 >0。**判定值一律取光包落地后下一帧复检的 post-apply 采样**（`ClientChunkHandler.runProbeRecheck`，`drainReady` 帧首执行）：vanilla `handleLightUpdatePacket` 只入队、后续 client tick 才落地，即时读数是旧值，首落地柱必然先采到一次 0（曾造成 flyrt11 门禁假阳性 FAIL）。观测口径：`clientDarkLightProbeSamples`（全部即时 0 采样，含首落地瞬态）、`clientDarkLightProbeChunks`（复检后仍黑的柱数，含从未亮过的）。三个计数器由 `ClientChunkHandler` 在 `debug.lightVerify` 开启时统计，故该场景必须有 profile 打开 `debug.lightVerify`（见 `scripts/smoke/profiles/flyroundtrip.profile.properties`），否则拿到恒 0 的假 PASS。
 
@@ -253,7 +257,7 @@ Hassium 26.x 三锚点（26.1.2 / 26.2 / 26.3）× 加载器（fabric 全锚点�
 
 存在 `scripts/smoke/profiles/<name>.profile.properties` 时，单会话脚本按键值对 patch 双端 hassium toml（客户端 `run/client/config/hassium/hassium-client.toml`、服务端 `run/server/config/hassium/hassium-server.toml`）。行式 `key=value`、`#` 注释；value 须为合法 TOML 字面量（字符串自带引号）。profile 文件不存在时整体 no-op。
 
-例：seedgen 场景需要 `seedgen` 档案提供双端 `chunk.seedGenEnabled=true`；dimension 场景无 toml 改动需求，无档案文件。
+例：seedgen / dimension 档案均提供双端 `chunk.seedGenEnabled=true`。光照诊断历史只属于当前维度，切维/断连清空，且无天空光维度不参与天空光回黑计数；同维度卸载仍保留“曾亮”历史供 flyroundtrip 使用。
 
 ## 外部 Mod 手动冒烟（C2ME / Starlight / ScalableLux）
 
@@ -333,7 +337,9 @@ PASS ⇔ HasPass && !HasFail && exit==0 && analyzer 门禁全过
        && （仅 dimension）post-exit 磁盘门禁通过
 ```
 
-**dimension 磁盘门禁（post-exit）**：维度切换不断连，shadow 世界只在断连/退出时落盘。客户端正常退出后，按 probe 记录的 `disk.cacheDir`（兜底 `hassium_cache` 下最近修改目录）定位影子世界根，校验 `world/region`（主世界）、`world/DIM-1/region`（下界）、`world/DIM1/region`（末地）三处均存在且 ≥1 个 `.mca`；失败名单记入 `DimensionGateFailures`。遗留：主世界同坐标未被覆写的深度比对本轮不做。
+**dimension 磁盘门禁（post-exit）**：客户端退出后按本场 probe 的 `disk.worldDir` 定位并验证路径位于当前加载器的 `hassium_cache` 内，采样 `dimensions/minecraft/{overworld,the_nether,the_end}/region` 的 `.mca` 数。`PostExitDisk` 保存 sessionId、worldDir 与三维计数，analyzer 要求快照属于本场且各维 ≥1；缺快照/缺文件均 FAIL，失败代码写入 `DimensionGateFailures`。Java 的 16 项四轮切维断言之外，analyzer 也复核 round1–4 的 joined、维度、loaded/applied >64。遗留：同坐标文件内容是否被覆写的深度比对仍未覆盖。
+
+**日志与退出门禁（2026-10-12）**：仅精确豁免 OSHI 启动采集系统信息时的 `[main/ERROR] (HkeyPerformanceDataUtil) Unable to locate English counter names in registry Perflib 009. Counters may need to be rebuilt:`；其它 ERROR/FATAL 仍判失败。看门狗看到 Minecraft 的 `Stopping!` 后留 12 秒有界退出宽限，超过宽限仍静默则恢复取证；关闭辅助线程是 daemon，不再独占 JVM 存活期。batch 启动重试前保存 `attempts/<sessionId>/attemptN/` 的原始日志和结果，最终存在 FAIL 时返回退出码 2。
 
 ### classic 场景会话判定
 

@@ -24,17 +24,25 @@
 #   counters.clientDarkLightProbeChunks（复检后仍黑的柱数，含从未亮过的）。
 #   判据出处见 ClientChunkHandler 该组计数注释。
 #
-# 用法（moveSeconds=0 时只有 settle，不构成往返）：
-#   .\scripts\runtime-smoke-test.ps1 -Ver 1.21.1 -Loader fabric -Phase I `
-#       -SessionId "1.21.1_fabric_flyrt" -Scenario flyroundtrip -MoveSeconds 15
+# 默认 MoveSeconds=30；显式较短距离只有真正卸载了目标柱才可通过。
+#   .\scripts\runtime-smoke-test.ps1 -Ver 26.3 -Loader fabric -Phase I `
+#       -SessionId "26.3_fabric_flyrt" -Scenario flyroundtrip -MoveSeconds 30
 join label=WAIT_JOIN_1 since=start timeoutMs=${joinTimeoutMs}
 wait ms=${round1WaitMs}
+# 复用存档的出生点可能在洞内/屋檐下；先到空中再沿原版飞行路径移动。
+command text="tp @s ~ 300 ~ 0 0"
+wait ms=2000
 fly seconds=${moveSeconds} tag=OUT_
 wait ms=${moveWaitMs}
+assertProbe key=flight.anchorUnloaded op=eq value=1
 command text="tp @s ~ ~ ~ ~180 ~"
+wait ms=1000
 fly seconds=${moveSeconds} tag=BACK_
 wait ms=${moveWaitMs}
 wait ms=${dimWaitMs}
 dump label=ROUND1 round=1
+assertProbe key=flight.anchorReturned op=eq value=1
+assertProbe key=flight.anchorPresent op=eq value=1
+assertProbe key=flight.distanceChunks op=le value=4
 assertProbe key=counters.clientDarkRegressionChunks op=eq value=0
 exit rounds=1

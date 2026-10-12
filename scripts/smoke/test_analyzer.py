@@ -478,5 +478,63 @@ def probe_for(authority: set[tuple[int, int]], compute: set[tuple[int, int]],
             "clientCache": {"actualPresent": {"positions": positions_authority}}}
 
 
+class RuntimeEvidenceTest(unittest.TestCase):
+    def test_flight_requires_unload_return_and_current_presence(self):
+        from scripts.smoke.analyzer import _check_flight_probe
+        probe = {"flight": {"anchorUnloaded": True, "anchorReturned": True,
+                            "anchorPresent": True, "distanceChunks": 2},
+                 "counters": {"clientDarkRegressionChunks": 0}}
+        self.assertEqual([], _check_flight_probe(probe))
+        probe["flight"]["anchorUnloaded"] = False
+        self.assertIn("FLIGHT_ANCHOR_NOT_UNLOADED", {f["code"] for f in _check_flight_probe(probe)})
+        probe["flight"]["anchorUnloaded"] = True
+        probe["flight"]["distanceChunks"] = 8
+        self.assertIn("FLIGHT_RETURN_TOO_FAR", {f["code"] for f in _check_flight_probe(probe)})
+
+    def test_flight_missing_evidence_and_nonzero_dark_count_fail(self):
+        from scripts.smoke.analyzer import _check_flight_probe
+        self.assertIn("FLIGHT_ANCHOR_NOT_RETURNED", {f["code"] for f in _check_flight_probe({})})
+        probe = {"flight": {"anchorUnloaded": True, "anchorReturned": True,
+                            "anchorPresent": True, "distanceChunks": 0},
+                 "counters": {"clientDarkRegressionChunks": 1}}
+        self.assertIn("FLIGHT_DARK_REGRESSION", {f["code"] for f in _check_flight_probe(probe)})
+
+    def test_dimension_disk_requires_snapshot_from_this_session(self):
+        from scripts.smoke.analyzer import _check_dimension_disk
+        result = {"SessionId": "s", "PostExitDisk": {
+            "captured": True, "sessionId": "s",
+            "dimensions": {d: {"regionFileCount": 1} for d in ("overworld", "nether", "end")}}}
+        self.assertEqual([], _check_dimension_disk(result))
+        result["PostExitDisk"]["dimensions"]["end"]["regionFileCount"] = 0
+        self.assertEqual("DIMENSION_REGION_MISSING", _check_dimension_disk(result)[0]["code"])
+        result["PostExitDisk"]["sessionId"] = "another-session"
+        self.assertEqual("DIMENSION_DISK_SNAPSHOT_MISSING", _check_dimension_disk(result)[0]["code"])
+        self.assertEqual("DIMENSION_DISK_SNAPSHOT_MISSING", _check_dimension_disk({})[0]["code"])
+
+    def test_dimension_checks_end_and_return_probes(self):
+        from scripts.smoke.analyzer import analyze_result
+        from pathlib import Path
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "logs").mkdir()
+            (root / "logs" / "s.log").write_text(
+                "HassiumSmokeTest:PASS\nHassium: play init (caps=1)\n"
+                "Hassium: Aggregation enabled for player\n")
+            dims = ["minecraft:overworld", "minecraft:the_nether", "minecraft:the_end", "minecraft:overworld"]
+            probes = {f"Round{n}": {"joined": True, "dimension": dim,
+                       "clientCache": {"loadedChunks": 100},
+                       "chunkTrace": {"clientApplied": {"count": 100, "positions": []}}}
+                      for n, dim in enumerate(dims, 1)}
+            result = {"SessionId": "s", "Scenario": "dimension", "Probe": probes,
+                      "PostExitDisk": {"captured": True, "sessionId": "s", "dimensions": {
+                          d: {"regionFileCount": 1} for d in ("overworld", "nether", "end")}}}
+            self.assertTrue(analyze_result(result, root)["pass"])
+            probes["Round4"]["dimension"] = "minecraft:the_end"
+            self.assertIn("DIMENSION_UNEXPECTED", {f["code"] for f in analyze_result(result, root)["failures"]})
+            del probes["Round3"]
+            self.assertIn("PROBE_MISSING", {f["code"] for f in analyze_result(result, root)["failures"]})
+
+
 if __name__ == "__main__":
     unittest.main()

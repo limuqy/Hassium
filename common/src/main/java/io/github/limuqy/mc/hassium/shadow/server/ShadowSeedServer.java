@@ -890,9 +890,12 @@ public class ShadowSeedServer extends MinecraftServer {
             ThreadedLevelLightEngine lightEngine =
                     (ThreadedLevelLightEngine) owner.getChunkSource().getLightEngine();
             boolean hasSky = owner.dimensionType().hasSkyLight();
-            // 1) sections 就地覆盖（先于 BE——BE 创建依赖新 block state）
+            // 1) 离线改节再发布（先于 BE——BE 创建依赖新 block state）。
+            // 光引擎不拿 LIGHT_ENGINE_MUTEX；原地 read 会撕裂已发布 palette/storage，
+            // 即使 bits 相同也会让并发 getBlockState 抛 MissingPaletteEntryException。
             for (SectionDeltaS2CPacket.SectionData sd : entry.changedSections()) {
-                LevelChunkSection section = chunk.getSection(sd.sectionIndex());
+                LevelChunkSection section = LevelChunkSectionCompat.copyDetached(
+                        chunk.getSection(sd.sectionIndex()));
                 FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(sd.blockData()));
                 try {
                     if (sd.kind() == SectionDeltaS2CPacket.KIND_FULL) {
@@ -911,6 +914,8 @@ public class ShadowSeedServer extends MinecraftServer {
                 } finally {
                     buf.release();
                 }
+                // 已持有旧节的读者继续读旧值，新读者只会看到完整的新节。
+                chunk.getSections()[sd.sectionIndex()] = section;
                 // 2) 变更 section 清光：delta 无光，旧光已过期 → 由随后的两阶段光屏障重算。
                 //    强制覆盖共享空层（notReady 移除对带邻域 section 永不生效，
                 //    见 clearChunkLight 注释）；不在这里 propagate（会被空层安装覆盖白算）。

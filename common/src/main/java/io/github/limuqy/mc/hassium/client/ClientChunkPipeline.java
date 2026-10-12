@@ -438,8 +438,8 @@ public final class ClientChunkPipeline implements ShadowClientApi {
     }
 
     @Override
-    public void onProbeChunkUnloaded(ChunkPos pos) {
-        ClientChunkHandler.onProbeChunkUnloaded(pos);
+    public void onProbeChunkUnloaded(ChunkPos pos, String dimension) {
+        ClientChunkHandler.onProbeChunkUnloaded(pos, dimension);
     }
 
     @Override

@@ -76,6 +76,9 @@ param(
 )
 
 $ErrorActionPreference = "Continue"
+if ($Scenario -eq 'flyroundtrip' -and $MoveSeconds -le 0) {
+    $MoveSeconds = 30
+}
 
 # 解析最终连服地址：若显式指定 -SmokeHost 则优先；否则用 127.0.0.1:$ServerPort
 if ($SmokeHost -and $SmokeHost -ne "") {
@@ -99,6 +102,7 @@ $clientErr = Join-Path $logDir "client_${SessionId}_err.log"
 
 # F17 挂起取证（日志静默 → jcmd 现场）：见 scripts/smoke/hang-watch.ps1 顶部说明。
 . (Join-Path $PSScriptRoot "smoke\hang-watch.ps1")
+. (Join-Path $PSScriptRoot "smoke\runtime-gates.ps1")
 
 # Loom runDir 在子项目目录下（fabric/run/client、neoforge/run/server 等）
 $loaderRunDir = Join-Path $projectRoot "$Loader\run"
@@ -686,11 +690,23 @@ $clientDeadline = (Get-Date).AddSeconds($ClientTimeoutSec)
 $hangDumps = @()
 $stallSec = 0
 $lastLogBytes = -1
+$shutdownGraceDeadline = $null
 while (-not $clientProc.HasExited -and (Get-Date) -lt $clientDeadline) {
     Start-Sleep -Seconds 1
     $logBytes = if (Test-Path $clientLog) { (Get-Item $clientLog).Length } else { 0 }
     if ($logBytes -ne $lastLogBytes) {
         $lastLogBytes = $logBytes
+        $stallSec = 0
+        if ($null -eq $shutdownGraceDeadline -and (Test-Path $clientLog)) {
+            $recentLog = (Get-Content $clientLog -Tail 12) -join "`n"
+            if (Test-SmokeGracefulStopMarker -LogText $recentLog) {
+                # 与 Java 的 10s 优雅关闭宽限一致；超过宽限仍未退出会恢复取证。
+                $shutdownGraceDeadline = (Get-Date).AddSeconds(12)
+            }
+        }
+        continue
+    }
+    if ($shutdownGraceDeadline -and (Get-Date) -lt $shutdownGraceDeadline) {
         $stallSec = 0
         continue
     }
@@ -716,7 +732,7 @@ Write-Host "[$SessionId] [8/9] 解析结果 (客户端退出码: $clientExit)...
 # 单轮场景没有 ROUND2；不得把未运行的轮次写成 stats=false / pass=false。
 # flyroundtrip：单轮往返飞行黑块专项（join → 飞出去 → 掉头飞回 → dump ROUND1 → assertProbe → exit rounds=1）。
 # dictionary：单轮字典热更 rollout（join → /tick rate 200 → 等训练+offer+ACK 切换 → dump ROUND1 → exit rounds=1）。
-$requiresRound2 = $Scenario -notin @("seedgen", "modcompat", "modcompat_strict", "flyroundtrip", "dictionary")
+$requiresRound2 = $Scenario -notin @("seedgen", "modcompat", "modcompat_strict", "flyroundtrip", "dictionary", "dimension")
 $clientContent = if (Test-Path $clientLog) { Get-Content $clientLog -Raw } else { "" }
 
 # F17：Gradle 会把 fork 出的游戏 JVM 的真实退出码写进自己的失败信息（在 client 的 stderr 日志里）。挂起被系统关闭时是
@@ -762,14 +778,20 @@ function Read-SmokeRoundProbe {
     }
 }
 $probeRound1 = Read-SmokeRoundProbe -Dir $probeDir -RoundNum 1
-$probeRound2 = if ($requiresRound2) { Read-SmokeRoundProbe -Dir $probeDir -RoundNum 2 } else { $null }
+$probeRound2 = if ($requiresRound2 -or $Scenario -eq 'dimension') { Read-SmokeRoundProbe -Dir $probeDir -RoundNum 2 } else { $null }
+$probeRound3 = if ($Scenario -eq 'dimension') { Read-SmokeRoundProbe -Dir $probeDir -RoundNum 3 } else { $null }
+$probeRound4 = if ($Scenario -eq 'dimension') { Read-SmokeRoundProbe -Dir $probeDir -RoundNum 4 } else { $null }
 if ($probeRound1) {
     ($probeRound1 | ConvertTo-Json -Depth 5) | Out-File (Join-Path $statsDir "${SessionId}_round1_probe.json") -Encoding UTF8
 }
 if ($probeRound2) {
     ($probeRound2 | ConvertTo-Json -Depth 5) | Out-File (Join-Path $statsDir "${SessionId}_round2_probe.json") -Encoding UTF8
 }
-Write-Host "[$SessionId] PROBE JSON: round1=$($null -ne $probeRound1) round2=$(if ($requiresRound2) { $null -ne $probeRound2 } else { 'n/a' })"
+if ($Scenario -eq 'dimension') {
+    Write-Host "[$SessionId] PROBE JSON: round1=$($null -ne $probeRound1) round2=$($null -ne $probeRound2) round3=$($null -ne $probeRound3) round4=$($null -ne $probeRound4)"
+} else {
+    Write-Host "[$SessionId] PROBE JSON: round1=$($null -ne $probeRound1) round2=$(if ($requiresRound2) { $null -ne $probeRound2 } else { 'n/a' })"
+}
 
 
 # 提取服务端视距切换日志
@@ -851,7 +873,7 @@ $logAuditAllow = @(
     "Failed to load random sequence",
     # 复用存档可能残留 1.21+ structure id（trial_chambers）：1.20.1 打 ERROR 后跳过该 start，可恢复。
     "Unknown structure start: minecraft:trial_chambers"
-) + @($AllowErrorPatterns)
+) + @(Get-SmokeEnvironmentAuditAllowPatterns) + @($AllowErrorPatterns)
 $logAuditFailures = @()
 foreach ($auditLog in @($serverLog, $clientLog)) {
     if (-not (Test-Path $auditLog)) { continue }
@@ -918,7 +940,10 @@ $resultObj = @{
     GatewayGatePass = $null
     GatewayRequired = $gatewayRequired
     DimensionGateFailures = @()
-    Probe = @{ Round1 = $probeRound1; Round2 = $probeRound2 }
+    Probe = @{ Round1 = $probeRound1; Round2 = $probeRound2; Round3 = $probeRound3; Round4 = $probeRound4 }
+    PostExitDisk = $(if ($Scenario -eq 'dimension') {
+        Get-SmokePostExitDiskSnapshot -SessionId $SessionId -ClientRunDir $clientRunDir -ProbeDisk $probeRound1.disk
+    } else { $null })
     StatsFiles = @(
         if ($round1StatsFound) { "build/smoke-test/stats/${SessionId}_round1_VD${Vd1}.txt" }
         if ($round2StatsFound) { "build/smoke-test/stats/${SessionId}_round2_VD${Vd2}.txt" }
@@ -940,6 +965,9 @@ if (Test-Path $analysisPath) {
         $resultObj.Result = $result
         $resultObj.Analysis = $analysis
         $resultObj.ProbeGateFailures = @($analysis.failures | ForEach-Object { $_.code })
+        $resultObj.DimensionGateFailures = @($analysis.failures | Where-Object {
+            $_.code -like 'DIMENSION_*' -or ($Scenario -eq 'dimension' -and $_.code -eq 'PROBE_MISSING')
+        } | ForEach-Object { $_.code })
         $resultObj.LogAuditFailures = @($analysis.failures | Where-Object { $_.code -eq "PROCESS_FATAL" } | ForEach-Object { $_.detail })
         $resultObj | ConvertTo-Json -Depth 8 | Out-File $resultPath
     } catch {
@@ -956,6 +984,8 @@ Write-Host "[$SessionId] Python analyzer: exit=$analysisExit"
 Write-Host "[$SessionId] Round1: stats=$round1StatsFound pass=$round1Pass"
 if ($requiresRound2) {
     Write-Host "[$SessionId] Round2: stats=$round2StatsFound pass=$round2Pass"
+} elseif ($Scenario -eq 'dimension') {
+    Write-Host "[$SessionId] Dimension: four probe rounds; gate failures=$($resultObj.DimensionGateFailures -join ',')"
 } else {
     Write-Host "[$SessionId] Round2: n/a（单轮场景）"
 }

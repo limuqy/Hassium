@@ -213,7 +213,7 @@ public final class ShadowClientBridge {
         }
 
         @Override
-        public void onProbeChunkUnloaded(ChunkPos pos) {
+        public void onProbeChunkUnloaded(ChunkPos pos, String dimension) {
         }
 
         @Override

@@ -21,6 +21,8 @@ param(
     [ValidateSet("fabric","neoforge")][string[]]$Loaders = @("fabric","neoforge"),
     # T8 场景列表（默认仅 classic，保持既有行为）：classic=全矩阵；非 classic 只跑锚点集
     [string[]]$Scenarios = @("classic"),
+    # 仅 flyroundtrip 使用；classic 保持站桩。真实卸载/回填由场景断言验收。
+    [int]$FlyRoundTripSeconds = 30,
     [int]$MaxRetries = 3,  # 仅「游戏打不开」时重试；进过世界的业务失败不重跑
     # 保留开关以免旧命令行报错；单版本已吃满 CPU，下面会强制关掉。
     [switch]$Parallel,
@@ -35,6 +37,7 @@ param(
 )
 
 $ErrorActionPreference = "Continue"
+. (Join-Path $PSScriptRoot 'smoke/runtime-gates.ps1')
 if ($PSVersionTable.PSVersion.Major -lt 7) {
     Write-Error 'runtime-smoke-test-batch.ps1 requires PowerShell 7+ (pwsh).'
     exit 3
@@ -134,26 +137,7 @@ function Format-SmokeProbeRound {
     return ($parts -join ";")
 }
 
-# 游戏打不开才值得重试：服务端没 Done、客户端没写出 ROUND1（没进世界）。
-# 进过服的业务 FAIL（applied=0、analyzer、TRACE）重跑没有意义。
-function Test-SmokeLaunchFailure {
-    param(
-        [object]$ScriptExit,
-        $ResultObj
-    )
-    $reason = if ($ResultObj) { [string]$ResultObj.Reason } else { "" }
-    if ($reason -match '^(loader_not_supported|mapping_precheck)') {
-        return $false
-    }
-    if ($ScriptExit -eq 3 -or $reason -eq "server_not_ready") {
-        return $true
-    }
-    if (-not $ResultObj) {
-        return $true
-    }
-    return -not [bool]$ResultObj.Round1Stats
-}
-
+# 游戏打不开才值得重试；首个 dump 前的业务 FAIL 也必须直接报告。
 # 单会话执行函数（封装重试逻辑，供串行路径共用）
 # 返回 [PSCustomObject]@{ Ver; Loader; Phase; Result; SessionId; Attempts; Reason }
 function Invoke-Session {
@@ -170,6 +154,7 @@ function Invoke-Session {
         [int]$DelayMs = 10000,
         [int]$ReconnectDelayMs = 3000,
         [int]$ClientRenderDistance = 20,
+        [int]$FlyRoundTripSeconds = 30,
         [string]$SessionSuffix = ""
     )
     $sfx = Get-SmokeSessionIdSuffix -Scenario $Scenario -SessionSuffix $SessionSuffix
@@ -194,6 +179,7 @@ function Invoke-Session {
             ClientRenderDistance = $ClientRenderDistance
         }
         if ($Scenario -ne "classic") { $sessionArgs.Scenario = $Scenario }
+        if ($Scenario -eq 'flyroundtrip') { $sessionArgs.MoveSeconds = $FlyRoundTripSeconds }
         # 单会话脚本用 Write-Host + exit，不会把 "PASS" 写回管道。
         & $scriptPath @sessionArgs
         $scriptExit = $LASTEXITCODE
@@ -217,6 +203,8 @@ function Invoke-Session {
         $sessionResult = "FAIL"
         $lastReason = if ($resultObj -and $resultObj.Reason) {
             [string]$resultObj.Reason
+        } elseif ($resultObj -and $resultObj.ProbeGateFailures.Count -gt 0) {
+            'analyzer=' + ($resultObj.ProbeGateFailures -join ',')
         } elseif ($resultObj) {
             "Round1Pass=$($resultObj.Round1Pass) Round2Pass=$($resultObj.Round2Pass) Exit=$($resultObj.ClientExitCode)"
         } elseif ($null -ne $scriptExit) {
@@ -233,6 +221,18 @@ function Invoke-Session {
         if ($attempt -ge $maxAttempts) {
             Write-Host "[$sessionId] 启动失败且已达重试上限: $lastReason" -ForegroundColor Red
             break
+        }
+        # 启动重试前保留原始证据，下一次同名重定向会覆盖 stdout/stderr。
+        $attemptDir = Join-Path $logRoot "attempts/$sessionId/attempt$attempt"
+        New-Item -ItemType Directory -Force -Path $attemptDir | Out-Null
+        foreach ($source in @(
+            (Join-Path $logDir "server_${sessionId}.log"),
+            (Join-Path $logDir "server_${sessionId}_err.log"),
+            (Join-Path $logDir "client_${sessionId}.log"),
+            (Join-Path $logDir "client_${sessionId}_err.log"),
+            $resultJsonPath
+        )) {
+            if (Test-Path -LiteralPath $source) { Copy-Item -LiteralPath $source -Destination $attemptDir }
         }
         Write-Host "[$sessionId] 启动失败 ($lastReason)，将重试" -ForegroundColor Red
     }
@@ -388,6 +388,9 @@ foreach ($entry in $scenarioPlan) {
             if ($scenario -ne "classic") {
                 $procArgs += @("-Scenario", $scenario)
             }
+            if ($scenario -eq 'flyroundtrip') {
+                $procArgs += @('-MoveSeconds', "$FlyRoundTripSeconds")
+            }
 
             $procOutLog = Join-Path $logDir "parallel_${jobName}.log"
             $procErrLog = Join-Path $logDir "parallel_${jobName}_err.log"
@@ -483,7 +486,7 @@ foreach ($entry in $scenarioPlan) {
 
             $r = Invoke-Session -Ver $ver -Loader $loader -Phase $Phase -Scenario $scenario -ServerPort $BasePort -MaxRetries $MaxRetries `
                 -ServerReadyTimeoutSec $ServerReadyTimeoutSec -ClientTimeoutSec $ClientTimeoutSec `
-                -DelayMs $DelayMs -ReconnectDelayMs $ReconnectDelayMs -ClientRenderDistance $ClientRenderDistance -SessionSuffix $SessionSuffix
+                -DelayMs $DelayMs -ReconnectDelayMs $ReconnectDelayMs -ClientRenderDistance $ClientRenderDistance -SessionSuffix $SessionSuffix -FlyRoundTripSeconds $FlyRoundTripSeconds
             $results += $r
 
             # 杀残留 Minecraft java 进程（仅本工程 loom dev 实例：dli.config + env 标记；
@@ -518,4 +521,6 @@ $skip = @($results | Where-Object { $_.Result -eq "SKIP" }).Count
 Write-Host "PASS: $pass / FAIL: $fail / SKIP: $skip / TOTAL: $($results.Count)" -ForegroundColor Cyan
 if ($fail -gt 0) {
     Write-Host "Failures log: $failuresLog" -ForegroundColor Yellow
+    exit 2
 }
+exit 0

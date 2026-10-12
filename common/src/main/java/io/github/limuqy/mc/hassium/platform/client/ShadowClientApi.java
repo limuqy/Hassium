@@ -89,7 +89,7 @@ public interface ShadowClientApi {
 
     void markChunkSectionsDirty(ClientLevel level, int chunkX, int chunkZ);
 
-    void onProbeChunkUnloaded(ChunkPos pos);
+    void onProbeChunkUnloaded(ChunkPos pos, String dimension);
 
     void scheduleProbeRecheck(ChunkPos pos);
 

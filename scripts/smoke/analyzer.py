@@ -407,6 +407,56 @@ def _late_near_player(probe: dict[str, Any], threshold_ms: int = 10_000) -> list
     return sorted(late, key=lambda item: (item["networkDelayMs"], item["applyDelayMs"]), reverse=True)
 
 
+def _check_flight_probe(probe: dict[str, Any]) -> list[dict[str, Any]]:
+    flight = _obj(probe.get("flight"))
+    failures = []
+    for field, code in (("anchorUnloaded", "FLIGHT_ANCHOR_NOT_UNLOADED"),
+                        ("anchorReturned", "FLIGHT_ANCHOR_NOT_RETURNED"),
+                        ("anchorPresent", "FLIGHT_ANCHOR_NOT_PRESENT")):
+        if flight.get(field) is not True:
+            failures.append(_failure(code))
+    distance = _num(flight.get("distanceChunks"))
+    if distance is None or not 0 <= distance <= 4:
+        failures.append(_failure("FLIGHT_RETURN_TOO_FAR", distanceChunks=distance))
+    dark = _num(_obj(probe.get("counters")).get("clientDarkRegressionChunks"))
+    if dark != 0:
+        failures.append(_failure("FLIGHT_DARK_REGRESSION", chunks=dark))
+    return failures
+
+
+def _check_dimension_probe(probe: dict[str, Any], number: int) -> list[dict[str, Any]]:
+    expected = ("minecraft:overworld", "minecraft:the_nether", "minecraft:the_end",
+                "minecraft:overworld")[number - 1]
+    failures = []
+    if probe.get("joined") is not True:
+        failures.append(_failure("DIMENSION_NOT_JOINED", round=number))
+    if probe.get("dimension") != expected:
+        failures.append(_failure("DIMENSION_UNEXPECTED", round=number,
+                                 expected=expected, actual=probe.get("dimension")))
+    loaded = _num(_obj(probe.get("clientCache")).get("loadedChunks"))
+    applied = _num(_obj(_obj(probe.get("chunkTrace")).get("clientApplied")).get("count"))
+    if loaded is None or loaded <= 64:
+        failures.append(_failure("DIMENSION_CHUNKS_MISSING", round=number, loaded=loaded))
+    if applied is None or applied <= 64:
+        failures.append(_failure("DIMENSION_APPLIED_MISSING", round=number, applied=applied))
+    return failures
+
+
+def _check_dimension_disk(result: dict[str, Any]) -> list[dict[str, Any]]:
+    # 必须消费本场退出后保存的快照；回放不得读取已被后续场次替换的运行目录。
+    snapshot = _obj(result.get("PostExitDisk"))
+    if snapshot.get("captured") is not True or snapshot.get("sessionId") != result.get("SessionId"):
+        return [_failure("DIMENSION_DISK_SNAPSHOT_MISSING")]
+    dimensions = _obj(snapshot.get("dimensions"))
+    failures = []
+    for dimension in ("overworld", "nether", "end"):
+        count = _num(_obj(dimensions.get(dimension)).get("regionFileCount"))
+        if count is None or count < 1:
+            failures.append(_failure("DIMENSION_REGION_MISSING", dimension=dimension,
+                                     regionFileCount=count))
+    return failures
+
+
 def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
     scenario = str(result.get("Scenario") or "classic")
     # 移动会话标记（由 runtime-smoke-test.ps1 透传 -MoveSeconds）。>0 ⇒ 走开后柱会合法卸载，
@@ -467,7 +517,8 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
 
     # 单轮场景（probe 只有 round1.json）：新场景必须在此登记，否则会被按两轮判定 → PROBE_MISSING。
     single_round_scenarios = {"seedgen", "modcompat", "modcompat_strict", "flyroundtrip", "dictionary"}
-    round_numbers = (1,) if scenario in single_round_scenarios else (1, 2)
+    round_numbers = ((1, 2, 3, 4) if scenario == "dimension"
+                     else (1,) if scenario in single_round_scenarios else (1, 2))
     stats_ok = {n: bool(re.search(rf"CLIENT_STATS ROUND{n} begin", log_text)
                     and re.search(rf"CLIENT_STATS ROUND{n} end", log_text)) for n in round_numbers}
     if scenario == "classic" and not all(stats_ok.values()):
@@ -483,6 +534,10 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
             skipped.append({"code": "PROBE_MISSING", "round": number})
             continue
         failures.extend(_check_probe_metrics(probe, number))
+        if scenario == "dimension":
+            failures.extend(_check_dimension_probe(probe, number))
+        elif scenario == "flyroundtrip":
+            failures.extend(_check_flight_probe(probe))
         trace_report = _trace_analysis(probe)
         trace_reports[f"round{number}"] = trace_report
         spatial = _spatial_check(probe)
@@ -596,6 +651,10 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
                                      diagonalTruncated=len(spatial["diagonalHoles"]) > 64))
 
 
+    if scenario == "dimension":
+        disk_failures = _check_dimension_disk(result)
+        failures.extend(disk_failures)
+        checks["dimension_disk"] = "FAIL" if disk_failures else "PASS"
     if scenario == "classic" and not bool(result.get("ServerSwitched")):
         failures.append(_failure("SERVER_SWITCH_MISSING"))
     checks["server_switch"] = "PASS" if scenario != "classic" or bool(result.get("ServerSwitched")) else "FAIL"

@@ -3,6 +3,7 @@ package io.github.limuqy.mc.hassium.client.scenario;
 import io.github.limuqy.mc.hassium.client.SmokeProbeWriter;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientPacketListener;
+import net.minecraft.world.level.ChunkPos;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -70,6 +71,12 @@ public final class ScenarioEngine {
     /** 1=爬升（按住跳跃）2=平飞（按住前进） */
     private static int movePhase;
     private static long cruiseSeconds;
+    private static ChunkPos flightAnchor;
+    private static String flightDimension;
+    private static boolean flightAnchorUnloaded;
+    private static boolean flightAnchorAbsent;
+    private static boolean flightAnchorReturned;
+    private static int flightMaxDistance;
 
     private ScenarioEngine() {
     }
@@ -132,6 +139,12 @@ public final class ScenarioEngine {
         round2Pass = false;
         finished = false;
         armed = true;
+        flightAnchor = null;
+        flightDimension = null;
+        flightAnchorUnloaded = false;
+        flightAnchorAbsent = false;
+        flightAnchorReturned = false;
+        flightMaxDistance = 0;
         io.github.limuqy.mc.hassium.metrics.NetworkStats.setEnabled(true);
 
         StringBuilder desc = new StringBuilder();
@@ -165,6 +178,7 @@ public final class ScenarioEngine {
         long now = System.currentTimeMillis();
 
         tickMovement(mc, now);
+        tickFlightAnchor(mc);
 
         // 全局超时：两轮 joinTimeout + R1 40s + R2 20s + 重连间隔 + R2 dump 等 OVD
         if (startAtMs > 0L && now - startAtMs > joinTimeoutMs * 2 + 60_000L + reconnectDelayMs) {
@@ -308,6 +322,20 @@ public final class ScenarioEngine {
         if (tag == null) {
             tag = "MOVE_";
         }
+        if ("OUT_".equals(tag)) {
+            flightAnchor = mc.player.chunkPosition();
+            flightDimension = dimensionId(mc.level.dimension());
+            flightAnchorUnloaded = false;
+            flightAnchorAbsent = false;
+            flightAnchorReturned = false;
+            flightMaxDistance = 0;
+            if (!flightAnchorPresent(mc)) {
+                fail("flight anchor not loaded before departure", 2);
+                return Outcome.DONE;
+            }
+            LOGGER.info("HassiumSmokeTest:FLIGHT_ANCHOR_SET pos=({}, {})",
+                    flightAnchor.x(), flightAnchor.z());
+        }
         mc.player.getAbilities().flying = true;
         mc.options.keyJump.setDown(true);
         movePhase = 1;
@@ -322,6 +350,13 @@ public final class ScenarioEngine {
     private static void tickMovement(Minecraft mc, long now) {
         if (moveUntilMs <= 0L) {
             return;
+        }
+        // 焦点变化会释放 KeyMapping；持续武装移动输入，仍由原版玩家 tick 完成飞行。
+        if (mc.player != null) {
+            mc.player.getAbilities().flying = true;
+            mc.options.keyJump.setDown(movePhase == 1);
+            mc.options.keyUp.setDown(movePhase == 2);
+            mc.options.keySprint.setDown(movePhase == 2);
         }
         if (mc.player == null) {
             moveUntilMs = -1L;
@@ -350,6 +385,58 @@ public final class ScenarioEngine {
     }
 
     // --------------------------------------------------------------- command
+
+    private static boolean flightAnchorPresent(Minecraft mc) {
+        return flightAnchor != null && mc.level != null
+                && flightDimension.equals(dimensionId(mc.level.dimension()))
+                && mc.level.getChunkSource().hasChunk(flightAnchor.x(), flightAnchor.z());
+    }
+
+    private static int flightAnchorDistance(Minecraft mc) {
+        if (flightAnchor == null || mc.player == null) {
+            return -1;
+        }
+        ChunkPos pos = mc.player.chunkPosition();
+        return Math.max(Math.abs(pos.x() - flightAnchor.x()), Math.abs(pos.z() - flightAnchor.z()));
+    }
+
+    private static void tickFlightAnchor(Minecraft mc) {
+        if (flightAnchor == null || mc.level == null || mc.player == null) {
+            return;
+        }
+        flightMaxDistance = Math.max(flightMaxDistance, flightAnchorDistance(mc));
+        boolean present = flightAnchorPresent(mc);
+        if (!present && flightAnchorUnloaded && !flightAnchorAbsent) {
+            flightAnchorAbsent = true;
+            LOGGER.info("HassiumSmokeTest:FLIGHT_ANCHOR_ABSENT distanceChunks={}", flightAnchorDistance(mc));
+        } else if (present && flightAnchorAbsent && !flightAnchorReturned) {
+            flightAnchorReturned = true;
+            LOGGER.info("HassiumSmokeTest:FLIGHT_ANCHOR_RETURNED distanceChunks={}", flightAnchorDistance(mc));
+        }
+    }
+
+    /** 卸载回调来自真实 ClientLevel；仅缓存查询失效不能冒充卸载事件。 */
+    public static void onFlightAnchorUnloaded(ChunkPos pos, String dimension) {
+        if (armed && !finished && flightAnchor != null && flightAnchor.equals(pos)
+                && flightDimension.equals(dimension) && !flightAnchorUnloaded) {
+            flightAnchorUnloaded = true;
+            LOGGER.info("HassiumSmokeTest:FLIGHT_ANCHOR_UNLOADED pos=({}, {})", pos.x(), pos.z());
+        }
+    }
+
+    /** 只有显式往返场景输出；原始卸载/回填证据由离线 analyzer 再次校验。 */
+    public static void appendFlightProbeJson(StringBuilder sb, Minecraft mc) {
+        if (flightAnchor == null) {
+            return;
+        }
+        sb.append("  \"flight\": {\"anchorX\": ").append(flightAnchor.x())
+                .append(", \"anchorZ\": ").append(flightAnchor.z())
+                .append(", \"anchorUnloaded\": ").append(flightAnchorUnloaded && flightAnchorAbsent)
+                .append(", \"anchorReturned\": ").append(flightAnchorReturned)
+                .append(", \"anchorPresent\": ").append(flightAnchorPresent(mc))
+                .append(", \"distanceChunks\": ").append(flightAnchorDistance(mc))
+                .append(", \"maxDistanceChunks\": ").append(flightMaxDistance).append("},\n");
+    }
 
     private static Outcome execCommand(ScenarioStep step, Minecraft mc, long now) {
         ClientPacketListener conn = mc.getConnection();
@@ -572,7 +659,7 @@ public final class ScenarioEngine {
     private static Outcome execDump(ScenarioStep step, Minecraft mc) {
         int round = (int) step.longParam("round", 1L);
         boolean isRound1 = round <= 1;
-        String roundLabel = isRound1 ? "ROUND1" : "ROUND2";
+        String roundLabel = "ROUND" + round;
         try {
             String stats = io.github.limuqy.mc.hassium.command.HassiumCommandHandler.getClientStatsMessage();
             String plain = stripSection(stats);
@@ -743,6 +830,10 @@ public final class ScenarioEngine {
         io.github.limuqy.mc.hassium.shadow.light.SmokeChunkTrace.Snapshot trace =
                 io.github.limuqy.mc.hassium.shadow.light.SmokeChunkTrace.snapshot(dim);
         return switch (key) {
+            case "flight.anchorUnloaded" -> flightAnchorUnloaded && flightAnchorAbsent ? 1L : 0L;
+            case "flight.anchorReturned" -> flightAnchorReturned ? 1L : 0L;
+            case "flight.anchorPresent" -> flightAnchorPresent(mc) ? 1L : 0L;
+            case "flight.distanceChunks" -> (long) flightAnchorDistance(mc);
             // counters.*（appendCounters 同名）
             case "counters.sectionDeltaRequestsSent" -> m.getSectionDeltaRequestsSent();
             case "counters.sectionDeltaApplied" -> m.getSectionDeltaChunksReceived();
@@ -951,7 +1042,8 @@ public final class ScenarioEngine {
                 forceExit(exitCode == 0 ? 1 : exitCode);
             }
         }, "hassium-smoke-shutdown");
-        shutdown.setDaemon(false);
+        // 主线程已正常退出时不再由本线程独占 JVM 的存活期；仍卡在 stop 时保留强退兜底。
+        shutdown.setDaemon(true);
         shutdown.start();
     }
 

@@ -2137,7 +2137,7 @@ public final class ShadowLightCompute {
                     submitLightReuseOrGate(e.getKey(), injected, server.level(dimension),
                             false, false, pendingEntry.traceOrigin());
                 }
-                // 分段增量应用：本地基线 chunk 上就地覆盖变更 section + heightmaps + BE，
+                // 分段增量应用：本地基线 chunk 上复制换节，再覆盖 heightmaps + BE，
                 // 变更 section 清光（applySectionDelta 内）→ 与注入共享下方光屏障。
                 for (Map.Entry<Long, DeltaWork> e : deltaBatch) {
                     long key = e.getKey();
@@ -2147,9 +2147,8 @@ public final class ShadowLightCompute {
                     pendingDeltas.remove(key);
                     ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
                     DeltaWork work = e.getValue();
-                    // P1（T7）：applySectionDelta 就地覆盖注入 chunk 的 section 容器
-                    // （LevelChunkSection.read → PalettedContainer 写）——与 hash 比对线程
-                    // （chunkHashOf / computeSectionHashes）同 chunk 锁互斥（T7 崩溃同机制）。
+                    // hash 比对/保存仍与 delta 同 chunk 锁互斥；光引擎不拿此锁，
+                    // applySectionDelta 必须对 FULL/BLOCKS 都离线改节再发布。
                     boolean applied;
                     applied = withChunkLock(pos, () ->
                             server.applySectionDelta(work.dimension(), pos, work.entry()));
@@ -3244,7 +3243,7 @@ public final class ShadowLightCompute {
         long chunkKey = DimensionKey.key(dim, pos.x(), pos.z());
         Long removedEpoch = shadowApplyEpochs.remove(chunkKey);
         // 黑块探针：该柱已不可见，「仍黑」统计不得再包含它（「曾亮」标记保留，回程变黑要算回归）。
-        client().onProbeChunkUnloaded(pos);
+        client().onProbeChunkUnloaded(pos, dim);
         // 允许对真实服再 compare（卸载后基线可能已过期）；不挡本地 publish
         requestedMisses.remove(chunkKey);
         // compare 去重登记同理：客户端已卸载该柱，再进视野要允许重新 compare
