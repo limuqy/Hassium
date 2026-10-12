@@ -21,7 +21,7 @@
 | D3 | **移除 Forge**：三阶段内 forge/ 子项目整体删除；`legacy-1.21` 也不含 Forge | 用户拍板「不再兼容 forge」；1.21.11 本就无 Forge（sunset）；1.21.11-only 的 legacy 不需要 Forge |
 | D4 | **1.20.1–1.21.10 整体 sunset**：不为其建维护分支，已发布产物继续在 Modrinth/CurseForge 可用；以 `archive/pre-baseline` git 引用保留完整历史后手 | D2 的连带决策（基线 = 1.21.11-only，fork 点不再携带更老版本） |
 | D5 | **legacy = `legacy-1.21` 分支，从基线提交切出**：冻结功能，仅收 crash/安全修复；修复只从 master 单向 cherry-pick 落地，禁止反向合并 | 基线已坍缩为零版本块代码，cherry-pick 冲突最小化 |
-| D6（待确认） | legacy 支持窗口 **6 个月**（或 26 线稳定即 EOL，先到为准）；26 线版本号从 **3.0.0** 起 | 待用户最终确认，不阻塞阶段①②③ |
+| D6（版本号已确认 / 支持窗口待确认） | legacy 支持窗口 **6 个月**（或 26 线稳定即 EOL，先到为准）；26 线版本号从 **3.0.0** 起 | 2026-10-12 用户确认 master 改为 3.0.0；legacy 支持窗口仍待确认，不阻塞阶段①②③ |
 | D7 | **取消 NeoForge 测试版本支持**：26.2/26.3 仅 fabric（`builds_for=fabric`），NeoForge 仅 26.1.2；NeoForge 兼容代码与编译保留，不发布、不进冒烟矩阵 | 用户拍板 2026-09-30：非正式版本下 NeoForge 启动弹窗警告挡住自动进服（26.2/26.3 neoforge 冒烟六连 FAIL 实证：客户端停在弹窗、`ConnectScreen` 从不出现；26.1.2 neoforge 正常）。上游 NeoForge 正式版解除弹窗后可恢复 |
 
 ---
@@ -193,8 +193,8 @@ archive/pre-baseline = 当前 HEAD 的引用（1.20.1–1.21.10 完整历史后�
 | ModDevGradle 2.0.148（neoforge 线） | **✅ 全绿** | neoforge 26.3.0.37-beta neoForm 管线完整走通、record API 编译通过；官方模板 examplemod-template-26.3 同款接线（settings 无需额外仓库） |
 
 **环境前置（已验证）**：
-- **JDK 25 供给**：settings 加 `foojay-resolver-convention 1.0.0` + `gradle/gradle-daemon-jvm.properties`（`toolchainVersion=25`）→ Gradle 9.6 daemon 自动供给；本机也可钉 `D:/app/graalvm-jdk-25.0.1+8.1`（tpamod 方案）。
-- **网络**：maven.neoforged.net 直连 TLS 不可达（重试/降级全 reset，WebFetch 亦超时）→ **本机构建需走本地代理 `127.0.0.1:7890`**（`systemProp.http(s).proxyHost/Port` + `systemProp.jdk.tls.client.protocols=TLSv1.2`，tpamod 同款）；forgecdn 镜像可解 neoforge 主构件但**缺** `net.neoforged:minecraft-dependencies`。CI（GitHub Actions）直连正常，代理仅本机需要。
+- **JDK 25 供给**：`gradle/gradle-daemon-jvm.properties`（`toolchainVersion=25`）选择预装 / 已缓存的 JDK 25；本机须预先安装，CI 用 `actions/setup-java` 显式安装 25。settings 的 `foojay-resolver-convention 1.0.0` 负责构建 toolchain，不能替代 daemon 启动前的 JDK（当前 daemon 配置没有平台下载 URL）。本机也可钉 `D:/app/graalvm-jdk-25.0.1+8.1`（tpamod 方案）。
+- **网络**：maven.neoforged.net 直连 TLS 不可达（重试/降级全 reset，WebFetch 亦超时）→ **本机构建需走本地代理 `127.0.0.1:7890`**（在本机 `~/.gradle/gradle.properties` 配置 `systemProp.http(s).proxyHost/Port` + `systemProp.jdk.tls.client.protocols=TLSv1.2`，tpamod 同款）；forgecdn 镜像可解 neoforge 主构件但**缺** `net.neoforged:minecraft-dependencies`。CI（GitHub Actions）默认直连，2026-10-12 已从仓库移除本地代理与 TLS 强制设置。
 - **坑**：settings 级 `dependencyResolutionManagement.PREFER_SETTINGS` 会剥掉 MDG 的内部解析仓（本机曾因此误判 minecraft-dependencies 不存在）——26.x 接线**禁止** settings 级仓库接管。
 - **已否决/备选**：Unimined（tpamod 用其构建 26.1.2 三加载器全通，可行但需全量 DSL 迁移 + smoke runConfig 重写）→ 列 B 方案。情报：**Forge 64.1.0 在 26.1.2 有 userdev 可构建**（不改变 D3 移除 Forge 决策，仅修正「Forge 已死」认知）。
 - 26.3 依赖版本实测：fabric-api `0.161.0+26.3`、modmenu/cloth 暂无 26.3 构建（fabric GUI 依赖届时处理）。
@@ -236,6 +236,21 @@ archive/pre-baseline = 当前 HEAD 的引用（1.20.1–1.21.10 完整历史后�
 | 2026-09-30 | **D7 拍板：取消 NeoForge 测试版本支持**（26.2/26.3 `builds_for=fabric`，NeoForge 仅 26.1.2）：L2 批跑揭出 26.2/26.3 neoforge 六连 FAIL 共同根因——**非正式版本 NeoForge 启动弹窗警告挡自动进服**（客户端停在弹窗、`ConnectScreen` 从不出现、JOIN_WAIT 120s 超时；26.1.2 neoforge 无弹窗双场景 PASS）；NeoForge 兼容代码/编译保留（`neoforge:compileJava` 三锚点仍绿），仅收窄发布与冒烟矩阵。batch 锚点表同步（4 组合：26.1.2×2 + 26.2/26.3 fabric） | 用户拍板；poc 分支随冒烟修复提交 |
 | 2026-09-30 | **R8 同族竞态根因定案 + 修复**（poc `b25e271d`）：dimension 偶发崩溃/断供 = **palette 撕裂**——`PalettedContainer.read` 在 bits 未变时复用旧 `Data`，`palette.read`/`storage.getRaw()` 原地改写**已发布**对象，而影子注入柱在 decode 前已入 `injectedChunks` 表（`decodeInjectedPacketLocked` 设计如此），光引擎/世界生成工作线程并发 `getBlockState` 读到撕裂 palette：HashMapPalette 抛 `MissingPaletteEntryException`（26.3 dimension 光引擎线程未捕获异常 → consecutive executor 停摆 → 下界 `loadedChunks=0`）、LinearPalette 抛 AIOOBE（26.1.2 dimension applyStep 崩溃、fast-throw 空栈）。**修复**：`ChunkPacketDataCompat.applyToChunk` 改写时复制换节（新节离线填充后逐槽换新，读者要么旧要么新），尾段与原版同构、BE 迭代 API 差异 `#if` 收口；连带修 `getReadBuffer` 游标统一 `readerIndex(0)`。诊断基建：冒烟 JVM `-XX:-OmitStackTraceInFastThrow`（空栈根因）、probe 目录清旧 roundN.json（PROBE 假阳性） | poc/mc26-build@`b25e271d` |
 
+### 2026-10-12 适配复核记录（不改变 D1–D7）
+
+- 检查基线：`master`@`ea2e9222`。本次三锚点 `common:test` 各 **382 tests / 0 failures / 0 errors / 0 skipped**；`scanVersionBoundaries` 全绿。正式支持的四组合（26.1.2 fabric+neoforge、26.2/26.3 fabric）均 `build` 成功，内嵌 zstd-jni 包装检查通过；实际产物版本仍为 **2.0.3**，未切 3.0.0。
+- 发布链路待修（静态检查，未运行 GitHub Actions / 未上传）：① `gradle.properties` 将本地 HTTP/HTTPS 代理 `127.0.0.1:7890` 写为仓库默认，CI 未覆盖；② 发布 workflow 仍只显式安装 JDK 21，daemon 要求 25，且 `gradle-daemon-jvm.properties` 只有 `toolchainVersion=25`、没有平台下载 URL，冷环境不能依赖 settings 的 Foojay 替 daemon 启动前供给 JDK（[Gradle daemon provisioning](https://docs.gradle.org/current/userguide/gradle_daemon.html#sec:daemon_jvm_auto_detection_and_auto_provisioning)）；③ 两份 `publish-mods` 脚本的 `AnchorsOnly` 仍列旧七锚点，选此模式会引用已删除的 properties。
+- D7「保留 NeoForge 三锚点编译」尚缺可执行入口：`settings.gradle` 仅 include `builds_for`，26.2/26.3 的 `projects` 实测只含 common/fabric。本次未临时修改发布矩阵来编译取消支持的 NeoForge；历史六组合编译绿不能当作当前六组合已复验。
+- 配置 GUI 仍未恢复：两加载器未编入 `cloth-ui`，Fabric 配置工厂仍返回 null，NeoForge 探测因缺自身 UI 类而跳过注册；26.3 的 `cloth_config_version` 有值也不会启用它。本地 `hassium-manifold` skill 仍写旧七段/旧白名单，需要同步现行 J/K/L。
+- 本次未重跑游戏冒烟；工作区没有 `build/smoke-test/results` 可供复核，§9 的 12 场 PASS 保留为 2026-09-30 历史记录。移动屋檐/洞口目视验收仍未完成，不能以本次编译/单测/打包替代。
+
+### 2026-10-12 发布链路修复
+
+- 用户确认 master 版本号改为 **3.0.0**；旧版本 BUG 修复与 **2.x** 发布使用 `2.0.0` 分支。该分支未修改（仍为 `mod_version=2.0.3`），master push / 对外上传仍未执行。
+- 仓库移除本地代理及强制 TLS 设置，保留用户级配置示例；CI 改为显式安装 JDK 25；PowerShell / Bash 发布脚本的 AnchorsOnly 改为 26.1.2 / 26.2 / 26.3，workflow 输入说明与 README 同步分支发布路径。
+- 本地验证：正式四组合 `build` 与 zstd-jni 包装检查通过，JAR 文件名及包内元数据均为 3.0.0；三锚点各 382 项单测全过、边界扫描通过。四组合 Modrinth 版本号 / MC 版本 / loader 配置断言通过，`publishAll --dry-run` 任务图按 D7 正确选择加载器。
+- 两份发布脚本语法检查与隔离模拟执行通过：AnchorsOnly 确实执行三锚点，两平台 debug 参数均传到 Gradle。模拟使用假 Gradle 与占位 token，未访问发布平台；GitHub Actions 冷环境 / 真实平台上传尚未实跑，移动光照验收状态不变。
+
 ## 9. 进度表（滚动更新，收工必更）
 
 | 阶段 | 任务 | 状态 | 会话备注 |
@@ -257,6 +272,16 @@ archive/pre-baseline = 当前 HEAD 的引用（1.20.1–1.21.10 完整历史后�
 | ④ | 三锚点编译门（compileJava ×3 锚点 ×2 loader + scan + test） | ✅ 完成 | 26.1.2/26.2/26.3 全绿；scanVersionBoundaries OK；common:test 绿 |
 | ④ | 冒烟 + 光照红线验收 | ◐ 冒烟✅ / 红线待用户 | **D7 矩阵全绿**：classic 4/4、seedgen 4/4、dimension 4/4（26.3 dimension CoW 修复后复验 PASS）；光照红线移动屋檐/洞口目视验收**待用户**（冒烟绿不豁免） |
 | ④ | 文档修订 + 合入 master + 3.0.0 发布 | ◐ 合入✅ / 发布待批 | version-segments/AGENTS/mod-compat/README/runtime-smoke-test 均已同步 26.x + D7；**poc/mc26-build 已合入 master**（`2fc0f990`）；3.0.0 发布与 master push **待显式批准** |
+
+### 2026-10-12 复核增量
+
+| 任务 | 状态 | 证据 / 剩余工作 |
+|------|------|-----------------|
+| 当前 master 三锚点单测、边界扫描与正式四组合打包 | ✅ 本次复验 | 三锚点各 382 项单测全过；四组合 build 与 zstd-jni 包装检查全过；见 §8 复核记录 |
+| 发布链路 26.x 收尾 | ✅ 本地修复与验证 / CI 待实跑 | master=3.0.0；仓库默认直连、CI 显式 JDK 25、两脚本三锚点；四组合打包/元数据/发布任务图与脚本模拟通过；2.0.0 分支未改；未运行远端 Actions / 未发布 |
+| D7 取消发布后的 NeoForge 26.2/26.3 编译入口 | 待补 | 当前 settings 按 builds_for 排除了模块；需独立编译入口，保持发布/冒烟矩阵不变 |
+| GUI 与适配 skill 同步 | 待完成 | cloth-ui 与工厂未恢复；hassium-manifold 仍为旧七段；不影响本次四组合构建 |
+| 当前 master 运行时冒烟与光照红线验收 | 本次未复验 / 目视仍待完成 | 2026-09-30 的历史 PASS 不等于 ea2e9222 已重新跑过；本次未启动游戏 |
 
 ## 10. 风险与回退
 

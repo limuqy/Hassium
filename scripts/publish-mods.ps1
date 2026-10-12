@@ -9,7 +9,7 @@
 #   $env:CURSEFORGE_TOKEN = "..."; $env:MODRINTH_TOKEN = "..."
 #   .\scripts\publish-mods.ps1
 #   .\scripts\publish-mods.ps1 -DryRun
-#   .\scripts\publish-mods.ps1 -Versions 1.20.1,1.21.1
+#   .\scripts\publish-mods.ps1 -Versions 26.1.2,26.2
 #   .\scripts\publish-mods.ps1 -AnchorsOnly
 #   .\scripts\publish-mods.ps1 -Targets curseforge      # 只推一个平台
 #   .\scripts\publish-mods.ps1 -Force                   # 忽略"已存在"检查
@@ -63,7 +63,7 @@ if ($Targets -contains 'modrinth') {
 }
 
 # 锚点取自 docs/version-segments.md 的「编译锚点」表（段首 + 段尾）
-$AnchorList = @('1.20.1', '1.21.1', '1.21.2', '1.21.5', '1.21.6', '1.21.9', '1.21.11')
+$AnchorList = @('26.1.2', '26.2', '26.3')
 
 $versionList = @()
 if ($Versions) {

@@ -7,14 +7,15 @@
 #   - Gradle 依赖缓存与 loom 的 MC 重映射缓存全程复用，第 N 个版本明显快于冷启动
 #   - 排队只占 1 个 runner 名额
 # 代价是单点失败与 6h job 上限；脚本内部对每个版本记录失败并继续，最后统一退出码。
-# 若单 job 超时，用 versions 输入分两次手动跑（如 1.20.1,1.21.1,1.21.2,1.21.3,1.21.4,1.21.5）。
+# 若单 job 超时，用 versions 输入分批手动跑（如 26.1.2,26.2）。
 #
 # 幂等：scripts/publish-mods.sh 会先查两个平台是否已有对应产物，已存在则不构建、不上传。
 #
 # 手动触发，绝不挂在 push/tag 上——发布是对外动作。
 #
 # 用法：仓库 Actions → Publish (CurseForge + Modrinth) → Run workflow →
-#   - versions：逗号分隔，如 1.20.1,1.21.1；留空=全 12 个
+#   - Branch：master 发布 3.x；旧版本 2.x 发布选择 2.0.0 分支的 workflow
+#   - versions：逗号分隔，如 26.1.2,26.2；留空=本分支全部 versionProperties
 #   - release_type：release / beta / alpha（默认 release）
 #   - dry_run：勾上则只 DryRun（-Pcurseforge_debug/-Pmodrinth_debug，只打印不真传）
 #   - force：勾上则忽略「已存在」检查（Modrinth 会因版本号重复而失败，谨慎）
@@ -29,7 +30,7 @@ on:
   workflow_dispatch:
     inputs:
       versions:
-        description: '逗号分隔的 MC 版本，如 1.20.1,1.21.1；留空=全 12 个'
+        description: '逗号分隔的 MC 版本，如 26.1.2,26.2；留空=全部 26.x 三锚点'
         required: false
         default: ''
       release_type:
@@ -84,13 +85,13 @@ jobs:
             gradle/wrapper/gradle-wrapper.properties
           grep '^distributionUrl' gradle/wrapper/gradle-wrapper.properties
 
-      - name: Set up JDK 21
-        # 全部版本统一 JDK 21：buildSrc 加载 architectury-loom 需 JVM 21（其依赖 unpick 要求 >= 21），
-        # 与源码 release 级别无关——1.20.1 的 java_version=17 由 options.release=17 在 JDK 21 内完成。
+      - name: Set up JDK 25
+        # MC 26.x 与 Gradle daemon 都要求 JDK 25；启动 daemon 前显式供给，
+        # 不依赖缓存或 settings 中 Foojay 的编译 toolchain 下载。
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '21'
+          java-version: '25'
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4

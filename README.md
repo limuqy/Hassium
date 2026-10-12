@@ -51,7 +51,7 @@
 | 26.2 | ✅ | — |
 | 26.3 | ✅ | — |
 
-**NeoForge 测试版本支持已取消**（2026-09-30）：非正式版本下 NeoForge 启动会弹窗警告、挡住自动进服，26.2/26.3 仅发布 Fabric 构建。1.20.1–1.21.11 旧版本线（含 Forge）冻结于 `legacy-1.21` 分支与既有发布。完整三段锚点与编译矩阵见 [`docs/version-segments.md`](docs/version-segments.md)。
+**NeoForge 测试版本支持已取消**（2026-09-30）：非正式版本下 NeoForge 启动会弹窗警告、挡住自动进服，26.2/26.3 仅发布 Fabric 构建。master 发布 **3.x / MC 26.x**；旧版本 BUG 修复与 **2.x** 发布从 `2.0.0` 分支打包，`legacy-1.21` 保留 1.21.11 基线。GitHub Actions 手动发布时在 Branch 选择对应分支，`versions` 仅筛选该分支的 Minecraft 版本。完整三段锚点与编译矩阵见 [`docs/version-segments.md`](docs/version-segments.md)。
 
 ---
 
@@ -168,7 +168,7 @@ flowchart LR
 
 ## 从源码构建
 
-需要 JDK 25（toolchain 自动供给）。
+需要预先安装 JDK 25，供 Gradle daemon 启动使用（CI 已显式安装；编译 toolchain 的 Foojay 下载不能替代 daemon 启动前的 JDK）。本地网络如需代理，将代理设置放在本机 `~/.gradle/gradle.properties`，仓库默认直连。
 
 ```bash
 ./gradlew build

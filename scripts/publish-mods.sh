@@ -10,7 +10,7 @@
 #   export CURSEFORGE_TOKEN=... MODRINTH_TOKEN=...
 #   ./scripts/publish-mods.sh
 #   ./scripts/publish-mods.sh --dry-run
-#   ./scripts/publish-mods.sh --versions 1.20.1,1.21.1
+#   ./scripts/publish-mods.sh --versions 26.1.2,26.2
 #   ./scripts/publish-mods.sh --anchors-only
 #   ./scripts/publish-mods.sh --targets curseforge     # 只推一个平台
 #   ./scripts/publish-mods.sh --force                  # 忽略"已存在"检查
@@ -99,7 +99,7 @@ mapfile -t all_versions < <(find versionProperties -name '*.properties' -printf 
 if [[ -n "$VERSIONS" ]]; then
   IFS=',' read -r -a version_list <<< "$VERSIONS"
 elif [[ "$ANCHORS_ONLY" -eq 1 ]]; then
-  version_list=(1.20.1 1.21.1 1.21.2 1.21.5 1.21.6 1.21.9 1.21.11)
+  version_list=(26.1.2 26.2 26.3)
 else
   version_list=("${all_versions[@]}")
 fi
