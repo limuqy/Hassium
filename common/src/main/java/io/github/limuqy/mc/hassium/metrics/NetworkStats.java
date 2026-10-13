@@ -227,7 +227,7 @@ public class NetworkStats {
 
     /**
      * 应用层原版等价字节（服务端聚合子包等）。
-     * 不含紧凑包头（由 {@link HassiumAggregationPacket} 在 encode 时调用）。
+     * 不含紧凑包头（由 v3 字节编解码器 在 encode 时调用）。
      */
     public static void recordVanillaBytesSent(long bytes) {
         if (!enabled) return;
@@ -236,7 +236,7 @@ public class NetworkStats {
 
     /**
      * 应用层原版等价字节（客户端聚合子包等）。
-     * 不含紧凑包头（由 {@link HassiumAggregationPacket} 在 decode 时调用）。
+     * 不含紧凑包头（由 v3 字节编解码器 在 decode 时调用）。
      */
     public static void recordVanillaBytesReceived(long bytes) {
         if (!enabled) return;

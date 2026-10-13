@@ -1,6 +1,6 @@
 # 运行时冒烟测试（Runtime Smoke Test）
 
-Hassium 26.x 三锚点（26.1.2 / 26.2 / 26.3）× 加载器（fabric 全锚点；NeoForge 仅 26.1.2，D7）的实跑验证流程。在 dev 环境同时启动服务端和客户端，自动连服 → 采集统计 → 断开 → 重连 → 再采集，用于发现编译通过但运行时才暴露的回归（路径错误、Mixin 失效、跨版本 API 漂移、缓存未清理等）。
+Hassium 26.x 三锚点（26.1.2 / 26.2 / 26.3）× Fabric/NeoForge 的实跑验证流程。当前六组合以 `versionProperties/*` 的 `builds_for` 为准。在 dev 环境同时启动服务端和客户端，自动连服 → 采集统计 → 断开 → 重连 → 再采集，用于发现编译通过但运行时才暴露的回归（路径错误、Mixin 失效、跨版本 API 漂移、缓存未清理等）。
 
 ## 覆盖分层
 
@@ -9,17 +9,23 @@ Hassium 26.x 三锚点（26.1.2 / 26.2 / 26.3）× 加载器（fabric 全锚点�
 | 层 | 载体 | 范围 | 说明 |
 |----|------|------|------|
 | **L0** | `common:test` | 随单元测试跑 | JUnit 代码级冒烟，无 MC 实例。代表：`LoginHandshakeTest`（登录期握手编解码/协商）、`ShadowPull*Test`（统一 Compare+Pull 协议族）、`SectionDeltaProtocolTest` |
-| **L1** | classic 场景 | 全矩阵（26.x 三锚点 × 加载器，按 `builds_for` 过滤；26.2/26.3 无 neoforge 自动 SKIP） | 两轮连服 VD 切换（VD=20 → 断开 → VD=10），核心缓存 / 分段增量 / 光照 / 聚合通道全链路验证 |
-| **L2** | 场景目录 | 锚点集：26.1.2 fabric、26.1.2 neoforge、26.2 fabric、26.3 fabric | 数据驱动场景（seedgen / dimension），只在锚点版本×加载器组合上跑，控制总时长 |
+| **L1** | classic 场景 | 全矩阵（26.x 三锚点 × 加载器，按 `builds_for` 过滤） | 两轮连服 VD 切换（VD=20 → 断开 → VD=10），核心缓存 / 分段增量 / 光照 / 聚合通道全链路验证 |
+| **L2** | 场景目录 | 当前六锚点，与 `builds_for` 取交集 | 数据驱动场景（seedgen / dimension / flyroundtrip / dictionary / egress），只在锚点版本×加载器组合上跑 |
 
 ## 概述
 
-- **测试矩阵**：3 个 MC 版本（26.1.2 / 26.2 / 26.3）× 加载器 = 4 个默认会话（26.1.2 fabric+neoforge、26.2 fabric、26.3 fabric；NeoForge 测试版本支持已取消见 D7）。批量脚本读取每版本 `versionProperties/<ver>.properties` 的 `builds_for` 决定是否跳过该 loader。
+- **测试矩阵**：3 个 MC 版本（26.1.2 / 26.2 / 26.3）× 两加载器 = 当前 6 个默认会话。批量脚本读取每版本 `versionProperties/<ver>.properties` 的 `builds_for` 决定是否跳过该 loader。
 - **执行方式**：PowerShell 脚本驱动 Gradle `runServer` / `runClient`，注入 `-Dhassium.smokeTest=true` 等 JVM 属性
 - **场景驱动**：客户端行为由数据驱动的场景引擎执行（`hassium.smokeScenario=<name>` 加载 `.scenario` 文件）；未指定时默认 classic
 - **结构化探针**：每轮统计以 PROBE JSON 落盘（`build/smoke-test/probe/<SessionId>/roundN.json`），harness 门禁优先读探针、缺失回退日志正则
 - **dev 专用**：测试代码（`ClientSmokeTest` / `ServerSmokeTest` / 场景引擎）只在 dev 环境启用，正常生产 jar 不受影响
 - **输出位置**：`build/smoke-test/`（已在 `.gitignore` 范围内）
+
+### 服务端出口 v3 专项
+
+`egress` 注册开发用第三方通道，验证 State/Event 具体类型、注册表值、变长字段、原始 codec 单次调用、Bundle/回调和 512 包逐序执行，并通过第二次连接验证状态重建。`egressbench` 为单轮：固定站桩 warmup 25 秒，再依次空闲、128 个移动实体、密集 Mod payload 各 20 秒；使用 `scripts/smoke/profiles/egressbench.profile.properties` 同时固定两端配置并导出实际原生字节和成功载体。
+
+当前复采回放与指标口径见 [egress-v3.md](egress-v3.md)，结果记录见 [2026-10-13 交接](handoff/handoff-2026-10-13-egress-v3.md)。冒烟期间不要在另一个会话启动任何版本的 Gradle 编译/测试：开发运行类路径会受到共享输出重写影响；需等当前游戏脚本退出，再运行构建或回放任务。
 
 ## 前置条件
 

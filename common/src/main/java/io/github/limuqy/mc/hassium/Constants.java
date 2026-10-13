@@ -8,7 +8,7 @@ public class Constants {
 	public static final String MOD_ID = "hassium";
 	public static final String MOD_NAME = "Hassium";
 	// review-fix: T8-M3: 与 gradle.properties mod_version 同步（握手线/打包版本标识）
-	public static final String MOD_VERSION = "2.0.0";
+	public static final String MOD_VERSION = "3.0.0";
 	public static final Logger LOG = LoggerFactory.getLogger(MOD_NAME);
 
 	/**
@@ -29,7 +29,7 @@ public class Constants {
 	/**
 	 * 当前协议版本
 	 */
-	public static final int CURRENT_PROTOCOL_VERSION = 2;
+	public static final int CURRENT_PROTOCOL_VERSION = 3;
 
 	/**
 	 * 网络自定义通道压缩算法（当前仅实现 ZSTD，不开放配置）

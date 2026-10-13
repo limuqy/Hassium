@@ -74,13 +74,14 @@ if ($Versions) {
 
 # T8 场景锚点集（硬编码）：非 classic 场景只在锚点 (Ver, Loader) 组合上跑，
 # 再与 -Versions / -Loaders / versionProperties builds_for 取交集。
-# 26.x 支持矩阵（2026-09-30 用户决策）：26.2/26.3 仅 fabric——非正式版本下
-# NeoForge 弹窗警告挡自动进服，NeoForge 测试版本支持已取消；26.1.2 双加载器。
+# 当前 versionProperties 三锚点均为双加载器；实际计划仍与 builds_for 取交集。
 $smokeScenarioAnchors = @(
     @{ Ver = "26.1.2"; Loader = "fabric" },
     @{ Ver = "26.1.2"; Loader = "neoforge" },
     @{ Ver = "26.2"; Loader = "fabric" },
-    @{ Ver = "26.3"; Loader = "fabric" }
+    @{ Ver = "26.2"; Loader = "neoforge" },
+    @{ Ver = "26.3"; Loader = "fabric" },
+    @{ Ver = "26.3"; Loader = "neoforge" }
 )
 
 # 预展开场景计划：classic=全矩阵 targetVersions（Loader 空=该版本全部 -Loaders）；

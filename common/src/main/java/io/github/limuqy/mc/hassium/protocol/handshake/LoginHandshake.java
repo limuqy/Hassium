@@ -156,7 +156,8 @@ public final class LoginHandshake {
         first = appendBit(sb, first, caps, LoginCaps.LIGHT_STRIP, "light");
         first = appendBit(sb, first, caps, LoginCaps.SHADOW_PULL, "pull");
         first = appendBit(sb, first, caps, LoginCaps.PULL_MODE, "pull_mode");
-        appendBit(sb, first, caps, LoginCaps.AUTHORITY_NOTIFY, "auth");
+        first = appendBit(sb, first, caps, LoginCaps.AUTHORITY_NOTIFY, "auth");
+        appendBit(sb, first, caps, LoginCaps.EGRESS_V3, "egress_v3");
         return sb.append(']').toString();
     }
 

@@ -30,6 +30,7 @@ public final class HassiumModCompatMixinPlugin implements IMixinConfigPlugin {
     @Override
     public boolean shouldApplyMixin(String targetClassName, String mixinClassName) {
         try {
+            if (mixinClassName.endsWith(".MixinNeoForgePacketSplitter")) return ModCompatFlags.neoForge();
             boolean apply = ModCompatFlags.c2meChunkIoReplaced();
             if (apply) {
                 // 结构信号：mixin 将被应用（与是否发生 RegionFileVersion.wrap 流量无关）。

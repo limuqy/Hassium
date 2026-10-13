@@ -62,8 +62,10 @@ public final class PreHandshakeProtocol {
         if (!LoginHandshake.isProtocolVersionAccepted(payload.protocolVersion(),
                 Constants.CURRENT_PROTOCOL_VERSION)) {
             DebugLogger.warn(LogType.NETWORK,
-                    "[PRE_HANDSHAKE] Rejected protocol version {} (expected 1..{}) from player {}, not marking",
+                    "[PRE_HANDSHAKE] Rejected protocol version {} (expected {}) from player {}, upgrade required",
                     payload.protocolVersion(), Constants.CURRENT_PROTOCOL_VERSION, playerId);
+            if (connection != null) connection.disconnect(net.minecraft.network.chat.Component.literal(
+                    "Hassium: incompatible network protocol. Upgrade Hassium on both client and server to protocol v3."));
             return;
         }
         if (!LoginHandshake.isValidModVersion(payload.modVersion())) {

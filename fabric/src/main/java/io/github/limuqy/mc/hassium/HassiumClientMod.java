@@ -3,7 +3,6 @@ package io.github.limuqy.mc.hassium;
 import io.github.limuqy.mc.hassium.client.ClientLifecycleHelper;
 import io.github.limuqy.mc.hassium.client.ClientSmokeTest;
 import io.github.limuqy.mc.hassium.command.FabricHassiumCommand;
-import io.github.limuqy.mc.hassium.protocol.AggregationDecodeQueue;
 import io.github.limuqy.mc.hassium.client.ClientActivation;
 import io.github.limuqy.mc.hassium.protocol.DictionaryManager;
 import io.github.limuqy.mc.hassium.protocol.PayloadHandlers;
@@ -22,6 +21,10 @@ public class HassiumClientMod implements ClientModInitializer {
     @Override
     public void onInitializeClient() {
         ClientSmokeTest.initIfEnabled();
+        if (io.github.limuqy.mc.hassium.protocol.egress.EgressFixture.enabled()) {
+            ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.protocol.egress.EgressFixture.TYPE,
+                    (payload, context) -> io.github.limuqy.mc.hassium.protocol.egress.EgressFixture.receive(payload));
+        }
 
         // 加载内置区块字典（打包在 mod 中，不需要从服务端传输）
         DictionaryManager.loadChunkDictionary();
@@ -73,7 +76,7 @@ public class HassiumClientMod implements ClientModInitializer {
                         ClientActivation.handleIndexSync(payload.data())));
         // AGGREGATION_S2C 客户端 receiver：聚合帧拆包分发（原版子包重建 + 自定义 payload 回灌）。
         ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricPayloadRegistry.AGGREGATION_S2C_TYPE,
-                (payload, context) -> AggregationDecodeQueue.enqueueClient(payload.data()));
+                (payload, context) -> PayloadHandlers.handleAggregation(payload.data()));
 
         LOGGER.info("Hassium: Fabric client-side initialization complete");
     }

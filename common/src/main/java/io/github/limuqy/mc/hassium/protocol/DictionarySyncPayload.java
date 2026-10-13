@@ -47,18 +47,18 @@ public record DictionarySyncPayload(byte[] dictionary, boolean isChunkDict,
     public static DictionarySyncPayload decode(FriendlyByteBuf buf) {
         boolean isChunkDict = buf.readBoolean();
         int length = buf.readVarInt();
-        if (length > MAX_DICT_SIZE) {
+        if (length < 0 || length > MAX_DICT_SIZE || length > buf.readableBytes()) {
             throw new IllegalArgumentException("Dictionary too large: " + length + " bytes (max " + MAX_DICT_SIZE + ")");
         }
         byte[] dict = new byte[length];
         if (length > 0) {
             buf.readBytes(dict);
         }
-        if (!buf.isReadable()) {
-            return new DictionarySyncPayload(dict, isChunkDict, 0, 0L, false);
-        }
         int epoch = buf.readVarInt();
         long id = buf.readLong();
+        if (epoch < 0 || (length == 0 && (epoch != 0 || id != 0)) || (length > 0 && epoch == 0)) {
+            throw new IllegalArgumentException("Invalid v3 dictionary generation");
+        }
         if (buf.isReadable()) {
             throw new IllegalArgumentException(
                     "DictionarySyncPayload: " + buf.readableBytes() + " trailing bytes after extended fields");

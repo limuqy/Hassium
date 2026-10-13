@@ -9,6 +9,11 @@ import net.minecraft.server.level.ServerPlayer;
  */
 public interface INetworkManagerService {
 
+    /** Construct the registered carrier; the actual bound native codec encodes it on EventLoop. */
+    default net.minecraft.network.protocol.Packet<?> createAggregationCarrier(byte[] data) {
+        throw new UnsupportedOperationException("No aggregation carrier registered");
+    }
+
     /** 发送 shadowPullV1 区块请求到服务端（客户端调用）。 */
     default void sendShadowPullRequest(FriendlyByteBuf buf) {
         if (buf != null && buf.refCnt() > 0) {
@@ -74,13 +79,9 @@ public interface INetworkManagerService {
      */
     default void sendAggregationReady(int dictionaryEpoch, long dictionaryId) {
     }
-
-    /**
-     * 客户端请求字典重同步（C2S；解码到未知 epoch 聚合帧后的恢复动作，客户端节流）。
-     * 载体沿用 {@code aggregation_ready} 的 {@code ready=false} 语义，服务端重发当前激活字典。
-     */
-    default void sendDictionaryResyncRequest() {
+    /** Bind initial readiness to the connection whose byte receiver was installed. */
+    default void sendAggregationReady(net.minecraft.network.Connection connection, int dictionaryEpoch, long dictionaryId) {
+        throw new UnsupportedOperationException("No bound aggregation acknowledgement registered");
     }
 
 }
-

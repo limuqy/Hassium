@@ -7,7 +7,6 @@ import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.protocol.AggregationReadyPayload;
 import io.github.limuqy.mc.hassium.protocol.DictionaryManager;
 import io.github.limuqy.mc.hassium.protocol.DictionarySnapshot;
-import io.github.limuqy.mc.hassium.protocol.HassiumAggregationManager;
 import io.github.limuqy.mc.hassium.protocol.IndexSyncManager;
 import io.github.limuqy.mc.hassium.protocol.PayloadHandlers;
 import io.github.limuqy.mc.hassium.protocol.PreHandshakePayload;
@@ -45,6 +44,19 @@ import java.util.UUID;
  * {@link INetworkManagerService} 实现（common {@code Services.NETWORK_MANAGER} 消费）。
  */
 public class FabricNetworkManager implements INetworkManagerService {
+
+    @Override
+    public net.minecraft.network.protocol.Packet<?> createAggregationCarrier(byte[] data) {
+        return new net.minecraft.network.protocol.common.ClientboundCustomPayloadPacket(
+                FabricPayloadRegistry.createPayload(FabricPayloadRegistry.AGGREGATION_S2C_TYPE, data));
+    }
+    @Override
+    public void sendAggregationReady(net.minecraft.network.Connection connection, int epoch, long id) {
+        FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+        new AggregationReadyPayload(true, epoch, id).encode(buf);
+        connection.send(new net.minecraft.network.protocol.common.ServerboundCustomPayloadPacket(
+                FabricPayloadRegistry.toPayload(FabricPayloadRegistry.AGGREGATION_READY_C2S_TYPE, buf)));
+    }
 
     private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/Network");
 
@@ -98,17 +110,6 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
         LOGGER.debug("Hassium: Registering Fabric network channels");
         FabricPayloadRegistry.registerAll();
         registerServerChannels();
-
-        // 设置聚合包发送器
-        HassiumAggregationManager.setSender((connection, buf) -> {
-            if (connection.getPacketListener() instanceof net.minecraft.server.network.ServerGamePacketListenerImpl handler) {
-                ServerPlayer player = handler.getPlayer();
-                ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.AGGREGATION_S2C_TYPE, buf));
-            } else {
-                LOGGER.error("Cannot send aggregation packet: connection has no player");
-                buf.release();
-            }
-        });
 
         // 设置字典推送回调（携带版本化快照；接收端幂等安装 + 回 ACK）
         DictionaryManager.setPushCallback((snapshot) -> {
@@ -240,23 +241,6 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
                     dictionaryEpoch, dictionaryId);
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to send aggregation ready ACK", e);
-        }
-    }
-
-    /**
-     * SPI：客户端请求字典重同步（解码到未知 epoch 帧的恢复动作；C2S）。
-     * 载体 = {@link AggregationReadyPayload} ready=false，服务端转调
-     * {@code ServerHandshakeActivation.handleDictionaryResync}（重发当前激活字典）。
-     */
-    @Override
-    public void sendDictionaryResyncRequest() {
-        try {
-            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-            new AggregationReadyPayload(false).encode(buf);
-            ClientPlayNetworking.send(FabricPayloadRegistry.toPayload(FabricPayloadRegistry.AGGREGATION_READY_C2S_TYPE, buf));
-            DebugLogger.debug(LogType.NETWORK, "Hassium: Sent dictionary resync request");
-        } catch (Exception e) {
-            LOGGER.error("Hassium: Failed to send dictionary resync request", e);
         }
     }
 

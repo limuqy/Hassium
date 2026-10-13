@@ -13,6 +13,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * 登录期能力握手线格式 L0 单测（编解码纯函数；无 MC 实例依赖）。
  */
 class LoginHandshakeTest {
+    @Test
+    void v3RequiresMatchingVersionAndPairedEgressCapabilities() {
+        assertFalse(LoginHandshake.isProtocolVersionAccepted(2, io.github.limuqy.mc.hassium.Constants.CURRENT_PROTOCOL_VERSION));
+        assertTrue(LoginHandshake.isProtocolVersionAccepted(3, io.github.limuqy.mc.hassium.Constants.CURRENT_PROTOCOL_VERSION));
+        assertEquals(0, LoginCaps.negotiate(LoginCaps.AGGREGATION, LoginCaps.AGGREGATION | LoginCaps.EGRESS_V3));
+        assertEquals(0, LoginCaps.negotiate(LoginCaps.EGRESS_V3, LoginCaps.AGGREGATION | LoginCaps.EGRESS_V3));
+        assertEquals(LoginCaps.AGGREGATION | LoginCaps.EGRESS_V3,
+                LoginCaps.negotiate(LoginCaps.AGGREGATION | LoginCaps.EGRESS_V3, LoginCaps.AGGREGATION | LoginCaps.EGRESS_V3));
+    }
 
     @Test
     void helloAnswerRoundTrips() {

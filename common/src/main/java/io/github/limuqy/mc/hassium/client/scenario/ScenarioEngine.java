@@ -830,6 +830,7 @@ public final class ScenarioEngine {
         io.github.limuqy.mc.hassium.shadow.light.SmokeChunkTrace.Snapshot trace =
                 io.github.limuqy.mc.hassium.shadow.light.SmokeChunkTrace.snapshot(dim);
         return switch (key) {
+            case "egress.fixtureReceived" -> (long)io.github.limuqy.mc.hassium.protocol.egress.EgressFixture.receivedCount();
             case "flight.anchorUnloaded" -> flightAnchorUnloaded && flightAnchorAbsent ? 1L : 0L;
             case "flight.anchorReturned" -> flightAnchorReturned ? 1L : 0L;
             case "flight.anchorPresent" -> flightAnchorPresent(mc) ? 1L : 0L;
