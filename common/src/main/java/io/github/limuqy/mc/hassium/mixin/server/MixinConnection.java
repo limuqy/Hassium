@@ -50,6 +50,10 @@ public class MixinConnection {
             return;
         }
         if (!PacketTypeHelper.isAggregationPacket(packet)) {
+            if (packet instanceof net.minecraft.network.protocol.BundlePacket
+                    && AggregationDecodeQueue.enqueueBundle((Connection) (Object) this, packet)) {
+                ci.cancel();
+            }
             return;
         }
         byte[] data = PacketPayloadCompat.extractPayloadData(packet);
@@ -122,6 +126,9 @@ public class MixinConnection {
         if (!(packetListener instanceof ServerGamePacketListenerImpl)) {
             return;
         }
+        if (HassiumAggregationManager.isSendingDirect()) {
+            return;
+        }
 
         // debug.exportAggregatedPackets：导出点在握手/聚合/黑名单 gating 之前，
         // 单人/LAN 集成服的本机 memory 连接（不握手、不聚合）同样导出
@@ -136,14 +143,14 @@ public class MixinConnection {
         if (PacketTypeHelper.isAggregationPacket(packet)) {
             return;
         }
-        // Bundle 包直发：1.21.1+ play codec 表只注册 bundle_delimiter，bundle 本身
-        // 无法经 IdDispatchCodec 序列化（EncoderException "Sending unknown packet"）；
-        // vanilla 靠管线层 PacketBundlePacker 拆包，而本 mixin 在 Connection.send 层
-        // 拦截，bundle 到不了 packer。若不排除，takeOver 序列化失败后 ci.cancel()
-        // 已执行 → 包被静默丢弃（实体出生包组 ServerEntity.addPairing 走此路径，
-        // 症状 = 聚合激活后实体不可见）。1.20.1 侧 getVanillaIdentifier 对 bundle
-        // 返回 null 本就直发，此处排除使两段行为一致。
+        // Bundle 保留原版编码，进入同一发送 FIFO；不能把 bundle 本体序列化进聚合帧。
+        // flush 在 bundle 前发出先行聚合帧，客户端也经同一工人提交主线程任务。
         if (packet instanceof net.minecraft.network.protocol.BundlePacket) {
+            if (!hasSendListener && HassiumConnectionRegistry.isActive(self)
+                    && HassiumConfigService.getInstance().isPacketAggregationEnabled()
+                    && HassiumAggregationManager.takeOverBundle(packet, self)) {
+                ci.cancel();
+            }
             return;
         }
 

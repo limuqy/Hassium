@@ -19,7 +19,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 public final class ShadowWorldgenExecutor {
 
     private static final Object LOCK = new Object();
-    private static volatile ExecutorService pool;
+    private static final java.util.Map<Integer, ExecutorService> POOLS = new java.util.HashMap<>();
 
     private ShadowWorldgenExecutor() {}
 
@@ -36,10 +36,16 @@ public final class ShadowWorldgenExecutor {
     }
 
     public static ExecutorService service() {
+        return service(io.github.limuqy.mc.hassium.server.RuntimeServerContext.getShadowGeneration());
+    }
+
+    public static ExecutorService service(int generation) {
         synchronized (LOCK) {
+            ExecutorService pool = POOLS.get(generation);
             if (pool == null || pool.isShutdown()) {
                 int workers = workerCount(Runtime.getRuntime().availableProcessors());
                 pool = createPool(workers);
+                POOLS.put(generation, pool);
                 Constants.LOG.info("Hassium: Shadow worldgen executor isolated (workers={})", workers);
             }
             return pool;
@@ -48,12 +54,15 @@ public final class ShadowWorldgenExecutor {
 
     /** 完整关停后释放；park 复用不得调用。 */
     public static void shutdown() {
+        shutdown(io.github.limuqy.mc.hassium.server.RuntimeServerContext.getShadowGeneration());
+    }
+
+    public static void shutdown(int generation) {
+        ExecutorService current;
         synchronized (LOCK) {
-            ExecutorService current = pool;
-            pool = null;
-            if (current == null) {
-                return;
-            }
+            current = POOLS.remove(generation);
+        }
+        if (current != null) {
             current.shutdown();
             boolean terminated;
             try {
@@ -70,8 +79,14 @@ public final class ShadowWorldgenExecutor {
 
     /** 池已关或尚未创建：影子主循环不得再 tick ChunkMap.save。 */
     public static boolean isTerminated() {
-        ExecutorService current = pool;
-        return current == null || current.isShutdown() || current.isTerminated();
+        return isTerminated(io.github.limuqy.mc.hassium.server.RuntimeServerContext.getShadowGeneration());
+    }
+
+    public static boolean isTerminated(int generation) {
+        synchronized (LOCK) {
+            ExecutorService current = POOLS.get(generation);
+            return current == null || current.isShutdown() || current.isTerminated();
+        }
     }
 
     private static ExecutorService createPool(int workers) {

@@ -246,7 +246,8 @@ public final class HassiumClothConfigScreen {
                             chunkApplyLogging, networkLogging, cacheLogging,
                             lightVerify, lightLogging, metricsEnabled, metricsAutoReset,
                             // SERVER 键：本屏只编辑客户端字段，服务端导出开关原样保留
-                            baseDebug.exportAggregatedPackets()));
+                            baseDebug.exportAggregatedPackets()),
+                    base.serverSeedGenEnabled());
         }
     }
 }

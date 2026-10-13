@@ -16,7 +16,8 @@ public record HassiumConfig(
         ChunkCoreConfig chunk,
         MasterCoreConfig master,
         CompatConfig compat,
-        DebugConfig debug
+        DebugConfig debug,
+        boolean serverSeedGenEnabled
 ) {
     public static final HassiumConfig DEFAULT = new HassiumConfig(
             StorageConfig.DEFAULT,
@@ -27,7 +28,12 @@ public record HassiumConfig(
     );
 
     public HassiumConfig withDebug(DebugConfig debug) {
-        return new HassiumConfig(storage, chunk, master, compat, debug);
+        return new HassiumConfig(storage, chunk, master, compat, debug, serverSeedGenEnabled);
+    }
+
+    public HassiumConfig(StorageConfig storage, ChunkCoreConfig chunk, MasterCoreConfig master,
+                         CompatConfig compat, DebugConfig debug) {
+        this(storage, chunk, master, compat, debug, chunk.seedGenEnabled());
     }
 
     /**

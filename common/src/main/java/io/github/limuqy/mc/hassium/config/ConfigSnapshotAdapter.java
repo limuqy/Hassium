@@ -94,7 +94,7 @@ public final class ConfigSnapshotAdapter {
                 .with(ConfigSchema.MASTER_ENTITY_MAX_THROTTLE_FACTOR, master.entityMaxThrottleFactor())
                 .with(ConfigSchema.MASTER_ENTITY_FRAME_BUDGET_PER_PLAYER, master.entityFrameBudgetPerPlayer())
                 .with(ConfigSchema.MASTER_ENTITY_SMOOTH_PUSH, master.entitySmoothPushEnabled())
-                .with(ConfigSchema.SERVER_CHUNK_SEED_GEN_ENABLED, chunk.seedGenEnabled());
+                .with(ConfigSchema.SERVER_CHUNK_SEED_GEN_ENABLED, config.serverSeedGenEnabled());
 
         HassiumConfig.CompatConfig compat = config.compat();
         values = values.with(ConfigSchema.COMPAT_REQUIRE_CLIENT_MOD, compat.requireClientMod())
@@ -163,7 +163,7 @@ public final class ConfigSnapshotAdapter {
                 values.get(ConfigSchema.SERVER_DEBUG_EXPORT_AGGREGATED_PACKETS));
         return new HassiumConfig(new HassiumConfig.StorageConfig(
                 values.get(ConfigSchema.STORAGE_ENABLED), values.get(ConfigSchema.STORAGE_ZSTD_LEVEL)),
-                chunk, master, compat, debug);
+                chunk, master, compat, debug, values.get(ConfigSchema.SERVER_CHUNK_SEED_GEN_ENABLED));
     }
     private static boolean debugValue(ConfigValues values, boolean physicalClient,
                                        ConfigKey<Boolean> clientKey, ConfigKey<Boolean> serverKey) {

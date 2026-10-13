@@ -21,6 +21,9 @@ public interface RegionFileAccessor {
     @Invoker("getOffset")
     int invokeGetOffset(ChunkPos pos);
 
+    @Invoker("getExternalChunkPath")
+    Path invokeGetExternalChunkPath(ChunkPos pos);
+
     @Accessor("file")
     FileChannel getFileChannel();
 

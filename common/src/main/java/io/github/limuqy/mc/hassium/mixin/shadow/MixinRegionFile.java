@@ -63,6 +63,9 @@ public abstract class MixinRegionFile {
     @Unique
     private boolean hassium$serverTypeResolved = false;
 
+    @Unique
+    private byte hassium$writingCompressionType;
+
     /** 影子上下文：本 RegionFile 的 region 目录归属的存储管理器（懒解析一次，见 hassium$shadowStorage）。 */
     @Unique
     @Nullable
@@ -157,11 +160,7 @@ public abstract class MixinRegionFile {
 
     @Inject(method = "getChunkDataInputStream", at = @At("HEAD"), cancellable = true)
     private void hassium$onGetChunkDataInputStream(ChunkPos pos, CallbackInfoReturnable<DataInputStream> cir) {
-        HassiumConfigService configService = HassiumConfigService.getInstance();
         boolean shadow = io.github.limuqy.mc.hassium.server.RuntimeServerContext.isShadowServerContext();
-        if (!configService.isStorageEnabled() && !shadow) {
-            return;
-        }
 
         try {
             DataInputStream result = hassium$tryReadHassiumChunk(pos);
@@ -247,6 +246,19 @@ public abstract class MixinRegionFile {
         hassium$adoptShadowSector(mgr, pos, buffer);
         // 单写者：禁止 RegionFile 自身落盘（与 Image.save 互斥）。
         ci.cancel();
+    }
+
+    /** Capture after HEAD compatibility patches, immediately before the external stub is built. */
+    @Inject(method = "write", at = @At(value = "INVOKE",
+            target = "Lnet/minecraft/world/level/chunk/storage/RegionFile;createExternalStub()Ljava/nio/ByteBuffer;"))
+    private void hassium$captureExternalCompressionType(ChunkPos pos, ByteBuffer buffer, CallbackInfo ci) {
+        hassium$writingCompressionType = buffer.get(4);
+    }
+
+    /** RegionFile.write is synchronized; its external stub must describe the supplied payload. */
+    @Inject(method = "createExternalStub", at = @At("RETURN"))
+    private void hassium$preserveExternalCompressionType(CallbackInfoReturnable<ByteBuffer> cir) {
+        cir.getReturnValue().put(4, (byte) (hassium$writingCompressionType | 128));
     }
 
     /**
@@ -478,23 +490,33 @@ public abstract class MixinRegionFile {
         int length = headerBuf.getInt();
         byte compressionType = headerBuf.get();
 
-        if (compressionType != HASSIUM_COMPRESSION_TYPE) {
+        boolean external = (compressionType & 128) != 0;
+        if (!external && (compressionType & 127) != HASSIUM_COMPRESSION_TYPE) {
             return null;
         }
 
-        if (length <= 1) {
+        if (length <= 1 && !external) {
             return null;
         }
 
-        int dataLength = length - 1;
-        ByteBuffer dataBuf = ByteBuffer.allocate(dataLength);
-        synchronized (channel) {
-            channel.read(dataBuf, fileOffset + 5);
+        byte[] rawData;
+        if (external) {
+            rawData = java.nio.file.Files.readAllBytes(hassium$self().invokeGetExternalChunkPath(pos));
+            // Older oversized writes mislabeled Hassium payloads with RegionFile's vanilla version.
+            if ((compressionType & 127) != HASSIUM_COMPRESSION_TYPE
+                    && !HassiumType126Codec.hasZstdFrame(rawData)) {
+                return null;
+            }
+        } else {
+            int dataLength = length - 1;
+            ByteBuffer dataBuf = ByteBuffer.allocate(dataLength);
+            synchronized (channel) {
+                channel.read(dataBuf, fileOffset + 5);
+            }
+            dataBuf.flip();
+            rawData = new byte[dataBuf.remaining()];
+            dataBuf.get(rawData);
         }
-        dataBuf.flip();
-
-        byte[] rawData = new byte[dataBuf.remaining()];
-        dataBuf.get(rawData);
 
         byte[] decompressed;
         try {

@@ -44,7 +44,7 @@ public class HassiumAggregationPacket {
     /** 解压后原始数据上限，与 {@code ZstdContextDecoder} 对齐 8MB，防恶意帧解压 OOM（review-fix: T13-C1） */
     private static final int MAXIMUM_UNCOMPRESSED_LENGTH = 8 * 1024 * 1024;
     /** 子包数量上限：每子包至少 2 字节（标识 + 长度 VarInt），且硬上限 4096（review-fix: T13-C1） */
-    private static final int MAXIMUM_PACKET_COUNT = 4096;
+    public static final int MAXIMUM_PACKET_COUNT = 4096;
 
     private final List<AggregatedSubPacket> subPackets;
     private final NamespaceIndexManager indexManager;

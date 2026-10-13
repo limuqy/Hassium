@@ -21,6 +21,36 @@ import static org.junit.jupiter.api.Assertions.*;
  */
 class DictionaryRolloutTest {
 
+    @Test
+    void activationReceiptForActiveDictionaryReoffersCandidateToLateJoiner() throws Exception {
+        DictionaryManager.resetServerSession();
+        setStatic("serverSide", true);
+        var active = snapshot(1, "active");
+        var candidate = snapshot(2, "candidate");
+        setStatic("activeAggregation", active);
+        setStatic("lastTrained", candidate);
+        setStatic("pendingOffer", candidate);
+        Connection newcomer = newConnection();
+        java.util.List<DictionarySnapshot> pushed = new java.util.ArrayList<>();
+        DictionaryManager.setPushCallback(pushed::add);
+        try {
+            HassiumConnectionRegistry.markPending(newcomer);
+            HassiumConnectionRegistry.markEpochAware(newcomer);
+            var receipt = io.github.limuqy.mc.hassium.server.ServerHandshakeActivation.class
+                    .getDeclaredMethod("acknowledgeDictionary", Connection.class, DictionaryManager.AckKind.class,
+                            int.class, long.class);
+            receipt.setAccessible(true);
+            receipt.invoke(null, newcomer, DictionaryManager.AckKind.ACTIVE, active.epoch(), active.id());
+            assertEquals(java.util.List.of(candidate), pushed);
+            HassiumConnectionRegistry.markEnabled(newcomer);
+            DictionaryManager.onDictionaryAck(newcomer, candidate.epoch(), candidate.id());
+            assertSame(candidate, DictionaryManager.getActiveSnapshot());
+        } finally {
+            HassiumConnectionRegistry.markDisabled(newcomer);
+            DictionaryManager.setPushCallback(null);
+        }
+    }
+
     @AfterEach
     void resetSession() {
         DictionaryManager.resetServerSession();

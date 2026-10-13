@@ -503,6 +503,7 @@ if ($WarmRepeat) {
 Remove-Item -Recurse -Force (Join-Path $clientRunDir "crash-reports") -ErrorAction SilentlyContinue
 # 服务端 crash-reports 同步清理（日志审计门禁以「会话内非空」为失败信号，历史残留会误报）
 Remove-Item -Recurse -Force (Join-Path $serverRunDir "crash-reports") -ErrorAction SilentlyContinue
+New-Item -ItemType Directory -Force -Path $serverRunDir | Out-Null
 Set-Content -Path (Join-Path $serverRunDir "eula.txt") -Value "eula=true" -NoNewline -Encoding utf8NoBOM
 $pinnedClientRd = [Math]::Max($ClientRenderDistance, $Vd1)
 Set-SmokeClientRenderDistance -ClientRunDir $clientRunDir -RenderDistance $pinnedClientRd -SessionTag $SessionId

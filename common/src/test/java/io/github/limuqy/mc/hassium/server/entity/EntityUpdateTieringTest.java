@@ -9,6 +9,15 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class EntityUpdateTieringTest {
 
+    @org.junit.jupiter.api.Test
+    void forcedSyncIsPreservedWhenPeriodicUpdatesAreExempt() {
+        org.junit.jupiter.api.Assertions.assertTrue(EntityUpdateTiering.gateImpulse(true, true, Integer.MAX_VALUE));
+        org.junit.jupiter.api.Assertions.assertTrue(EntityUpdateTiering.gateImpulse(true, true, 0));
+        org.junit.jupiter.api.Assertions.assertTrue(EntityUpdateTiering.gateImpulse(true, false, 3));
+        org.junit.jupiter.api.Assertions.assertFalse(EntityUpdateTiering.gateImpulse(true, true, 3));
+        org.junit.jupiter.api.Assertions.assertFalse(EntityUpdateTiering.gateImpulse(false, true, Integer.MAX_VALUE));
+    }
+
     @Test
     @DisplayName("合法四档间隔原样保留（已非降序、未越界）")
     void parseKeepsLegalIntervals() {

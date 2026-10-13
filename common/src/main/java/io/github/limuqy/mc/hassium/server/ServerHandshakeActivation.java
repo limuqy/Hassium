@@ -215,9 +215,7 @@ public final class ServerHandshakeActivation {
         }
         if (READY_HANDLED.putIfAbsent(player.getUUID(), Boolean.TRUE) != null) {
             // 后续 ready 只剩热更字典 ACK 语义（rollout 计数）
-            if (kind == DictionaryManager.AckKind.OFFER) {
-                DictionaryManager.onDictionaryAck(connection, dictEpoch, dictId);
-            }
+            acknowledgeDictionary(connection, kind, dictEpoch, dictId);
             return;
         }
         if (kind == DictionaryManager.AckKind.NONE && dictInfoPresent) {
@@ -231,11 +229,8 @@ public final class ServerHandshakeActivation {
             DictionaryManager.onConnectionActivated(connection);
             return;
         }
-        if (kind == DictionaryManager.AckKind.OFFER) {
-            // 客户端在 offer 窗口内入服、装的是候选版：照常计 rollout ACK（可能当场触发切换），
-            // 也照常 ENABLE——切换前冲出的缓冲帧是激活版，客户端保留历史可解
-            DictionaryManager.onDictionaryAck(connection, dictEpoch, dictId);
-        }
+        // ACTIVE receipts must reach rollout too: a late joiner still needs the pending offer.
+        acknowledgeDictionary(connection, kind, dictEpoch, dictId);
         HassiumConnectionRegistry.markEnabled(connection);
         HassiumAggregationManager.flushConnectionSync(connection);
         Constants.LOG.info("Hassium: Aggregation enabled for {} (activation ready{})",
@@ -252,6 +247,12 @@ public final class ServerHandshakeActivation {
      * 保留窗口（每轮 flip 都要求该连接 ACK 过），缺失只可能来自激活期同步丢失/损坏——
      * 重同步当前版即为完整恢复，无需回原版协议（review P2 恢复策略）。
      */
+    static void acknowledgeDictionary(Connection connection, DictionaryManager.AckKind kind, int epoch, long id) {
+        if (kind != DictionaryManager.AckKind.NONE) {
+            DictionaryManager.onDictionaryAck(connection, epoch, id);
+        }
+    }
+
     public static void handleDictionaryResync(ServerPlayer player) {
         int caps = ACTIVE_CAPS.getOrDefault(player.getUUID(), 0);
         if (!LoginCaps.has(caps, LoginCaps.AGGREGATION)) {

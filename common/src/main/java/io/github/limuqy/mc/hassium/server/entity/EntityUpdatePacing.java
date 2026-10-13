@@ -240,8 +240,8 @@ public final class EntityUpdatePacing {
      * {@code ServerEntity.sendChanges()} 门条件中 {@code entity.hasImpulse} 的替换值。
      * 受控实体不再享有「冲量强制发包」特权，其发包节拍完全由 {@link #effectiveInterval} 决定。
      */
-    public static boolean gateImpulse(Entity entity, boolean original) {
-        return original && !eligible(entity, snapshot);
+    public static boolean gateImpulse(Entity entity, boolean original, int vanillaInterval) {
+        return EntityUpdateTiering.gateImpulse(original, eligible(entity, snapshot), vanillaInterval);
     }
 
     /** 服务器停止时清理（避免 level / connection 引用随会话累积）。 */
