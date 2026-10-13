@@ -175,6 +175,12 @@ public class ShadowSeedServer extends MinecraftServer {
                 || ShadowServerRegistry.getInstance().isPreviousShutdownComplete();
     }
 
+    private final int shadowGeneration = io.github.limuqy.mc.hassium.server.RuntimeServerContext.getShadowGeneration();
+
+    public int shadowGeneration() {
+        return shadowGeneration;
+    }
+
     private ShadowSeedServer(Thread thread,
                              LevelStorageSource.LevelStorageAccess access,
                              PackRepository repo,
@@ -2177,7 +2183,7 @@ public class ShadowSeedServer extends MinecraftServer {
     void runMainLoop() {
         long loopCount = 0;
         while (!Thread.currentThread().isInterrupted()) {
-            if (ShadowWorldgenExecutor.isTerminated()) {
+            if (ShadowWorldgenExecutor.isTerminated(shadowGeneration)) {
                 break;
             }
             loopCount++;

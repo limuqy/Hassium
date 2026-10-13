@@ -128,7 +128,7 @@ public final class SeedGenLevelCompat {
         long t0Ns = System.nanoTime(); // T0b 诊断：装配各阶段耗时
         // 影子上下文须在 WorldLoader.load 之前置位：ReloadableServerResources.listeners()
         // Mixin 据此跳过 recipe/advancement/function/loot（保留 TagManager）。
-        io.github.limuqy.mc.hassium.server.RuntimeServerContext.setShadowServer(true);
+        int assemblyGeneration = io.github.limuqy.mc.hassium.server.RuntimeServerContext.beginShadowServer();
         // 影子端世界根 = 客户端缓存目录下原版存档结构（hassium_cache/<serverId>/world）。
         // 断连保存、重连复用，不删除（不再兼容旧 HBT1 客户端缓存格式，数据不迁移）。
         Path worldRoot = resolveShadowWorldRoot();
@@ -204,12 +204,12 @@ public final class SeedGenLevelCompat {
         } catch (Exception e) {
             // 装配失败：复位影子标志（代际由本轮 setShadowServer(true) 递增）后回收资源
             try {
-                int gen = io.github.limuqy.mc.hassium.server.RuntimeServerContext.getShadowGeneration();
+                int gen = assemblyGeneration;
                 io.github.limuqy.mc.hassium.server.RuntimeServerContext.clearShadowServerIfCurrentGeneration(gen);
             } catch (Throwable ignored) {
             }
             Constants.LOG.error("Hassium: Failed to create shadow seed server", e);
-            ShadowWorldgenExecutor.shutdown();
+            ShadowWorldgenExecutor.shutdown(assemblyGeneration);
             closeQuietly(stem, access);
             if (e instanceof IOException ioe) {
                 throw ioe;
@@ -548,7 +548,7 @@ public final class SeedGenLevelCompat {
         // true 并递增代际），末尾不得复位全局标志/清空桥表——否则误清新会话的存储
         // 格式门控（原版 zlib 混入 126 文件）与 hash/热度内存态。
         int shadowGeneration =
-                io.github.limuqy.mc.hassium.server.RuntimeServerContext.getShadowGeneration();
+                server.shadowGeneration();
         // 本端进入关停保存：写 gate 对本端放行（上次关停已在 saver 前置等待完成，
         // 本端写盘与任何其他端无并发）。
         server.beginShutdownSave();
@@ -608,7 +608,7 @@ public final class SeedGenLevelCompat {
             Constants.LOG.warn("Hassium: Shadow seed server halt failed", e);
         }
         try {
-            ShadowWorldgenExecutor.shutdown();
+            ShadowWorldgenExecutor.shutdown(shadowGeneration);
         } catch (Exception e) {
             Constants.LOG.warn("Hassium: Shadow worldgen executor shutdown failed", e);
         }
@@ -657,15 +657,12 @@ public final class SeedGenLevelCompat {
         // 与 NeoForge expectServerStopped 对齐：槽仍指向本影子实例时清空；
         // 不覆盖集成服/专用服真服。放在代际复位之外——新会话接管前旧槽必须让出。
         io.github.limuqy.mc.hassium.compat.ServerLifecycleHooksCompat.releaseCurrentServer(server);
-        if (io.github.limuqy.mc.hassium.server.RuntimeServerContext
-                .getShadowGeneration() == shadowGeneration) {
-            io.github.limuqy.mc.hassium.server.RuntimeServerContext
-                    .clearShadowServerIfCurrentGeneration(shadowGeneration);
+        io.github.limuqy.mc.hassium.server.RuntimeServerContext.finishShadowServer(shadowGeneration, () -> {
             io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes.clear();
             io.github.limuqy.mc.hassium.protocol.sectiondelta.SectionDeltaSnapshots.clear();
             // 热度索引内存态清空（磁盘 heat.idx 已随 saveAll 落盘，重连装配时重新加载）
             ShadowCacheEviction.reset();
-        }
+        });
     }
 
     private static void closeQuietly(WorldStem stem, LevelStorageSource.LevelStorageAccess access) {

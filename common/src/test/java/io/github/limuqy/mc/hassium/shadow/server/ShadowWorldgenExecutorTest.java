@@ -11,6 +11,22 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ShadowWorldgenExecutorTest {
 
     @Test
+    void oldShutdownDoesNotStopNewGenerationTasks() throws Exception {
+        var old = ShadowWorldgenExecutor.service(-101);
+        var current = ShadowWorldgenExecutor.service(-102);
+        try {
+            org.junit.jupiter.api.Assertions.assertNotSame(old, current);
+            ShadowWorldgenExecutor.shutdown(-101);
+            assertTrue(old.isShutdown());
+            assertFalse(ShadowWorldgenExecutor.isTerminated(-102));
+            assertEquals(42, current.submit(() -> 42).get(3, java.util.concurrent.TimeUnit.SECONDS));
+        } finally {
+            ShadowWorldgenExecutor.shutdown(-101);
+            ShadowWorldgenExecutor.shutdown(-102);
+        }
+    }
+
+    @Test
     @DisplayName("只有影子上下文才隔离执行器")
     void isolatesOnlyInShadowContext() {
         assertTrue(ShadowWorldgenExecutor.shouldIsolate(true));

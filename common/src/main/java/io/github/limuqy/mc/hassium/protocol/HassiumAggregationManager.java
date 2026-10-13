@@ -66,12 +66,36 @@ public class HassiumAggregationManager {
      * {@code bytes}/{@code count} 与 {@code packets} 在同一把锁内维护，二者恒一致。
      */
     private static final class ConnBuffer {
-        final List<AggregatedSubPacket> packets = new ArrayList<>();
+        final List<Object> packets = new ArrayList<>();
         long bytes;
         int count;
     }
 
     private static final ConcurrentHashMap<Connection, ConnBuffer> PACKET_BUFFER = new ConcurrentHashMap<>();
+    private static final ThreadLocal<Boolean> DIRECT_SEND = ThreadLocal.withInitial(() -> false);
+
+    public static boolean isSendingDirect() {
+        return DIRECT_SEND.get();
+    }
+
+    /** Keep unserializable bundles in the same FIFO, including during PENDING. */
+    public static boolean takeOverBundle(Packet<?> packet, Connection connection) {
+        ConnBuffer buffer = PACKET_BUFFER.computeIfAbsent(connection, k -> new ConnBuffer());
+        synchronized (buffer.packets) {
+            if (buffer.count >= MAX_PENDING_BUFFER_ENTRIES) {
+                Constants.LOG.warn("Aggregation bundle buffer overflow: dropping {} entries and degrading to direct send",
+                        buffer.count);
+                buffer.packets.clear();
+                buffer.bytes = 0;
+                buffer.count = 0;
+                HassiumConnectionRegistry.markDisabled(connection);
+                return false;
+            }
+            buffer.packets.add(packet);
+            buffer.count++;
+        }
+        return true;
+    }
     private static final ScheduledExecutorService TIMER = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "Hassium-Flush-thread");
         t.setDaemon(true);
@@ -281,7 +305,7 @@ public class HassiumAggregationManager {
 
     private static void flushInternal(Connection connection, ConnBuffer buffer) {
         try {
-            if (buffer == null || buffer.packets.isEmpty()) {
+            if (buffer == null || buffer.packets.isEmpty() || HassiumConnectionRegistry.isPending(connection)) {
                 return;
             }
             if (!connection.isConnected()) {
@@ -298,40 +322,48 @@ public class HassiumAggregationManager {
             }
 
             // 复制并清空缓冲区
-            List<AggregatedSubPacket> sendPackets = new ArrayList<>(buffer.packets);
+            List<Object> sendPackets = new ArrayList<>(buffer.packets);
             buffer.packets.clear();
             buffer.bytes = 0;
             buffer.count = 0;
 
-            // 检查聚合大小限制，超过则分批发送
-            long totalSize = 0;
-            for (AggregatedSubPacket sp : sendPackets) {
-                totalSize += sp.getData().length;
-            }
-            if (totalSize > maxAggregationSize) {
-                Constants.LOG.warn("Aggregation buffer exceeds max size ({} > {} bytes), splitting",
-                        totalSize, maxAggregationSize);
-                List<AggregatedSubPacket> batch = new ArrayList<>();
-                long batchSize = 0;
-                for (AggregatedSubPacket sp : sendPackets) {
-                    if (batchSize + sp.getData().length > maxAggregationSize && !batch.isEmpty()) {
+            List<AggregatedSubPacket> batch = new ArrayList<>();
+            long batchSize = 0;
+            for (Object entry : sendPackets) {
+                if (entry instanceof Packet<?> direct) {
+                    if (!batch.isEmpty()) {
                         flushBatch(connection, batch);
                         batch = new ArrayList<>();
                         batchSize = 0;
                     }
-                    batch.add(sp);
-                    batchSize += sp.getData().length;
+                    DIRECT_SEND.set(true);
+                    try {
+                        connection.send(direct);
+                    } finally {
+                        DIRECT_SEND.remove();
+                    }
+                    continue;
                 }
-                if (!batch.isEmpty()) {
+                AggregatedSubPacket sp = (AggregatedSubPacket) entry;
+                if (shouldSplitBatch(batch.size(), batchSize, sp.getData().length, maxAggregationSize)) {
                     flushBatch(connection, batch);
+                    batch = new ArrayList<>();
+                    batchSize = 0;
                 }
-                return;
+                batch.add(sp);
+                batchSize += sp.getData().length;
             }
-
-            flushBatch(connection, sendPackets);
+            if (!batch.isEmpty()) {
+                flushBatch(connection, batch);
+            }
         } catch (Exception e) {
             Constants.LOG.error("Failed to flush aggregation buffer", e);
         }
+    }
+
+    static boolean shouldSplitBatch(int count, long bytes, int nextBytes, int maxBytes) {
+        return count > 0 && (count >= HassiumAggregationPacket.MAXIMUM_PACKET_COUNT
+                || bytes + nextBytes > maxBytes);
     }
 
     private static void flushBatch(Connection connection, List<AggregatedSubPacket> batch) {

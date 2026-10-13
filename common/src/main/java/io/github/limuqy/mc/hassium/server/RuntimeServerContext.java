@@ -56,7 +56,7 @@ public final class RuntimeServerContext {
      * 影子端固定使用 Hassium 压缩存储（type 126 + chunkHash 落盘），不受
      * {@code storage.enabled} / 服务器类型门控约束。
      * <p>
-     * 置 true 时递增代际（新影子端接管）；置 false 不递增（仅复位）。
+     * 同一实例的幂等置位；新实例装配必须先调用 beginShadowServer 分配代际。
      */
     public static void setShadowServer(boolean shadow) {
         synchronized (RuntimeServerContext.class) {
@@ -69,6 +69,22 @@ public final class RuntimeServerContext {
                 shadowServer = false;
             }
         }
+    }
+
+    /** Called once per new instance, before WorldLoader and MinecraftServer construction. */
+    public static synchronized int beginShadowServer() {
+        shadowServer = true;
+        return ++shadowGeneration;
+    }
+
+    /** Keep the generation check and shared-state cleanup atomic with the next assembly. */
+    public static synchronized boolean finishShadowServer(int generation, Runnable cleanup) {
+        if (shadowGeneration != generation) {
+            return false;
+        }
+        cleanup.run();
+        shadowServer = false;
+        return true;
     }
 
     /** @return 当前影子端代际（每次影子端 initServer 置 true 时递增） */

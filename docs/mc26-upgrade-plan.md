@@ -262,6 +262,32 @@ archive/pre-baseline = 当前 HEAD 的引用（1.20.1–1.21.10 完整历史后�
 - 35 项 analyzer 测试、PowerShell 辅助门禁与脚本语法检查通过；运行时结果及复验 session 见 §9。此专项不代替移动屋檐/洞口目视验收，不改变 D1–D7。
 - 最终 `gatefix4_20261012` 批次：**classic 4/4、flyroundtrip 4/4、dimension 4/4 PASS**，有效场次均 Attempts=1；NeoForge 26.2/26.3 按 D7 SKIP。12 场致命日志与看门狗转储均为 0；28 轮原始探针、往返真实卸载/回填与最终距离、四轮切维以及退出后的三维度 region 快照独立复核通过。汇总：`build/smoke-test/smoke-summary-26x-fixed-2026-10-12.csv`；完整批次：`batch-results-R-gatefix4_20261012.csv`。三锚点单测各 382 项通过，历史失败完整保留。
 
+### 2026-10-13 代码 BUG 审查（检查阶段记录，修复见下）
+
+- 基线：`master`@`babb6087` 加现有工作区配置；默认 `mc_ver=26.2`，工作区已恢复 26.2/26.3 的 `builds_for=fabric,neoforge`。本次保留这些既有改动，不以编译结果替代支持矩阵或发布决策。业务源码未修改。
+- 验证：26.1.2 / 26.2 / 26.3 的 `common:test --rerun` 各 **382 tests / 0 failures / 0 errors / 0 skipped**；三锚点 Fabric + NeoForge `compileJava` 均成功；26.2 `scanVersionBoundaries` 通过。代码审查阶段未运行游戏冒烟；后续 NeoForge 补验见本节下一小节。原有光照目视验收状态不变。
+- 隔离复现：`build/bug-audit-20261013/BugAudit.java` 与 `audit.init.gradle`（本地构建目录，不入库）在 26.2 上复现配置合并、影子代际、共享池关停及超大区块格式错误四项底层机制；仅使用临时 region 文件，没有访问游戏存档。命令：`.\gradlew.bat common:bugAudit "-Pmc_ver=26.2" -I build/bug-audit-20261013/audit.init.gradle`。其余发现由当前源码与 minecraft-dev 原版源码调用链核实，未声称完成游戏内复现。
+
+| 编号 | 优先级 | 定位与触发条件 | 影响 / 修复关注点 |
+|------|--------|----------------|------------------|
+| A01 | P1 | `MixinRegionFile.hassium$onGetChunkDataInputStream`：曾写 type 126 后关闭 `storage.enabled`，或用单人模式打开该世界 | 读取也被配置/专用服门挡住；原版不识别 126，旧柱不可读并可能重生成覆盖。格式读取兼容须独立于新格式写开关 |
+| A02 | P1 | `MixinRegionFile.hassium$writeHassiumPayload`：压缩后槽超过 255 扇区，仍委托原版 `RegionFile.write` | 原版 external stub 使用 `this.version`，写出 type 130，而 `.mcc` 内容仍为 126 载荷；隔离复现读取报 `incorrect header check` |
+| A03 | P1 | `ConfigSnapshotAdapter.fromMerged/seedGenValue`：LAN 网络面开，client seedGen=true、server seedGen=false | 合并丢弃服务器种子开关；`isSeedGenEnabled` 消费客户端值，握手仍可发送真实种子。需分别保存客户端/服务端开关 |
+| A04 | P1 | `MixinConnection.hassium$tryAggregate`：聚合连接收到新玩家信息包后，出生 Bundle 直接发送 | Bundle 可越过已缓冲的 PlayerInfo，客户端缺 PlayerInfo 时拒建玩家实体；需要保持聚合与直发包的应用顺序，单独 flush 仍须考虑客户端异步解码 |
+| A05 | P1 | `RuntimeServerContext.setShadowServer`：旧端关停未结束，新端在有界等待后创建 | true→true 不增加 generation，旧端仍可清除新端存储 gate、hash 与增量/热度状态；隔离复现新旧 generation 相同 |
+| A06 | P1 | `SeedGenLevelCompat.shutdown`：与 A05 相同的生命周期交叠 | 旧端无条件关闭静态 `ShadowWorldgenExecutor`；新端已复用该池，随后停止主循环/拒收光照任务。代际修复不能单独解决此项 |
+| A07 | P2 | `HassiumAggregationManager.flushInternal`：同一批超过 4096 个小包，但未超字节阈值 | 发送端只按字节拆批，接收端拒绝 >4096 子包整帧；原包已取消发送，更新丢失 |
+| A08 | P2 | `EntityUpdatePacing.gateImpulse`：26.3 NEVER 周期实体只变位置，没有 metadata dirty（如 `/data merge` 移动末地水晶） | `needsSync` 被吞，周期门也恒 false，客户端位置持续陈旧；豁免周期降帧的实体应保留强制同步 |
+| A09 | P2 | `ServerHandshakeActivation.handleActivationReady`：候选字典 offer 发出后新玩家入服，只 ACK active 字典 | ACTIVE ACK 未转交 `onDictionaryAck` 的候选补发分支；新连接进入等待集合却收不到候选，本轮热更超时且无自动重试 |
+
+### 2026-10-13 九项 BUG 修复：2.0.4 → 3.0.0
+
+- 用户要求先修 `2.0.0` 并更新小版本，再移植到 master。2.x 从 `c589088a` 起修复 A01–A09，版本改为 **2.0.4**，提交 `cb23e2ea`；master 保持 **3.0.0** 并移植同一修复，26.3 的 NEVER 周期另按对象型 UpdateInterval 适配。
+- 关键行为：读旧 126 不随写开关关闭；external stub 跟随实际载荷类型（兼容旧错误标记）；LAN SeedGen 两端值分离；Bundle 发送与客户端应用均有序；影子端代际/执行器按实例隔离；聚合拆批遵守 4096 子包上限；豁免实体保留强制同步；ACTIVE ACK 能补发热更候选。
+- 新增 **11 项回归测试**。2.x 七锚点共 18 加载器组合编译与边界扫描通过，单测 1.20.1 为 **394**、其余六锚点各 **387**；3.x 三锚点各 **394** 单测、六组合编译与边界扫描通过。失败、错误、跳过均为 0。2.0.4 的 1.21.1 三加载器、3.0.0 的 26.3 双加载器打包与内嵌 zstd-jni 检查通过。
+- 运行时 classic 双轮连服/断连/重连：2.x Fabric 1.21.1、Forge 1.20.1 PASS；3.x Fabric 26.3、NeoForge 26.3 PASS，最后的 Bundle 异步冲刷收尾代码在 Fabric 26.3 再跑双轮 PASS。2.x 冷启动脚本的运行目录创建顺序已补齐，首轮 EULA 准备失败结果保留。
+- 详细测试范围与 session 见 [九项修复交接](handoff/handoff-2026-10-13-nine-bugfixes.md)。本次未推送/发布，光照目视验收状态不变。
+
 ### 2026-10-13 NeoForge 26.2/26.3 冒烟补验
 
 - 按用户请求使用当前工作区配置补跑 26.2/26.3 NeoForge 的 classic、flyroundtrip、dimension；工作区原有 `builds_for=fabric,neoforge` 与加载器版本 26.2.0.90 / 26.3.0.76 均保留。
@@ -321,6 +347,18 @@ archive/pre-baseline = 当前 HEAD 的引用（1.20.1–1.21.10 完整历史后�
 | NeoForge 26.2/26.3 冒烟失败修复与重跑 | ✅ 修复完成，最终 6/6 PASS | Perflib 格式、警告页、失焦暂停及额外发现的注册表同步竞争已修；三锚点各 383 项测试/六组合编译/边界扫描、35 项 Python 测试和 PowerShell 辅助测试通过。`fix2_20261013` 六场一次通过，14 探针已核验；日志错误/看门狗转储全 0，客户端退出码全 0；26.2 退出缺类未复现。原失败证据保留，具体 session 与指标见 §8 |
 | GUI 与适配 skill 同步 | 待完成 | cloth-ui 与工厂未恢复；hassium-manifold 仍为旧七段；不影响本次四组合构建 |
 | 当前 master 工作区运行时冒烟与光照红线验收 | ✅ 三场景冒烟复验 / 目视仍待完成 | 本轮修复后 D7 四组合 × classic/flyroundtrip/dimension 12/12 PASS；早前适配复核未启动游戏的状态已补验。移动屋檐/洞口目视验收仍未完成，冒烟 PASS 不替代该项 |
+
+### 2026-10-13 审查增量
+
+| 任务 | 状态 | 证据 / 剩余工作 |
+|------|------|-----------------|
+| 当前工作区代码 BUG 检查 | ✅ 本轮检查完成 / 9 项待修复 | §8 A01–A09：6 项 P1、3 项 P2；4 项底层机制已隔离复现。三锚点各 382 项单测实际重跑通过，当前配置的六组合编译及边界扫描通过；未修改业务源码。代码审查阶段未运行游戏冒烟，后续 NeoForge 补验见上方记录 |
+
+### 2026-10-13 修复增量
+
+| 任务 | 状态 | 证据 / 剩余工作 |
+|------|------|-----------------|
+| A01–A09 修复与两版本线验证 | ✅ 2.0.4 修复 / 3.0.0 移植完成 | 2.x 提交 `cb23e2ea`；11 项新增回归，七旧锚点 + 三 26.x 锚点单测与编译通过；classic 双轮运行时通过，最终 session 见九项修复交接。未推送/发布，移动屋檐/洞口目视状态不变 |
 
 ## 10. 风险与回退
 

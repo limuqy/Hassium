@@ -46,10 +46,20 @@ public abstract class MixinServerEntity {
     @Redirect(method = "sendChanges", at = @At(value = "FIELD",
             target = "Lnet/minecraft/world/entity/Entity;needsSync:Z", opcode = Opcodes.GETFIELD, ordinal = 0))
     private boolean hassium$gateImpulse(Entity owner) {
-        return EntityUpdatePacing.gateImpulse(owner, owner.needsSync);
+        return EntityUpdatePacing.gateImpulse(owner, owner.needsSync, hassium$vanillaInterval());
     }
 
 #if MC_VER >= MC_26_3
+    @Shadow
+    @Final
+    private net.minecraft.world.entity.UpdateInterval updateInterval;
+
+    @org.spongepowered.asm.mixin.Unique
+    private int hassium$vanillaInterval() {
+        return updateInterval == net.minecraft.world.entity.UpdateInterval.NEVER
+                ? Integer.MAX_VALUE : Math.max(1, updateInterval.nextInterval(0));
+    }
+
     /**
      * 26.3 门条件 {@code updateInterval.test(this.tickCount)}：单点替换。
      * NEVER 保持永不周期发；periodic(N) 经 {@code nextInterval(0)} 还原原版周期 N 作引擎下限。
@@ -67,6 +77,11 @@ public abstract class MixinServerEntity {
     @Shadow
     @Final
     private int updateInterval;
+
+    @org.spongepowered.asm.mixin.Unique
+    private int hassium$vanillaInterval() {
+        return updateInterval;
+    }
 
     @Shadow
     private int tickCount;

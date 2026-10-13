@@ -16,6 +16,11 @@ public final class EntityUpdateTiering {
     /** 降帧间隔上限（tick）：2 秒一发是降帧的收益底线，再稀会让远处实体看起来卡死。 */
     public static final int MAX_INTERVAL = 40;
 
+    /** Only suppress forced updates when periodic replication is actually paced. */
+    public static boolean gateImpulse(boolean original, boolean eligible, int vanillaInterval) {
+        return original && (!eligible || vanillaInterval <= 0 || vanillaInterval > MAX_INTERVAL);
+    }
+
     /** 各档位在有效跟踪范围中的比例上界；ratio 落入哪段就取哪一档。 */
     public static final double[] TIER_FRACTIONS = {0.25, 0.5, 0.75, 1.0};
 

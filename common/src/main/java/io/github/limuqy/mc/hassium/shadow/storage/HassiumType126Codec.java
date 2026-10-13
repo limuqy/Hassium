@@ -108,6 +108,14 @@ public final class HassiumType126Codec {
         return raw;
     }
 
+    /** Recognize legacy external payloads without attempting to decode genuine vanilla streams. */
+    public static boolean hasZstdFrame(byte[] payload) {
+        int offset = probeHash(payload) == null ? 0 : 1 + HASH_LENGTH;
+        return payload != null && payload.length >= offset + 4
+                && (payload[offset] & 255) == 0x28 && (payload[offset + 1] & 255) == 0xB5
+                && (payload[offset + 2] & 255) == 0x2F && (payload[offset + 3] & 255) == 0xFD;
+    }
+
     /**
      * 解压原版 Anvil 槽 type 之后的载荷（C2ME wrap 未接管时的 zlib/gzip/none）。
      * 供影子单写者把外部 IO 写入重编码为 type 126。

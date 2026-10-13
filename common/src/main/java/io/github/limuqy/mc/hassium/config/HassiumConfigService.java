@@ -352,7 +352,7 @@ public class HassiumConfigService {
 
     /** 是否启用 SeedGen（服务端开启下发世界种子；客户端门控开时影子 tracking 触发 vanilla worldgen 本地生成，再 compare-pull；默认关）。 */
     public boolean isSeedGenEnabled() {
-        return config.chunk().seedGenEnabled();
+        return config.serverSeedGenEnabled();
     }
 
     /** 客户端是否启用 SeedGen（上报握手能力 + 本地生成开关；默认关）。 */
