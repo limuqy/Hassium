@@ -262,6 +262,31 @@ archive/pre-baseline = 当前 HEAD 的引用（1.20.1–1.21.10 完整历史后�
 - 35 项 analyzer 测试、PowerShell 辅助门禁与脚本语法检查通过；运行时结果及复验 session 见 §9。此专项不代替移动屋檐/洞口目视验收，不改变 D1–D7。
 - 最终 `gatefix4_20261012` 批次：**classic 4/4、flyroundtrip 4/4、dimension 4/4 PASS**，有效场次均 Attempts=1；NeoForge 26.2/26.3 按 D7 SKIP。12 场致命日志与看门狗转储均为 0；28 轮原始探针、往返真实卸载/回填与最终距离、四轮切维以及退出后的三维度 region 快照独立复核通过。汇总：`build/smoke-test/smoke-summary-26x-fixed-2026-10-12.csv`；完整批次：`batch-results-R-gatefix4_20261012.csv`。三锚点单测各 382 项通过，历史失败完整保留。
 
+### 2026-10-13 NeoForge 26.2/26.3 冒烟补验
+
+- 按用户请求使用当前工作区配置补跑 26.2/26.3 NeoForge 的 classic、flyroundtrip、dimension；工作区原有 `builds_for=fabric,neoforge` 与加载器版本 26.2.0.90 / 26.3.0.76 均保留。
+- classic：26.2 在 `JOIN_WAIT` 120 秒超时；26.3 两轮统计与 `ServerSwitched` 通过，但日志审计因 OSHI `Perflib 009` 错误判 FAIL。
+- flyroundtrip：两版都启动并进入 outbound 步骤，但 `MOVE_CRUISE_START` 与 `MOVE_END` 的玩家方块 x/z 坐标相同，`flight.anchorUnloaded=0`，未完成实际离开/返回门禁。
+- dimension：两版四轮探针与 post-exit 三维 region 门禁均通过（overworld/nether/end = 10/12/10）。26.2 退出时因 `ReflectionCompat`、`EntityPacketCounters` 的 `NoClassDefFoundError` 崩溃；26.3 客户端退出码 0，但日志审计仍被两条 `Perflib 009` 错误判 FAIL。六场整体结果均为 FAIL，session 与结果文件见 §9。
+- 首轮仅记录运行证据；后续修复与复验见下节。
+
+### 2026-10-13 NeoForge 冒烟失败修复
+
+- Perflib：原白名单仅匹配 Fabric 的 `(HkeyPerformanceDataUtil)`；补充 NeoForge 缩写/完整 logger 格式，仍要求 `main/ERROR` 和同一条 `Perflib 009` 正文。FATAL、其它线程、其它 logger 和其它注册表错误的负例均保留。
+- 自动进服与飞行：仅在所选 loader 的开发 `run/client` 目录固定 `showLoadWarnings = false`（NeoForge）与 `pauseOnLostFocus:false`。NeoForge 仍记录加载警告；失焦不会再打开暂停菜单并使 `IN_GAME` 按键失效。首次修复复验 `26.2_neoforge_I_flyrt_fix1_20261013` 已实测飞出 39 chunk、锚点卸载/回填、返回距离 1 chunk、回黑 0。
+- 额外实测修复：`26.3_neoforge_I_nf_fix1_20261013` 的 R2 出现 `Registry is already frozen`，NeoForge `RegistryManager.applySnapshot` 正在重排 ID 时，提前启动的影子 WorldLoader 冻结了共享注册表。新增平台能力 `supportsShadowPreloadDuringLogin`，NeoForge 返回 false；影子装配延至现有 Play `onLogin` 入口。Fabric 保留预载，未新增锁、未削弱光照/卸载/日志门禁。该失败日志与原六场失败均保留。
+- 26.2 首轮 dimension 退出缺类：日志显示运行时使用 `neoforge/build/26_2/classes/java/main`；同时间其它构建正在切换锚点，事后该目录的目标类确实缺失。并发输出改写是当前证据支持的原因；本轮串行六场及 26.2 dimension 退出均未复现，类加载异常仍受日志门禁检查。
+- 验证：三锚点各 383 项 `common:test`、双 loader 编译与 `scanVersionBoundaries` 通过；35 项 Python 门禁测试、PowerShell 配置/日志辅助门禁回归通过。最终六场均一次执行 PASS，客户端退出码全 0、日志审计失败/看门狗转储全 0；14 份原始探针已交叉核验，经典重连无补救重试。汇总见 `build/smoke-test/neoforge-fix2-20261013.csv` / `.json`，各场日志、结果和探针按下表 session 保留。
+
+| 版本 | 场景 | 结果 | 核心证据 | Session ID |
+|------|------|------|----------|------------|
+| 26.2 | classic | PASS | R1/R2 通过，VD 20→10 | `26.2_neoforge_I_classic_fix2_20261013` |
+| 26.2 | flyroundtrip | PASS | 最远 41 chunk，返回距离 0；卸载/回填/存在均 true，回黑 0 | `26.2_neoforge_I_flyrt_fix2_20261013` |
+| 26.2 | dimension | PASS | OW→Nether→End→OW 四轮通过；三维 region 数 10/12/10，正常退出 | `26.2_neoforge_I_dimension_fix2_20261013` |
+| 26.3 | classic | PASS | R1/R2 通过，VD 20→10，注册表同步错误未复现 | `26.3_neoforge_I_classic_fix2_20261013` |
+| 26.3 | flyroundtrip | PASS | 最远 40 chunk，返回距离 1；卸载/回填/存在均 true，回黑 0 | `26.3_neoforge_I_flyrt_fix2_20261013` |
+| 26.3 | dimension | PASS | OW→Nether→End→OW 四轮通过；三维 region 数 10/8/10 | `26.3_neoforge_I_dimension_fix2_20261013` |
+
 ## 9. 进度表（滚动更新，收工必更）
 
 | 阶段 | 任务 | 状态 | 会话备注 |
@@ -291,7 +316,9 @@ archive/pre-baseline = 当前 HEAD 的引用（1.20.1–1.21.10 完整历史后�
 | 26.x 冒烟门禁修复与三场景复验 | ✅ 修复与复验完成 | 待保存集合主循环串行化、增量复制换节及门禁修复；最终 `gatefix4_20261012` classic/flyroundtrip/dimension 各 4/4 PASS，全部一次执行，致命日志/看门狗转储 0；三锚点各 382 项单测、35 项 Python 门禁测试、PowerShell 辅助测试与 28 轮原始探针复核通过。汇总见 §8；历史 gatefix/gatefix2/gatefix3 失败保留；移动屋檐/洞口目视仍待完成 |
 | 当前 master 三锚点单测、边界扫描与正式四组合打包 | ✅ 本次复验 | 三锚点各 382 项单测全过；四组合 build 与 zstd-jni 包装检查全过；见 §8 复核记录 |
 | 发布链路 26.x 收尾 | ✅ 本地修复与验证 / CI 待实跑 | master=3.0.0；仓库默认直连、CI 显式 JDK 25、两脚本三锚点；四组合打包/元数据/发布任务图与脚本模拟通过；2.0.0 分支未改；未运行远端 Actions / 未发布 |
-| D7 取消发布后的 NeoForge 26.2/26.3 编译入口 | 待补 | 当前 settings 按 builds_for 排除了模块；需独立编译入口，保持发布/冒烟矩阵不变 |
+| NeoForge 26.2/26.3 当前工作区运行入口 | ⚠ 已重开并运行 | 当前用户工作区 `builds_for=fabric,neoforge`；加载器为 26.2.0.90 / 26.3.0.76，`runServer` / `runClient` 均启动。D7 决策记录仍见 §1；本次冒烟结论见下行 |
+| 用户请求补跑 NeoForge 26.2/26.3 × classic/flyroundtrip/dimension（首轮） | ⚠ 6 场完成，0 场整体 PASS | 2026-10-13：26.2 classic join timeout；26.3 classic 两轮与切服通过、被 Perflib 门禁挡下；两版 flight 均未移动且未卸载锚点；两版 dimension 的 4 轮探针和三维 region 门通过，26.2 退出 CNFE、26.3 仅 Perflib FAIL。结果 JSON / 日志按 session ID 保存在 `build/smoke-test/{results,logs}`：`26.2_neoforge_I_nf_20261013`、`26.3_neoforge_I_nf_20261013`、`26.2_neoforge_I_flyrt_20261013`、`26.3_neoforge_I_flyrt_20261013`、`26.2_neoforge_I_dimension_20261013`、`26.3_neoforge_I_dimension_20261013` |
+| NeoForge 26.2/26.3 冒烟失败修复与重跑 | ✅ 修复完成，最终 6/6 PASS | Perflib 格式、警告页、失焦暂停及额外发现的注册表同步竞争已修；三锚点各 383 项测试/六组合编译/边界扫描、35 项 Python 测试和 PowerShell 辅助测试通过。`fix2_20261013` 六场一次通过，14 探针已核验；日志错误/看门狗转储全 0，客户端退出码全 0；26.2 退出缺类未复现。原失败证据保留，具体 session 与指标见 §8 |
 | GUI 与适配 skill 同步 | 待完成 | cloth-ui 与工厂未恢复；hassium-manifold 仍为旧七段；不影响本次四组合构建 |
 | 当前 master 工作区运行时冒烟与光照红线验收 | ✅ 三场景冒烟复验 / 目视仍待完成 | 本轮修复后 D7 四组合 × classic/flyroundtrip/dimension 12/12 PASS；早前适配复核未启动游戏的状态已补验。移动屋檐/洞口目视验收仍未完成，冒烟 PASS 不替代该项 |
 

@@ -148,7 +148,7 @@ public final class ClientLifecycleHelper {
     }
 
     /**
-     * 配置开启即装配影子端（与握手/login 并行）。
+     * 配置开启即装配影子端（加载器允许时与握手/login 并行；NeoForge 等 Play 登录）。
      * <p>
      * 触发点：{@link io.github.limuqy.mc.hassium.mixin.client.MixinConnectScreen} /
      * {@link #onLogin()} / play_init。幂等；无 gameDir/serverIp 时跳过（调用方稍后重试）。
@@ -160,6 +160,7 @@ public final class ClientLifecycleHelper {
     /**
      * {@code ConnectScreen.startConnecting} TAIL：ensure 执行器并投机 WorldLoader。
      * SeedGen 开着时不在连服瞬间装配（seed=0 会随后重建，重叠无收益）。
+     * NeoForge 配置期会重排静态注册表，必须等 onLogin 再装配。
      */
     public static void onStartConnecting(net.minecraft.client.multiplayer.ServerData serverData) {
         connectInFlight = true;
@@ -170,11 +171,17 @@ public final class ClientLifecycleHelper {
         }
         HassiumTaskExecutor.ensureClient();
         recordCacheLocationForConnect(serverData);
-        if (HassiumConfigService.getInstance().isClientSeedGenEnabled()) {
+        if (!shouldPreloadShadow(HassiumConfigService.getInstance().isClientSeedGenEnabled(),
+                io.github.limuqy.mc.hassium.platform.Services.PLATFORM.supportsShadowPreloadDuringLogin())) {
             io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.onCacheLocationReady();
             return;
         }
         startShadowIfConfigured(serverData);
+    }
+
+    /** 配置阶段启动门；Play 的 onLogin 仍会启动/复用影子端。 */
+    static boolean shouldPreloadShadow(boolean seedGenEnabled, boolean platformAllowsPreload) {
+        return !seedGenEnabled && platformAllowsPreload;
     }
 
     /**

@@ -39,6 +39,13 @@ public class NeoForgePlatformHelper implements IPlatformHelper {
         return FMLLoader.getCurrent().getDist().isClient();
     }
 
+    @Override
+    public boolean supportsShadowPreloadDuringLogin() {
+        // RegistryManager.applySnapshot 会 unfreeze/重排/freeze BuiltInRegistries。
+        // 与 WorldLoader 并行会出现 registerIdMapping: Registry is already frozen。
+        return false;
+    }
+
     /**
      * 把 NeoForge mod 数据包挂进影子 PackRepository（与原版 Server 同源逻辑：
      * {@code ResourcePackLoader.populatePackRepository}）。

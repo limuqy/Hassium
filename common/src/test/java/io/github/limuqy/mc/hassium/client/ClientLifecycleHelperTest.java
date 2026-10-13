@@ -11,6 +11,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ClientLifecycleHelperTest {
 
     @Test
+    void registrySyncPlatformsWaitForPlayBeforeLoadingShadowWorld() {
+        assertFalse(ClientLifecycleHelper.shouldPreloadShadow(false, false));
+        assertFalse(ClientLifecycleHelper.shouldPreloadShadow(true, false));
+        assertFalse(ClientLifecycleHelper.shouldPreloadShadow(true, true));
+        assertTrue(ClientLifecycleHelper.shouldPreloadShadow(false, true));
+    }
+
+    @Test
     void titleScreenConnectIsNotAnActiveSession() {
         assertFalse(ClientLifecycleHelper.hasActiveClientSession(false, false, false));
     }

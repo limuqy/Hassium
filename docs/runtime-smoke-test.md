@@ -339,7 +339,11 @@ PASS ⇔ HasPass && !HasFail && exit==0 && analyzer 门禁全过
 
 **dimension 磁盘门禁（post-exit）**：客户端退出后按本场 probe 的 `disk.worldDir` 定位并验证路径位于当前加载器的 `hassium_cache` 内，采样 `dimensions/minecraft/{overworld,the_nether,the_end}/region` 的 `.mca` 数。`PostExitDisk` 保存 sessionId、worldDir 与三维计数，analyzer 要求快照属于本场且各维 ≥1；缺快照/缺文件均 FAIL，失败代码写入 `DimensionGateFailures`。Java 的 16 项四轮切维断言之外，analyzer 也复核 round1–4 的 joined、维度、loaded/applied >64。遗留：同坐标文件内容是否被覆写的深度比对仍未覆盖。
 
-**日志与退出门禁（2026-10-12）**：仅精确豁免 OSHI 启动采集系统信息时的 `[main/ERROR] (HkeyPerformanceDataUtil) Unable to locate English counter names in registry Perflib 009. Counters may need to be rebuilt:`；其它 ERROR/FATAL 仍判失败。看门狗看到 Minecraft 的 `Stopping!` 后留 12 秒有界退出宽限，超过宽限仍静默则恢复取证；关闭辅助线程是 daemon，不再独占 JVM 存活期。batch 启动重试前保存 `attempts/<sessionId>/attemptN/` 的原始日志和结果，最终存在 FAIL 时返回退出码 2。
+**日志与退出门禁（2026-10-13）**：仅精确豁免 OSHI 启动采集系统信息时的 `[main/ERROR] (HkeyPerformanceDataUtil) Unable to locate English counter names in registry Perflib 009. Counters may need to be rebuilt:`；兼容 NeoForge 的 `[os.dr.wi.re.HkeyPerformanceDataUtil/]:` 与完整包名日志格式，线程、级别和错误正文均严格匹配，其它 ERROR/FATAL 仍判失败。看门狗看到 Minecraft 的 `Stopping!` 后留 12 秒有界退出宽限，超过宽限仍静默则恢复取证；关闭辅助线程是 daemon，不再独占 JVM 存活期。batch 启动重试前保存 `attempts/<sessionId>/attemptN/` 的原始日志和结果，最终存在 FAIL 时返回退出码 2。
+
+**无人值守客户端配置**：harness 在所选 loader 的 `run/client` 开发目录中固定 `options.txt` 的 `pauseOnLostFocus:false`，避免失焦暂停菜单使 NeoForge 的 `IN_GAME` 按键上下文失效；NeoForge 同时固定 `config/neoforge-client.toml` 的 `showLoadWarnings = false`，让 Quick Play 无需手动跳过加载警告页。上游仍将加载警告写入日志，加载错误与崩溃门禁保持生效。这些设置与冒烟视距一起保留在开发运行目录中，不修改发行包或其它游戏实例。
+
+**NeoForge 影子启动时序**：`supportsShadowPreloadDuringLogin=false`，配置期注册表同步完成后，由 Play `onLogin` 启动影子 WorldLoader。否则重连时提前创建影子世界会与 `RegistryManager.applySnapshot` 竞争，触发 `Registry is already frozen`；此错误必须判 FAIL，不能靠场景补救重连或日志豁免通过。2026-10-13 两版六场复验记录见 [`mc26-upgrade-plan.md`](mc26-upgrade-plan.md) §8。
 
 ### classic 场景会话判定
 

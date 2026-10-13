@@ -430,6 +430,8 @@ New-Item -ItemType Directory -Force -Path $serverRunDir -ErrorAction SilentlyCon
 Set-Content -Path (Join-Path $serverRunDir "eula.txt") -Value "eula=true" -NoNewline -Encoding utf8NoBOM
 $pinnedClientRd = [Math]::Max($ClientRenderDistance, $Vd1)
 Set-SmokeClientRenderDistance -ClientRunDir $clientRunDir -RenderDistance $pinnedClientRd -SessionTag $SessionId
+Set-SmokeClientAutomationSettings -ClientRunDir $clientRunDir -Loader $Loader
+Write-Host "[$SessionId] pinned smoke automation: pauseOnLostFocus=false; NeoForge loading warnings remain in logs"
 # 2. 配置服务端（view-distance 由 ServerSmokeTest 控制，这里设基础值）
 Write-Host "[$SessionId] [2/9] 配置服务端 ($Loader/run/server/)..."
 New-Item -ItemType Directory -Force -Path $serverRunDir -ErrorAction SilentlyContinue | Out-Null

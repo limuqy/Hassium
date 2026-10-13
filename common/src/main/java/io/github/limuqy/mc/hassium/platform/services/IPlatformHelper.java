@@ -51,6 +51,14 @@ public interface IPlatformHelper {
     Path getConfigDirectory();
 
     /**
+     * 是否允许配置阶段与影子 WorldLoader 并行。会重排静态注册表 ID 的加载器
+     * 必须返回 false，改由 Play 登录入口启动影子，避免 WorldLoader 冻结正在同步的注册表。
+     */
+    default boolean supportsShadowPreloadDuringLogin() {
+        return true;
+    }
+
+    /**
      * 把加载器 mod 数据包挂进影子端 {@code PackRepository}（SERVER_DATA）。
      * <p>
      * 影子 {@code ServerPacksSource} 默认只有原版服务端包；自定义维度（TF/AoA 等）
