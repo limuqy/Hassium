@@ -126,16 +126,12 @@ public final class PayloadHandlers {
         try {
             DictionarySyncPayload payload = DictionarySyncPayload.decode(buf);
             byte[] dict = payload.dictionary();
-            if (payload.hasDictionaryInfo() && payload.dictionaryId() != 0) {
+            if (dict.length != 0) {
                 long actual = DictionarySnapshot.hash(dict);
                 if (actual != payload.dictionaryId()) {
-                    LOGGER.error("Hassium: Dictionary sync content hash mismatch (id={}, actual={}, {} bytes); refusing install",
-                            payload.dictionaryId(), actual, dict.length);
-                    return;
+                    throw new IllegalArgumentException("Hassium v3 dictionary content hash mismatch");
                 }
             }
-            // 尾部扩展字段是否存在 = 服务端是否 epoch 感知（DICT 帧头写 epoch 的判定依据）
-            DictionaryManager.markServerEpochAware(payload.hasDictionaryInfo());
             DictionaryManager.installAggregationSnapshot(
                     DictionarySnapshot.of(payload.dictionaryEpoch(), dict));
             LOGGER.debug("Hassium: Received aggregation dictionary ({} bytes, epoch={}, id={}, extended={})",
@@ -148,16 +144,15 @@ public final class PayloadHandlers {
             }
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to handle dictionary sync", e);
+            var connection = Minecraft.getInstance().getConnection();
+            if (connection != null) connection.getConnection().disconnect(net.minecraft.network.chat.Component.literal(
+                    "Hassium egress v3: invalid dictionary sync; reconnect required."));
         } finally {
             buf.release();
         }
     }
 
-    /**
-     * aggregation_s2c：聚合帧拆包分发（原版子包重建 + 自定义 payload 回灌）。
-     * 捕获 {@link Throwable}：review-fix T13-C1（decode 校验抛
-     * IllegalArgumentException/Error 均须收敛，防 OOM 后链路悬挂）。
-     */
+    /** A carrier reaching the object receiver indicates a missing v3 byte pipeline. */
     public static void handleAggregation(byte[] data) {
         var clientConn = Minecraft.getInstance().getConnection();
         if (clientConn == null) {
@@ -167,43 +162,12 @@ public final class PayloadHandlers {
         handleAggregation(data, clientConn.getConnection());
     }
 
-    /**
-     * 工人/任意线程：解压拆包后对子包 {@code packet.handle}（原版 hop 主线程 apply）。
-     */
+    /** Fail explicitly; complete native bytes are restored only before the native decoder. */
     public static void handleAggregation(byte[] data, net.minecraft.network.Connection connection) {
-        FriendlyByteBuf packetBuf = wrap(data);
-        try {
-            if (connection == null) {
-                LOGGER.error("Received aggregation packet but no connection");
-                return;
-            }
-            NamespaceIndexManager indexManager = IndexSyncManager.getInstance().getClientIndexManager();
-            if (indexManager == null) {
-                LOGGER.error("Received aggregation packet but client index manager not initialized");
-                return;
-            }
-            HassiumAggregationPacket.decode(packetBuf, indexManager).handle(connection);
-        } catch (DictionaryMissingException e) {
-            // 断连拆解窗口：resetClientSession 已清字典，队列残余在途帧解码必失败——
-            // 会话已结束，降噪跳过、不请求重同步（review 冒烟 forge 场实证）
-            if (connection != null && !connection.isConnected()) {
-                LOGGER.debug("Hassium: aggregation frame dropped after disconnect (dictionary session cleared)");
-                return;
-            }
-            // 字典缺失/未知 epoch：请求服务端重发当前字典（节流），恢复当前 epoch 解码；
-            // 恢复前的不可解帧丢弃并降噪记录
-            if (io.github.limuqy.mc.hassium.client.ClientActivation.requestDictionaryResync()) {
-                LOGGER.error("Hassium: aggregation frame rejected, dictionary missing ({}); "
-                        + "requested dictionary resync from server", e.getMessage());
-            } else {
-                LOGGER.debug("Hassium: aggregation frame dropped (dictionary missing, resync in flight): {}",
-                        e.getMessage());
-            }
-        } catch (Throwable e) {
-            LOGGER.error("Failed to handle aggregation packet", e);
-        } finally {
-            packetBuf.release();
-        }
+        // V3 carriers are consumed before the native decoder. A decoded carrier means readiness
+        // was violated or an obsolete frame was sent; never run a legacy RawCustomPayload replay.
+        if (connection != null) connection.disconnect(net.minecraft.network.chat.Component.literal(
+                "Hassium egress v3: aggregation byte receiver is missing; upgrade both client and server."));
     }
 
     // ===== 服务端 C2S 解包分发 =====

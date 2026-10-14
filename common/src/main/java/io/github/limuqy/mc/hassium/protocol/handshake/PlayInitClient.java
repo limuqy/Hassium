@@ -18,7 +18,14 @@ public final class PlayInitClient {
     }
 
     public static void handle(LoginHandshake.PlayInitPayload payload) {
+        if (LoginCaps.has(payload.negotiatedCaps(), LoginCaps.AGGREGATION) && !LoginCaps.has(payload.negotiatedCaps(), LoginCaps.EGRESS_V3)) {
+            var connection = net.minecraft.client.Minecraft.getInstance().getConnection();
+            if (connection != null) connection.getConnection().disconnect(net.minecraft.network.chat.Component.literal(
+                    "Hassium: incompatible aggregation protocol. Upgrade Hassium on both sides to protocol v3."));
+            return;
+        }
         ClientLoginNegotiation.set(payload.negotiatedCaps());
+        io.github.limuqy.mc.hassium.client.ClientActivation.tryActivate();
         Constants.LOG.info("Hassium: play init (caps={}, seedGen={})",
                 LoginHandshake.describeCaps(payload.negotiatedCaps()), payload.seedGenEnabled());
 

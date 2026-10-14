@@ -7,7 +7,6 @@ import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.protocol.AggregationReadyPayload;
 import io.github.limuqy.mc.hassium.protocol.DictionaryManager;
 import io.github.limuqy.mc.hassium.protocol.DictionarySnapshot;
-import io.github.limuqy.mc.hassium.protocol.HassiumAggregationManager;
 import io.github.limuqy.mc.hassium.protocol.IndexSyncManager;
 import io.github.limuqy.mc.hassium.protocol.PayloadHandlers;
 import io.github.limuqy.mc.hassium.protocol.PreHandshakePayload;
@@ -54,6 +53,29 @@ import java.util.UUID;
  * {@link INetworkManagerService} 实现（common {@code Services.NETWORK_MANAGER} 消费）。
  */
 public class FabricNetworkManager implements INetworkManagerService {
+
+    @Override
+    public net.minecraft.network.protocol.Packet<?> createAggregationCarrier(byte[] data) {
+#if MC_VER < MC_1_21_1
+        FriendlyByteBuf body = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+        try { body.writeByteArray(data); return io.github.limuqy.mc.hassium.compat.PacketPayloadCompat.createClientboundPayload(HassiumChannels.AGGREGATION_S2C, PayloadHandlers.readAll(body)); }
+        finally { body.release(); }
+#else
+        return new net.minecraft.network.protocol.common.ClientboundCustomPayloadPacket(
+                FabricPayloadRegistry.createPayload(FabricPayloadRegistry.AGGREGATION_S2C_TYPE, data));
+#endif
+    }
+    @Override
+    public void sendAggregationReady(net.minecraft.network.Connection connection, int epoch, long id) {
+        FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+        new AggregationReadyPayload(true, epoch, id).encode(buf);
+#if MC_VER < MC_1_21_1
+        connection.send(new net.minecraft.network.protocol.game.ServerboundCustomPayloadPacket(AGGREGATION_READY_C2S, buf));
+#else
+        connection.send(new net.minecraft.network.protocol.common.ServerboundCustomPayloadPacket(
+                FabricPayloadRegistry.toPayload(FabricPayloadRegistry.AGGREGATION_READY_C2S_TYPE, buf)));
+#endif
+    }
 
     private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/Network");
 
@@ -141,21 +163,6 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
         FabricPayloadRegistry.registerAll();
 #endif
         registerServerChannels();
-
-        // 设置聚合包发送器
-        HassiumAggregationManager.setSender((connection, buf) -> {
-            if (connection.getPacketListener() instanceof net.minecraft.server.network.ServerGamePacketListenerImpl handler) {
-                ServerPlayer player = handler.getPlayer();
-#if MC_VER < MC_1_21_1
-                ServerPlayNetworking.send(player, AGGREGATION_S2C, buf);
-#else
-                ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(FabricPayloadRegistry.AGGREGATION_S2C_TYPE, buf));
-#endif
-            } else {
-                LOGGER.error("Cannot send aggregation packet: connection has no player");
-                buf.release();
-            }
-        });
 
         // 设置字典推送回调（携带版本化快照；接收端幂等安装 + 回 ACK）
         DictionaryManager.setPushCallback((snapshot) -> {
@@ -321,27 +328,6 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
     }
 
     /**
-     * SPI：客户端请求字典重同步（解码到未知 epoch 帧的恢复动作；C2S）。
-     * 载体 = {@link AggregationReadyPayload} ready=false，服务端转调
-     * {@code ServerHandshakeActivation.handleDictionaryResync}（重发当前激活字典）。
-     */
-    @Override
-    public void sendDictionaryResyncRequest() {
-        try {
-            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-            new AggregationReadyPayload(false).encode(buf);
-#if MC_VER < MC_1_21_1
-            ClientPlayNetworking.send(AGGREGATION_READY_C2S, buf);
-#else
-            ClientPlayNetworking.send(FabricPayloadRegistry.toPayload(FabricPayloadRegistry.AGGREGATION_READY_C2S_TYPE, buf));
-#endif
-            DebugLogger.debug(LogType.NETWORK, "Hassium: Sent dictionary resync request");
-        } catch (Exception e) {
-            LOGGER.error("Hassium: Failed to send dictionary resync request", e);
-        }
-    }
-
-    /**
      * 服务端预握手注册：仅 1.21.1+ 配置阶段 payload 接收。
      * <p>
      * 1.20.1 login query 载体由 common mixin（{@code MixinServerLoginPacketListenerImpl} /
@@ -446,5 +432,3 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
 #endif
     }
 }
-
-

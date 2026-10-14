@@ -23,11 +23,9 @@ import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 import net.neoforged.neoforge.network.handling.IPayloadContext;
 
 import java.util.UUID;
-import io.github.limuqy.mc.hassium.protocol.AggregationDecodeQueue;
 import io.github.limuqy.mc.hassium.protocol.DictionaryManager;
 import io.github.limuqy.mc.hassium.protocol.DictionarySnapshot;
 import io.github.limuqy.mc.hassium.protocol.HassiumConnectionRegistry;
-import io.github.limuqy.mc.hassium.protocol.HassiumAggregationManager;
 import io.github.limuqy.mc.hassium.protocol.PayloadHandlers;
 import io.github.limuqy.mc.hassium.protocol.PreHandshakeHelloPayload;
 import io.github.limuqy.mc.hassium.protocol.PreHandshakePayload;
@@ -46,8 +44,17 @@ import io.github.limuqy.mc.hassium.server.ServerHandshakeActivation;
  */
 public class NeoForgeNetworkManager implements INetworkManagerService {
 
+    @Override
+    public net.minecraft.network.protocol.Packet<?> createAggregationCarrier(byte[] data) {
+        return new net.minecraft.network.protocol.common.ClientboundCustomPayloadPacket(new ByteArrayPayload(AGGREGATION_TYPE, data));
+    }
+    @Override
+    public void sendAggregationReady(Connection connection, int epoch, long id) {
+        connection.send(new net.minecraft.network.protocol.common.ServerboundCustomPayloadPacket(new AggregationReadyNeoPayload(true, epoch, id)));
+    }
+
     private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/NeoForgeNetwork");
-    private static final String PROTOCOL_VERSION = "1";
+    private static final String PROTOCOL_VERSION = "3";
     private static final ShadowPullHandler SHADOW_PULL_HANDLER =
             new ShadowPullHandler(new ShadowPullRequestLedger());
 
@@ -244,19 +251,12 @@ public class NeoForgeNetworkManager implements INetworkManagerService {
         // play_init S2C 必须无条件注册（先于下方守卫）：登录协商位非零即下发 play_init
         //（即便 net/master 全关，SHADOW_PULL 位恒协商成功）——NeoForge checkPacket 对未注册
         // S2C payload 直接抛异常炸 tick。服务端不发送时注册无副作用。
-        var registrar = event.registrar(PROTOCOL_VERSION);
-
-        // 聚合帧发送器：fabric 在 registerChannels 设置；neoforge 无对应调用点，
-        // 在 payload 注册事件（服务端/客户端都触发，sender 仅服务端连接生效）设置。
-        io.github.limuqy.mc.hassium.protocol.HassiumAggregationManager.setSender((connection, buf) -> {
-            if (connection.getPacketListener() instanceof net.minecraft.server.network.ServerGamePacketListenerImpl handler) {
-                ServerPlayer player = handler.getPlayer();
-                sendServerPayload(player, new ByteArrayPayload(AGGREGATION_TYPE, PayloadHandlers.drain(buf)));
-            } else {
-                LOGGER.error("Cannot send aggregation packet: connection has no player");
-                buf.release();
-            }
-        });
+        var registrar = event.registrar(PROTOCOL_VERSION).optional();
+        if (io.github.limuqy.mc.hassium.protocol.egress.EgressFixture.enabled()) {
+            registrar.playToClient(io.github.limuqy.mc.hassium.compat.EgressFixtureCompat.TYPE,
+                    io.github.limuqy.mc.hassium.compat.EgressFixtureCompat.CODEC,
+                    (payload, ctx) -> io.github.limuqy.mc.hassium.compat.EgressFixtureCompat.receiveOnClient(payload.value()));
+        }
 
         // 字典热推回调（镜像 fabric/forge）：服务端字典重建后向全体在线玩家推送。
         // 回调携带版本化快照（epoch + id）——offer 阶段激活版尚未切换，读全局会拿到旧版
@@ -350,7 +350,7 @@ public class NeoForgeNetworkManager implements INetworkManagerService {
 
         // 聚合帧 S2C（客户端影子端 decode 统计 zstd/vanilla 流量锚点）
         registrar.playToClient(AGGREGATION_TYPE, codec(AGGREGATION_TYPE),
-                (payload, ctx) -> AggregationDecodeQueue.enqueueClient(payload.data()));
+                (payload, ctx) -> PayloadHandlers.handleAggregation(payload.data()));
 
         LOGGER.info("Hassium: Registered all NeoForge payload handlers");
     }
@@ -486,19 +486,6 @@ public class NeoForgeNetworkManager implements INetworkManagerService {
         sendAggregationReadyToServer(dictionaryEpoch, dictionaryId);
     }
 
-    /** SPI：客户端请求字典重同步（unknown-epoch 恢复；载体 = ready=false 的 aggregation_ready）。 */
-    @Override
-    public void sendDictionaryResyncRequest() {
-        try {
-            var connection = net.minecraft.client.Minecraft.getInstance().getConnection();
-            if (connection != null) {
-                connection.send(new AggregationReadyNeoPayload(false, 0, 0L, false));
-            }
-        } catch (Exception e) {
-            LOGGER.error("Hassium: Failed to send dictionary resync request", e);
-        }
-    }
-
     public static void sendAggregationReadyToServer(int dictionaryEpoch, long dictionaryId) {
         try {
             var connection = net.minecraft.client.Minecraft.getInstance().getConnection();
@@ -511,5 +498,3 @@ public class NeoForgeNetworkManager implements INetworkManagerService {
     }
 
 }
-
-

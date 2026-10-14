@@ -163,6 +163,8 @@ public final class ServerSmokeTest {
         }
         // T7：OP 提升只依赖 enabled（hassium.serverSmokeTest=true），不随阶段 armed 关闭失效
         opSmokePlayers(server);
+        io.github.limuqy.mc.hassium.protocol.egress.EgressFixture.tickServer(server);
+        io.github.limuqy.mc.hassium.protocol.egress.FactoryEgressBenchmark.tickServer(server);
         if (!armed) {
             return;
         }
@@ -192,6 +194,7 @@ public final class ServerSmokeTest {
                 if (lastPlayerCount > 0 && currentCount == 0) {
                     // 第一个玩家退出，切换视距
                     switched = true;
+                    LOGGER.info("[EGRESS_V3] ROUND1 {}", io.github.limuqy.mc.hassium.protocol.egress.EgressPipeline.METRICS.snapshot());
                     LOGGER.info("{} player disconnected, switching view-distance from {} to {}",
                             MARKER, vd1, vd2);
                     server.getPlayerList().setViewDistance(vd2);

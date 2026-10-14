@@ -39,7 +39,7 @@ public class HassiumCommandHandler {
         long metadataSent = metrics.getMetadataBytesSent();
         long dataRequestsReceived = metrics.getDataRequestsReceived();
         long chunksCompressed = metrics.getChunksCompressed();
-        return String.format(
+        String existing = String.format(
                 "§6=== Hassium 服务端统计 ===§r\n" +
                 "§e发送:§r %s (原版Zlib %s) — §a节省 %s§r\n" +
                 "§e压缩比(Zlib->ZSTD):§r %s\n" +
@@ -53,6 +53,15 @@ public class HassiumCommandHandler {
                 dataRequestsReceived,
                 chunksCompressed
         );
+        var egress = io.github.limuqy.mc.hassium.protocol.egress.EgressPipeline.METRICS.snapshot();
+        return existing + String.format(java.util.Locale.ROOT,
+                "\n§ePLAY 出口 TCP 实写:§r %s（原始编码 %s）\n§e聚合载荷 / 旁路编码:§r %s / %s\n" +
+                "§e精确 / 模板命中:§r %d / %d（定义 %s）\n§e平均出口等待 / 帧压缩:§r %.3f ms / %.3f ms",
+                MetricsTextFormatter.formatBytes(egress.wireBytes()), MetricsTextFormatter.formatBytes(egress.originalBytes()),
+                MetricsTextFormatter.formatBytes(egress.aggregateBytes()), MetricsTextFormatter.formatBytes(egress.bypassBytes()),
+                egress.exactReferences(), egress.templateReferences(), MetricsTextFormatter.formatBytes(egress.definitionBytes()),
+                egress.packets() == 0 ? 0.0 : egress.queueNanos() / (egress.packets() * 1_000_000.0),
+                egress.frames() == 0 ? 0.0 : egress.compressionNanos() / (egress.frames() * 1_000_000.0));
     }
 
     /**
@@ -231,6 +240,7 @@ public class HassiumCommandHandler {
      */
     public static String resetStats() {
         NetworkStats.reset();
+        io.github.limuqy.mc.hassium.protocol.egress.EgressPipeline.METRICS.reset();
         return "§aHassium 统计信息已重置§r";
     }
 

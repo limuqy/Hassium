@@ -71,11 +71,7 @@ class DictionaryProtocolTest {
             buf.writeBoolean(false);
             buf.writeVarInt(dict.length);
             buf.writeBytes(dict);
-            DictionarySyncPayload out = DictionarySyncPayload.decode(buf);
-            assertFalse(out.hasDictionaryInfo());
-            assertEquals(0, out.dictionaryEpoch());
-            assertEquals(0L, out.dictionaryId());
-            assertArrayEquals(dict, out.dictionary());
+            assertThrows(RuntimeException.class, () -> DictionarySyncPayload.decode(buf));
         } finally {
             buf.release();
         }
@@ -128,14 +124,11 @@ class DictionaryProtocolTest {
     }
 
     @Test
-    void aggregationReadyLegacyFormatHasNoDictionaryInfo() {
+    void aggregationReadyLegacyFormatIsRejected() {
         FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.buffer());
         try {
             buf.writeBoolean(true); // 旧客户端只写 boolean
-            AggregationReadyPayload out = AggregationReadyPayload.decode(buf);
-            assertTrue(out.isReady());
-            assertFalse(out.hasDictionaryInfo());
-            assertEquals(0, out.getDictionaryEpoch());
+            assertThrows(RuntimeException.class, () -> AggregationReadyPayload.decode(buf));
         } finally {
             buf.release();
         }

@@ -3,7 +3,7 @@ package io.github.limuqy.mc.hassium;
 import io.github.limuqy.mc.hassium.client.ClientLifecycleHelper;
 import io.github.limuqy.mc.hassium.client.ClientSmokeTest;
 import io.github.limuqy.mc.hassium.command.FabricHassiumCommand;
-import io.github.limuqy.mc.hassium.protocol.AggregationDecodeQueue;
+
 import io.github.limuqy.mc.hassium.client.ClientActivation;
 import io.github.limuqy.mc.hassium.protocol.DictionaryManager;
 import io.github.limuqy.mc.hassium.protocol.PayloadHandlers;
@@ -54,6 +54,15 @@ public class HassiumClientMod implements ClientModInitializer {
         // 核心增量通道由 common 客户端摄入管线（ClientChunkPipeline / ClientMetadataHandler）消费。
         LOGGER.info("Hassium: Fabric client registers direct-play S2C receivers (SHADOW_PULL_RESPONSE_S2C / PLAY_INIT_S2C / DICTIONARY_SYNC_S2C / INDEX_SYNC_S2C / AGGREGATION_S2C).");
 
+        if (io.github.limuqy.mc.hassium.protocol.egress.EgressFixture.enabled()) {
+#if MC_VER < MC_1_21_1
+            ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.compat.ResourceLocationCompat.vanilla(io.github.limuqy.mc.hassium.protocol.egress.EgressFixture.CHANNEL),
+                    (client, handler, buf, sender) -> { var payload = io.github.limuqy.mc.hassium.protocol.egress.EgressFixture.read(buf); io.github.limuqy.mc.hassium.compat.EgressFixtureCompat.receiveOnClient(payload); });
+#else
+            ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.compat.EgressFixtureCompat.TYPE,
+                    (payload, context) -> io.github.limuqy.mc.hassium.compat.EgressFixtureCompat.receiveOnClient(payload.value()));
+#endif
+        }
         // shadowPullV1 FULL 回退：服务端返回的原版 chunk+light 线格式统一交给 ShadowPullClient 注入。
 #if MC_VER < MC_1_21_1
         ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricNetworkManager.SHADOW_PULL_RESPONSE_S2C,
@@ -121,11 +130,11 @@ public class HassiumClientMod implements ClientModInitializer {
                 (client, handler, buf, responseSender) -> {
                     byte[] data = PayloadHandlers.readAll(buf);
                     var connection = handler.getConnection();
-                    AggregationDecodeQueue.enqueue(connection, data);
+                    PayloadHandlers.handleAggregation(data);
                 });
 #else
         ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricPayloadRegistry.AGGREGATION_S2C_TYPE,
-                (payload, context) -> AggregationDecodeQueue.enqueueClient(payload.data()));
+                (payload, context) -> PayloadHandlers.handleAggregation(payload.data()));
 #endif
 
         LOGGER.info("Hassium: Fabric client-side initialization complete");

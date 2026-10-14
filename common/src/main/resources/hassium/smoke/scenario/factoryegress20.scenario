@@ -1,0 +1,12 @@
+join label=WAIT_JOIN_1 since=start timeoutMs=${joinTimeoutMs} requirePositiveY=false
+wait ms=2000
+command text="gamemode spectator"
+command text="tp @s 72.5 78 79.5"
+wait ms=25000
+command text="tp @s 72.5 78 79.5"
+command text="tick rate 20"
+command text="tick unfreeze"
+wait ms=25000
+assertProbe key=joined op=eq value=true
+dump label=ROUND1 round=1
+exit rounds=1

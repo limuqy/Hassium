@@ -63,11 +63,9 @@ public class AggregationReadyPayload {
 
     public static AggregationReadyPayload decode(net.minecraft.network.FriendlyByteBuf buf) {
         boolean ready = buf.readBoolean();
-        if (!buf.isReadable()) {
-            return new AggregationReadyPayload(ready);
-        }
         int epoch = buf.readVarInt();
         long id = buf.readLong();
+        if (epoch < 0 || (epoch == 0 && id != 0)) throw new IllegalArgumentException("Invalid v3 dictionary acknowledgement");
         if (buf.isReadable()) {
             throw new IllegalArgumentException(
                     "AggregationReadyPayload: " + buf.isReadable() + " trailing bytes after dictionary fields");

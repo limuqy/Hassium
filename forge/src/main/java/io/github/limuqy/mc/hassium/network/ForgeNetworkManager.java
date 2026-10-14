@@ -5,11 +5,11 @@ import io.github.limuqy.mc.hassium.client.ClientActivation;
 import io.github.limuqy.mc.hassium.compat.HassiumChannels;
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
-import io.github.limuqy.mc.hassium.protocol.AggregationDecodeQueue;
+
 import io.github.limuqy.mc.hassium.protocol.AggregationReadyPayload;
 import io.github.limuqy.mc.hassium.protocol.DictionaryManager;
 import io.github.limuqy.mc.hassium.protocol.DictionarySnapshot;
-import io.github.limuqy.mc.hassium.protocol.HassiumAggregationManager;
+
 import io.github.limuqy.mc.hassium.protocol.HassiumConnectionRegistry;
 import io.github.limuqy.mc.hassium.protocol.IndexSyncManager;
 import io.github.limuqy.mc.hassium.protocol.PayloadHandlers;
@@ -67,8 +67,89 @@ import java.util.function.Function;
 public class ForgeNetworkManager implements INetworkManagerService {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/Network");
-    private static final String PROTOCOL_VERSION = "1";
-    private static final int PROTOCOL_VERSION_INT = 1;
+    private static final String PROTOCOL_VERSION = "3";
+    private static final int PROTOCOL_VERSION_INT = 3;
+    private volatile int aggregationDiscriminator = -1;
+    private static volatile java.util.Map<Integer, String> controlTypes = java.util.Map.of();
+    private static volatile java.util.Map<String, Integer> controlPrefixes = java.util.Map.of();
+    private static void registerControlNames() {
+        java.util.Map<Integer, String> types = new java.util.HashMap<>(); java.util.Map<String, Integer> prefixes = new java.util.HashMap<>();
+        registerControlName(types, prefixes, new DictionarySyncWrapper(new byte[0]), io.github.limuqy.mc.hassium.protocol.HassiumPacketIds.DICTIONARY_SYNC_S2C);
+        registerControlName(types, prefixes, new IndexSyncWrapper(new byte[0]), io.github.limuqy.mc.hassium.protocol.HassiumPacketIds.INDEX_SYNC_S2C);
+        registerControlName(types, prefixes, new AggregationWrapper(new byte[0]), io.github.limuqy.mc.hassium.protocol.HassiumPacketIds.AGGREGATION_S2C);
+        controlTypes = java.util.Map.copyOf(types); controlPrefixes = java.util.Map.copyOf(prefixes);
+    }
+    private static void registerControlName(java.util.Map<Integer, String> types, java.util.Map<String, Integer> prefixes, Object message, String type) {
+#if MC_VER < MC_1_21_1
+        FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+        try { CHANNEL.encodeMessage(message, buf); int index = buf.readerIndex(); int id = buf.readVarInt(); types.put(id, type); prefixes.put(type, buf.readerIndex() - index); }
+#else
+        RegistryFriendlyByteBuf buf = new RegistryFriendlyByteBuf(io.netty.buffer.Unpooled.buffer(), net.minecraft.core.RegistryAccess.EMPTY);
+        try { CHANNEL.encode(buf, message); int index = buf.readerIndex(); int id = buf.readVarInt(); types.put(id, type); prefixes.put(type, buf.readerIndex() - index); }
+#endif
+        finally { buf.release(); }
+    }
+    @Override public String egressPacketKey(net.minecraft.network.protocol.Packet<?> packet, io.netty.buffer.ByteBuf encoded, String fallback) {
+        if (!HassiumChannels.MAIN_CHANNEL.fullId().equals(fallback)) return fallback;
+        FriendlyByteBuf body = new FriendlyByteBuf(encoded.duplicate()); body.readVarInt(); body.readUtf();
+        return controlTypes.getOrDefault(body.readVarInt(), fallback);
+    }
+    @Override public int egressEnvelopePrefixBytes(String type) { return controlPrefixes.getOrDefault(type, 0); }
+    private static SimpleChannel fixtureChannel;
+    public record FixtureMessage(io.github.limuqy.mc.hassium.protocol.egress.EgressFixture.Payload payload) {
+        public void encode(FriendlyByteBuf buf) { io.github.limuqy.mc.hassium.protocol.egress.EgressFixture.write(buf, payload); }
+        public static FixtureMessage decode(FriendlyByteBuf buf) { return new FixtureMessage(io.github.limuqy.mc.hassium.protocol.egress.EgressFixture.read(buf)); }
+    }
+    private static void registerFixture() {
+        if (!io.github.limuqy.mc.hassium.protocol.egress.EgressFixture.enabled() || fixtureChannel != null) return;
+#if MC_VER < MC_1_21_1
+        fixtureChannel = NetworkRegistry.newSimpleChannel(ResourceLocationCompat.vanilla(io.github.limuqy.mc.hassium.protocol.egress.EgressFixture.CHANNEL), () -> "1", "1"::equals, "1"::equals);
+        fixtureChannel.registerMessage(0, FixtureMessage.class, FixtureMessage::encode, FixtureMessage::decode,
+                (message, context) -> { context.get().setPacketHandled(true); io.github.limuqy.mc.hassium.compat.EgressFixtureCompat.receiveOnClient(message.payload()); }, java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
+#else
+        fixtureChannel = ChannelBuilder.named(ResourceLocationCompat.vanilla(io.github.limuqy.mc.hassium.protocol.egress.EgressFixture.CHANNEL))
+                .networkProtocolVersion(1).acceptedVersions(Channel.VersionTest.exact(1)).simpleChannel().play().clientbound()
+                .addMain(FixtureMessage.class, playCodec(FixtureMessage::encode, FixtureMessage::decode),
+                        (message, context) -> io.github.limuqy.mc.hassium.compat.EgressFixtureCompat.receiveOnClient(message.payload()))
+                .build();
+#endif
+    }
+    @Override public net.minecraft.network.protocol.Packet<?> createEgressFixtureCarrier(io.github.limuqy.mc.hassium.protocol.egress.EgressFixture.Payload payload) {
+        if (fixtureChannel == null) throw new IllegalStateException("Forge fixture channel missing");
+#if MC_VER < MC_1_21_1
+        return fixtureChannel.toVanillaPacket(new FixtureMessage(payload), NetworkDirection.PLAY_TO_CLIENT);
+#else
+        return NetworkDirection.PLAY_TO_CLIENT.buildPacket(fixtureChannel, new FixtureMessage(payload));
+#endif
+    }
+    @Override public net.minecraft.network.protocol.Packet<?> createAggregationCarrier(byte[] data) {
+#if MC_VER < MC_1_21_1
+        return CHANNEL.toVanillaPacket(new AggregationWrapper(data), NetworkDirection.PLAY_TO_CLIENT);
+#else
+        return NetworkDirection.PLAY_TO_CLIENT.buildPacket(CHANNEL, new AggregationWrapper(data));
+#endif
+    }
+    @Override public void inspectAggregationCarrier(io.netty.buffer.ByteBuf encoded) {
+        FriendlyByteBuf body = new FriendlyByteBuf(encoded.duplicate()); body.readVarInt();
+        if (!body.readUtf().equals(HassiumChannels.MAIN_CHANNEL.fullId())) throw new IllegalStateException("Unexpected Forge carrier channel");
+        aggregationDiscriminator = body.readVarInt();
+    }
+    @Override public byte[] extractAggregationFrame(String channel, FriendlyByteBuf body) {
+        if (!HassiumChannels.MAIN_CHANNEL.fullId().equals(channel)) return null;
+        if (aggregationDiscriminator < 0) throw new IllegalStateException("Forge carrier binding missing");
+        if (body.readVarInt() != aggregationDiscriminator) return null;
+        return INetworkManagerService.super.extractAggregationFrame(io.github.limuqy.mc.hassium.protocol.HassiumPacketIds.AGGREGATION_S2C, body);
+    }
+    @Override public boolean isEgressControlChannel(String channel) { return channel != null && channel.startsWith("hassium:"); }
+    @Override public void sendAggregationReady(Connection connection, int epoch, long id) {
+        AggregationReadyWrapper message = new AggregationReadyWrapper(true, epoch, id);
+#if MC_VER < MC_1_21_1
+        connection.send(CHANNEL.toVanillaPacket(message, NetworkDirection.PLAY_TO_SERVER));
+#else
+        connection.send(NetworkDirection.PLAY_TO_SERVER.buildPacket(CHANNEL, message));
+#endif
+    }
+
     private static final ShadowPullHandler SHADOW_PULL_HANDLER =
             new ShadowPullHandler(new ShadowPullRequestLedger());
 
@@ -76,8 +157,8 @@ public class ForgeNetworkManager implements INetworkManagerService {
     public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
             ResourceLocationCompat.vanilla(HassiumChannels.MAIN_CHANNEL),
             () -> PROTOCOL_VERSION,
-            PROTOCOL_VERSION::equals,
-            PROTOCOL_VERSION::equals
+            NetworkRegistry.acceptMissingOr(PROTOCOL_VERSION::equals),
+            NetworkRegistry.acceptMissingOr(PROTOCOL_VERSION::equals)
     );
     private static int packetId = 0;
 #else
@@ -99,26 +180,8 @@ public class ForgeNetworkManager implements INetworkManagerService {
         registerModernChannels();
 #endif
 
-        HassiumAggregationManager.setSender((connection, buf) -> {
-            if (connection.getPacketListener() instanceof net.minecraft.server.network.ServerGamePacketListenerImpl handler) {
-                ServerPlayer player = handler.getPlayer();
-                byte[] data = new byte[buf.readableBytes()];
-                buf.readBytes(data);
-                buf.release();
-#if MC_VER < MC_1_21_1
-                CHANNEL.sendTo(new AggregationWrapper(data), player.connection.connection, NetworkDirection.PLAY_TO_CLIENT);
-#else
-                sendToPlayer(player, new AggregationWrapper(data));
-#endif
-            } else {
-                LOGGER.error("Cannot send aggregation packet: connection has no player");
-                buf.release();
-            }
-        });
-
-        // 字典热推回调：服务端字典重建后向全体在线玩家推送 DictionarySync。
-        // 回调携带版本化快照（epoch + id）——offer 阶段激活版尚未切换，读全局会拿到旧版；
-        // 接收端幂等安装并回带字典回执的 aggregation_ready，全员 ACK 后才切激活版。
+        registerControlNames();
+        registerFixture();
         DictionaryManager.setPushCallback(snapshot -> {
             try {
                 net.minecraft.server.MinecraftServer server =
@@ -147,7 +210,7 @@ public class ForgeNetworkManager implements INetworkManagerService {
                 AggregationWrapper::decode,
                 (msg, ctx) -> {
                     ctx.get().setPacketHandled(true);
-                    AggregationDecodeQueue.enqueueClient(msg.data());
+                    PayloadHandlers.handleAggregation(msg.data());
                 },
                 java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
         );
@@ -231,6 +294,7 @@ public class ForgeNetworkManager implements INetworkManagerService {
 
         SimpleChannel channel = ChannelBuilder
                 .named(ResourceLocationCompat.vanilla(HassiumChannels.MAIN_CHANNEL))
+                .optional()
                 .networkProtocolVersion(PROTOCOL_VERSION_INT)
                 .acceptedVersions(Channel.VersionTest.exact(PROTOCOL_VERSION_INT))
                 .simpleChannel();
@@ -267,7 +331,7 @@ public class ForgeNetworkManager implements INetworkManagerService {
                     .clientbound()
                         .addMain(AggregationWrapper.class,
                                 playCodec(AggregationWrapper::encode, AggregationWrapper::decode),
-                                (msg, ctx) -> AggregationDecodeQueue.enqueueClient(msg.data()))
+                                (msg, ctx) -> PayloadHandlers.handleAggregation(msg.data()))
                         .addMain(ShadowPullResponseWrapper.class,
                                 playCodec(ShadowPullResponseWrapper::encode, ShadowPullResponseWrapper::decode),
                                 (msg, ctx) -> ctx.enqueueWork(() ->
@@ -614,9 +678,6 @@ public class ForgeNetworkManager implements INetworkManagerService {
 
         public static AggregationReadyWrapper decode(FriendlyByteBuf buf) {
             boolean ready = buf.readBoolean();
-            if (!buf.isReadable()) {
-                return new AggregationReadyWrapper(ready, 0, 0L, false);
-            }
             int epoch = buf.readVarInt();
             long id = buf.readLong();
             return new AggregationReadyWrapper(ready, epoch, id, true);
@@ -706,19 +767,4 @@ public class ForgeNetworkManager implements INetworkManagerService {
         sendAggregationReadyToServer(dictionaryEpoch, dictionaryId);
     }
 
-    /** SPI：客户端请求字典重同步（unknown-epoch 恢复；载体 = ready=false 的 aggregation_ready）。 */
-    @Override
-    public void sendDictionaryResyncRequest() {
-        try {
-#if MC_VER < MC_1_21_1
-            CHANNEL.sendToServer(new AggregationReadyWrapper(false, 0, 0L, false));
-#else
-            sendToServer(new AggregationReadyWrapper(false, 0, 0L, false));
-#endif
-        } catch (Exception e) {
-            LOGGER.error("Hassium: Failed to send dictionary resync request", e);
-        }
-    }
 }
-
-

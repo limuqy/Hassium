@@ -2,7 +2,6 @@ package io.github.limuqy.mc.hassium.server;
 
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
-import io.github.limuqy.mc.hassium.protocol.HassiumAggregationManager;
 import io.github.limuqy.mc.hassium.protocol.HassiumConnectionRegistry;
 import io.github.limuqy.mc.hassium.protocol.IndexSyncManager;
 import io.github.limuqy.mc.hassium.protocol.DictionaryManager;
@@ -165,14 +164,12 @@ public final class ServerHandshakeActivation {
             Services.NETWORK_MANAGER.sendDictionarySync(player);
             Services.NETWORK_MANAGER.sendIndexSync(player);
             HassiumConnectionRegistry.markPending(connection);
-            HassiumAggregationManager.init();
             DebugLogger.debug(LogType.NETWORK,
                     "Hassium: Marked connection as PENDING for player {}", player.getName().getString());
 
             String playerName = player.getName().getString();
             PENDING_TIMEOUT_SCHEDULER.schedule(() -> {
                 if (HassiumConnectionRegistry.tryDemoteFromPending(connection)) {
-                    HassiumAggregationManager.discardConnection(connection);
                     Constants.LOG.warn("Hassium: Ack timeout for {}, disabling aggregation", playerName);
                 }
             }, 5, TimeUnit.SECONDS);
@@ -198,11 +195,15 @@ public final class ServerHandshakeActivation {
     public static void handleActivationReady(ServerPlayer player, int dictEpoch, long dictId,
                                              boolean dictInfoPresent) {
         int caps = ACTIVE_CAPS.getOrDefault(player.getUUID(), 0);
-        if (!LoginCaps.has(caps, LoginCaps.AGGREGATION)) {
+        if (!LoginCaps.has(caps, LoginCaps.AGGREGATION) || !LoginCaps.has(caps, LoginCaps.EGRESS_V3)) {
             return;
         }
         Connection connection = io.github.limuqy.mc.hassium.compat.PlayerCompat.getConnection(player);
         if (connection == null) {
+            return;
+        }
+        if (!dictInfoPresent) {
+            connection.disconnect(Component.literal("Hassium egress v3 requires a complete dictionary acknowledgement. Upgrade both sides."));
             return;
         }
         // 回执归类（单一判据）：OFFER=热更候选 / ACTIVE=激活版 / NONE=未知
@@ -232,7 +233,7 @@ public final class ServerHandshakeActivation {
         // ACTIVE receipts must reach rollout too: a late joiner still needs the pending offer.
         acknowledgeDictionary(connection, kind, dictEpoch, dictId);
         HassiumConnectionRegistry.markEnabled(connection);
-        HassiumAggregationManager.flushConnectionSync(connection);
+        io.github.limuqy.mc.hassium.protocol.egress.EgressPipeline.flushConnection(connection);
         Constants.LOG.info("Hassium: Aggregation enabled for {} (activation ready{})",
                 player.getName().getString(), dictInfoPresent ? ", dict epoch=" + dictEpoch : "");
         // 生命周期收尾：搁置的候选字典（offer 超时放弃等）借新连接激活重试 offer
@@ -258,9 +259,7 @@ public final class ServerHandshakeActivation {
         if (!LoginCaps.has(caps, LoginCaps.AGGREGATION)) {
             return;
         }
-        Constants.LOG.warn("Hassium: dictionary resync requested by {} (client decoded unknown-epoch frame)",
-                player.getName().getString());
-        Services.NETWORK_MANAGER.sendDictionarySync(player);
+        player.connection.disconnect(Component.literal("Hassium egress v3: dictionary state lost; reconnect required."));
     }
 
     private static void sendPlayInit(ServerPlayer player, int caps) {

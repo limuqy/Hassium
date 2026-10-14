@@ -15,6 +15,9 @@ public final class LoginCaps {
     /** 服务端包聚合（客户端需带反聚合 receiver）。 */
     public static final int AGGREGATION = 1 << 0;
 
+    /** Complete native PLAY bytes, ordered egress, bounded history and automatic templates. */
+    public static final int EGRESS_V3 = 1 << 7;
+
     /** 分段增量（SectionDelta）。 */
     public static final int SECTION_DELTA = 1 << 1;
 
@@ -47,7 +50,7 @@ public final class LoginCaps {
         HassiumConfigService cfg = HassiumConfigService.getInstance();
         int caps = 0;
         if (cfg.isPacketAggregationEnabled()) {
-            caps |= AGGREGATION;
+            caps |= AGGREGATION | EGRESS_V3;
         }
         if (cfg.isClientCacheEnabled()) {
             caps |= PULL_MODE;
@@ -71,7 +74,7 @@ public final class LoginCaps {
         HassiumConfigService cfg = HassiumConfigService.getInstance();
         int caps = 0;
         if (cfg.isPacketAggregationEnabled()) {
-            caps |= AGGREGATION;
+            caps |= AGGREGATION | EGRESS_V3;
         }
         if (cfg.isSectionDeltaEnabled()) {
             caps |= SECTION_DELTA;
@@ -91,7 +94,10 @@ public final class LoginCaps {
 
     /** 按位与协商。 */
     public static int negotiate(int serverCaps, int clientCaps) {
-        return serverCaps & clientCaps;
+        int caps = serverCaps & clientCaps;
+        if ((caps & EGRESS_V3) == 0) caps &= ~AGGREGATION;
+        if ((caps & AGGREGATION) == 0) caps &= ~EGRESS_V3;
+        return caps;
     }
 
     public static boolean has(int caps, int bit) {

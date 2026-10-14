@@ -1,0 +1,4 @@
+"targetTPS","frames","candidateExactRefs","candidatePartialRefs","candidateDefinitionBytesUncompressed","framesWithCandidateRefs","candidateMappedMinusLiteralBytes","candidateMappedWins","candidateMappedTies","candidateMappedLoses","aggregatePackets","packetsBelow8Bytes","existingTemplateCandidateRefs","newTemplateCandidateRefs","framesWithExistingRefs","existingOnlyWins","existingOnlyWinningSavingsBytes","existingOnlyTotalDeltaBytes"
+"20","679","1296","12965","270214","627","197331","0","0","627","63670","3953","722","13539","121","0","0","34079"
+"100","3146","7013","56804","1177369","2863","796544","0","0","2863","242384","16863","4002","59815","524","0","0","107816"
+"200","3367","7217","64879","1305545","3124","906843","0","0","3124","275171","18051","3412","68684","102","0","0","24930"

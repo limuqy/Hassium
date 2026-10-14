@@ -32,6 +32,14 @@ Hassium 主要改动：
 
 未握手 / 无 Hassium 客户端仍走原版 `ClientboundLevelChunkWithLightPacket`（`compat.requireClientMod` 默认 `false`）。
 
+### 聚合 v3 与第三方自定义包
+
+v3 在实际加载器 codec 完成编码后收取完整原生字节，客户端回灌实际绑定的 decoder；不构造 `RawCustomPayload` 替代第三方类型。自动模板按通道、长度及常量分组，结构改变可直接传原文，详见 [egress-v3.md](egress-v3.md)。
+
+NeoForge `GenericPacketSplitter` 会先编码检查大小；`MixinNeoForgePacketSplitter` 配合 `NeoForgeEncodedPacketReuse` 复用这一编码结果，避免未分片包再次调用任意 Mod codec。仅在 NeoForge 且已激活的客户端下行 PLAY 连接中生效，校验包对象与实际协议绑定一致；已分片或无法可靠关联时放弃缓存，沿用加载器结果。
+
+开发专项 `egress_fixture:typed_state` 在六组合验证同通道 State/Event 具体类型、注册表 holder、变长字符串和列表、原始 codec 单次调用、顺序、一次性执行、Bundle 和重连。这证明加载器原生 codec 恢复路径；不将历史第三方 Mod 的旧版联测记录冒充当前 26.x 已验证名单。
+
 ## 3. 反透视
 
 反透视通常修改「即将发送的区块包」而非世界本身。

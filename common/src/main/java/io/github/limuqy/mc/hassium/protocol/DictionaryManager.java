@@ -157,11 +157,6 @@ public class DictionaryManager {
      */
     private static volatile DictionarySnapshot lastTrained;
 
-    /**
-     * 客户端：服务端是否在 DICT 聚合帧头写 epoch（由 dictionary_sync 是否携带扩展字段判定）。
-     * 决定 {@link HassiumAggregationPacket#decode} 是否读取 epoch 变长字段。
-     */
-    private static volatile boolean serverEpochAware = false;
 
     /**
      * 是否是服务端
@@ -439,18 +434,6 @@ public class DictionaryManager {
         retainedSnapshots.add(0, snapshot);
     }
 
-    /**
-     * 客户端：登记服务端是否在 DICT 帧头写 epoch（dictionary_sync 携带扩展字段 ⇒ 携带）。
-     * 断连复位（{@link #resetClientSession()}）与换服（旧格式 sync 显式置 false）都会改写。
-     */
-    public static void markServerEpochAware(boolean value) {
-        serverEpochAware = value;
-    }
-
-    /** 客户端：服务端 DICT 帧头是否带 epoch（解码侧读帧头的依据）。 */
-    public static boolean isServerEpochAware() {
-        return serverEpochAware;
-    }
 
     /**
      * 设置字典推送回调
@@ -979,7 +962,6 @@ public class DictionaryManager {
     public static void resetClientSession() {
         activeAggregation = null;
         retainedSnapshots.clear();
-        serverEpochAware = false;
     }
 
     /**

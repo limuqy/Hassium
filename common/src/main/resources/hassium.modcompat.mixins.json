@@ -6,7 +6,8 @@
     "plugin": "io.github.limuqy.mc.hassium.mixin.modcompat.HassiumModCompatMixinPlugin",
     "mixins": [
         "MixinRegionFileVersion",
-        "MixinRegionFileWrite"
+        "MixinRegionFileWrite",
+        "MixinNeoForgePacketSplitter"
     ],
     "injectors": {
         "defaultRequire": 1

@@ -1,12 +1,7 @@
 package io.github.limuqy.mc.hassium.protocol;
 
-import io.github.limuqy.mc.hassium.compat.PacketCodecCompat;
-import io.github.limuqy.mc.hassium.compat.PacketId;
-import io.github.limuqy.mc.hassium.compat.PacketPayloadCompat;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import net.minecraft.network.Connection;
-import net.minecraft.network.FriendlyByteBuf;
-import net.minecraft.network.protocol.Packet;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -21,23 +16,9 @@ import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Base64;
 
-/**
- * {@code debug.exportAggregatedPackets} 调试导出器（JSONL）。
- * <p>
- * 两个导出点：
- * <ol>
- *   <li>{@code MixinConnection} 的 {@code Connection.send} 拦截点（仅 play 期玩家连接）：
- *       所有发往玩家的 S2C 包。调用点刻意放在握手 / 聚合开关 / 连接激活 / 黑名单
- *       gating 之前，因此单人/LAN 集成服的本机 memory 连接（不握手、不聚合）
- *       同样导出全量包流——这正是「单人生效」的落点。</li>
- *   <li>{@code HassiumAggregationManager.flushBatch}：编码后的完整聚合帧
- *       （{@code hassium:aggregation_s2c}，含子包头与字典 ZSTD 压缩字节）。</li>
- * </ol>
- * 输出 {@code logs/hassium-aggregated-packets/agg-<进程首包时间>.jsonl}，每行一包：
- * {@code {"ts":..,"src":"send|agg","conn":..,"type":..,"subs":..,"size":..,"payload":base64}}。
- * 序列化复用 {@link HassiumAggregationManager#takeOver} 同一链路（custom payload 提取 /
- * 原版包体 StreamCodec 序列化）。每包写盘并 flush，性能开销大，仅诊断用；
- * 任何异常自禁用并 warn 一次，绝不影响发包路径。
+/** Debug JSONL export of complete native encoder bytes and separately labelled v3 carriers.
+ * Original packets are encoded once. Count native_v3 for input and agg_v3 only for transport;
+ * never add both when estimating egress. Disabled unless debug.exportAggregatedPackets is set.
  */
 public final class AggregatedPacketExporter {
 
@@ -50,44 +31,23 @@ public final class AggregatedPacketExporter {
     private AggregatedPacketExporter() {
     }
 
-    /**
-     * 服务端 send 拦截点导出：所有经过 {@code Connection.send} 的 play 期 S2C 包。
-     * <p>
-     * 独立于握手/聚合 gating，memory 连接（单人）同样生效；开关关闭时仅一次配置读。
-     */
-    public static void exportSendPacket(Packet<?> packet, Connection connection) {
-        if (!enabled()) {
-            return;
-        }
-        try {
-            PacketId type = PacketTypeHelper.getPacketType(packet);
-            byte[] payload = null;
-            if (type != null) {
-                payload = PacketPayloadCompat.isCustomPayloadPacket(packet)
-                        ? PacketPayloadCompat.extractPayloadData(packet)
-                        : PacketCodecCompat.serializePacketBody(packet,
-                                PacketCodecCompat.resolveRegistryAccess(connection));
-            }
-            // 类型无法识别（1.20.1 bundle / 索引未同步）仍记一行：类名兜底，保证「所有经过」语义
-            String typeId = type != null ? type.fullId() : "unknown:" + packet.getClass().getSimpleName();
-            writeLine(toJsonLine(System.currentTimeMillis(), "send", safeConn(connection), typeId, null, payload));
-        } catch (Exception e) {
-            writeLine(toJsonLine(System.currentTimeMillis(), "send", safeConn(connection),
-                    "error:" + e.getClass().getSimpleName(), null, null));
-        }
+    /** Complete native bytes from the real encoder. Never invoke a third-party codec for diagnostics. */
+    public static void exportNativeBytes(Connection connection, String type, io.netty.buffer.ByteBuf encoded) {
+        if (!enabled()) return;
+        byte[] bytes = new byte[encoded.readableBytes()]; encoded.getBytes(encoded.readerIndex(), bytes);
+        String line = toJsonLine(System.currentTimeMillis(), "native_v3", safeConn(connection), type, null, bytes);
+        int prefix = io.github.limuqy.mc.hassium.platform.Services.NETWORK_MANAGER.egressEnvelopePrefixBytes(type);
+        writeLine(prefix == 0 ? line : line.substring(0, line.length() - 1) + ",\"envelopePrefixBytes\":" + prefix + "}");
     }
 
-    /**
-     * 聚合冲刷点导出：编码后的完整聚合帧字节。
-     */
-    public static void exportAggregationFrame(FriendlyByteBuf encodedFrame, int subCount) {
-        if (!enabled()) {
-            return;
-        }
-        byte[] frame = new byte[encodedFrame.readableBytes()];
-        encodedFrame.getBytes(encodedFrame.readerIndex(), frame);
-        writeLine(toJsonLine(System.currentTimeMillis(), "agg", "server",
-                HassiumPacketIds.AGGREGATION_S2C, subCount, frame));
+    public static void exportV3Frame(Connection connection, byte[] frame, int packets, int trainedEpoch) { exportV3Frame(connection, frame, packets, trainedEpoch, -1, 1); }
+    public static void exportV3Frame(Connection connection, byte[] frame, int packets, int trainedEpoch, int envelopeFixedBytes, int compressionPrefixBytes) {
+        if (!enabled()) return;
+        String line = toJsonLine(System.currentTimeMillis(), "agg_v3", safeConn(connection), HassiumPacketIds.AGGREGATION_S2C, packets, frame);
+        writeLine(line.substring(0, line.length() - 1) + ",\"trainedEpoch\":" + trainedEpoch + ",\"envelopeFixedBytes\":" + envelopeFixedBytes + ",\"compressionPrefixBytes\":" + compressionPrefixBytes + "}");
+    }
+    public static void exportPhase(String phase) {
+        if (enabled()) writeLine(toJsonLine(System.currentTimeMillis(), "phase_v3", "server", phase, null, null));
     }
 
     private static boolean enabled() {

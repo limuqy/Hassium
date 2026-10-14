@@ -83,7 +83,7 @@ public class MixinMinecraftServer {
             // 登录协商结果 → Play 激活（connection 挂载后下发 play_init；空转零成本）
             ServerHandshakeActivation.drainPending(server);
             // tick 尾异步冲刷聚合缓冲（主线程只入队；主线程卡顿由 maxWait watchdog 兜底）
-            io.github.limuqy.mc.hassium.protocol.HassiumAggregationManager.flushAllAsync();
+            io.github.limuqy.mc.hassium.protocol.egress.EgressPipeline.flushAll();
         }
         // 服务端冒烟测试：检测玩家退出后切换视距
         ServerSmokeTest.onServerTick(server);

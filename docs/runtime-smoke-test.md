@@ -648,3 +648,15 @@ build/smoke-test/
 ## 退役说明（UdpFailover / Nginx harness）
 
 1.1.2 的 UDP 控制面 failover 冒烟（`udp-failover` phase + nginx stream 反代 harness）已随 2.0.0 客户端 failover 套件退役并**全链删除**：脚本层 `-Phase UdpFailover` / `-NginxExePath` / `-ProxyPort` / `-DryRun` / `-InjectTcpClose` / `-SeamlessMode` 参数、`scripts/smoke/UdpFailoverSmoke.psm1`、`runtime-smoke-test.Tests.ps1`（Pester）、Java 侧 `udp-failover` / `dataplane` / `all` 死分支均已不存在；`network.dataPlane.recoveryFreeze` / `controlStallMs` / `failoverExpiryMs` 配置键亦已删。当前 `-SmokePhases` 仅剩 `classic` / `pregen`。历史拓扑与设计决策见 `docs/archive/multi-channel_network_research.md` 与 `docs/handoff/handoff-2026-08-09-network-core.md`。
+
+## 聚合 v3 迁移专项
+
+`egress` 使用开发环境的类型化 Mod payload，两轮各 512 个消息，验证 biome holder、变长字符串/列表、多结构共用通道、Bundle、发送回调和事件执行次数。例：
+
+```powershell
+.\scripts\runtime-smoke-test.ps1 -Ver 1.21.1 -Loader forge -Phase I -Scenario egress -SessionId egress_2x_forge
+```
+
+同一 checkout 的不同 `-Pmc_ver` 构建/冒烟必须串行：Manifold 定义由根 `build.properties` 生成，共享文件会被后启动的版本覆盖。仅分开输出目录不足以隔离此定义文件。
+
+`egressbench` 可采集空闲、移动实体和 Mod 密集阶段。`factoryegress20/100/200` 要求 1.21.1+ 的 tick 管理器及与目标 MC 兼容的工厂存档；提供的 26.1.2 工厂 ZIP 不能向 1.x 降级加载。历史 JSONL 可通过 `EgressCaptureReplay` 做不透明字节算法对照，不作为 2.x 原生运行时或出口收益证据。

@@ -96,6 +96,10 @@ public final class FabricPayloadRegistry {
             return;
         }
         registered = true;
+        if (io.github.limuqy.mc.hassium.protocol.egress.EgressFixture.enabled()) {
+            PayloadTypeRegistry.playS2C().register(io.github.limuqy.mc.hassium.compat.EgressFixtureCompat.TYPE,
+                    io.github.limuqy.mc.hassium.compat.EgressFixtureCompat.CODEC);
+        }
 
         // S2C types
         PayloadTypeRegistry.playS2C().register(DICTIONARY_SYNC_S2C_TYPE, codec(DICTIONARY_SYNC_S2C_TYPE));

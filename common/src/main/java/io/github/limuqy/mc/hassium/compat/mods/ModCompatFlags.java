@@ -36,6 +36,8 @@ public final class ModCompatFlags {
             present("com.PinkCats.bandwidthoptimizer.Bandwidthoptimizer");
 
     private static volatile boolean announced;
+    private static final boolean NEOFORGE = present("net.neoforged.fml.loading.FMLLoader");
+    public static boolean neoForge() { return NEOFORGE; }
 
     private ModCompatFlags() {
     }

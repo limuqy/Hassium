@@ -1,0 +1,4 @@
+phase,frames,packets,actualAggregateWire,independentAggregateWire,historyAggregateWire,templateAggregateWire,exactRefs,templateRefs,definitionBytes,independentWallNs,historyWallNs,templateWallNs,independentCpuNs,historyCpuNs,templateCpuNs,templateAttempts,templateSkips,templateWinningFrames
+warmup,825,3822,60508,75165,60727,60992,0,100,32,56451266,108064800,167672633,57291666,104166666,171875000,78,747,1
+factory_200,3367,275171,1953843,2994208,1953685,1953677,0,0,0,259179300,1430948133,1699035900,255208333,1421875000,1687500000,176,3191,0
+done,646,4329,34804,52263,37253,35118,0,3651,15,44469166,252684100,549065333,46875000,250000000,546875000,603,43,566

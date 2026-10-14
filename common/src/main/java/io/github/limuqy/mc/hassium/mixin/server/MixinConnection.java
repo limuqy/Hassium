@@ -1,16 +1,8 @@
 package io.github.limuqy.mc.hassium.mixin.server;
 
-import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.protocol.handshake.LoginHandshakeManager;
 import io.github.limuqy.mc.hassium.protocol.HassiumConnectionRegistry;
-import io.github.limuqy.mc.hassium.protocol.HassiumAggregationManager;
-import io.github.limuqy.mc.hassium.protocol.AggregationDecodeQueue;
-import io.github.limuqy.mc.hassium.protocol.AggregatedPacketExporter;
 import io.github.limuqy.mc.hassium.protocol.PullResponseDecodeQueue;
-import io.github.limuqy.mc.hassium.protocol.PacketCompressionBlacklist;
-import io.github.limuqy.mc.hassium.protocol.PacketTypeHelper;
-import io.github.limuqy.mc.hassium.config.HassiumConfigService;
-import io.github.limuqy.mc.hassium.compat.PacketPayloadCompat;
 import io.netty.channel.ChannelHandlerContext;
 import net.minecraft.network.Connection;
 import net.minecraft.network.PacketListener;
@@ -25,12 +17,8 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * 拦截网络连接发送数据包，实现 Hassium 聚合压缩（服务端 → vanilla 直连）。
- * <p>
- * 注意：区块数据包不再经过此拦截，由 ServerChunkPushManager 直接发送。
- * <p>
- * 1.21.6+：{@code Connection.send} 第二参数由 {@code PacketSendListener} 改为
- * {@code ChannelFutureListener}。
+ * Connection lifecycle, send callback metadata and strict v3 native decode failures.
+ * Complete packet bytes are intercepted by the PacketEncoder-side pipeline.
  */
 @Mixin(value = Connection.class, priority = 1)
 public class MixinConnection {
@@ -41,52 +29,56 @@ public class MixinConnection {
     @Shadow
     private PacketFlow receiving;
 
-    /**
-     * 客户端入站：在 {@code PacketUtils} 跳主线程之前拦聚合帧，只拷贝 body 入 FIFO 工人。
-     */
-    @Inject(method = "channelRead0", at = @At("HEAD"), cancellable = true)
-    private void hassium$interceptClientAggregation(ChannelHandlerContext ctx, Packet<?> packet, CallbackInfo ci) {
-        if (receiving != PacketFlow.CLIENTBOUND) {
-            return;
-        }
-        if (!PacketTypeHelper.isAggregationPacket(packet)) {
-            if (packet instanceof net.minecraft.network.protocol.BundlePacket
-                    && AggregationDecodeQueue.enqueueBundle((Connection) (Object) this, packet)) {
-                ci.cancel();
-            }
-            return;
-        }
-        byte[] data = PacketPayloadCompat.extractPayloadData(packet);
-        if (data != null && data.length > 0) {
-            AggregationDecodeQueue.enqueue((Connection) (Object) this, data);
-        }
-        // 1.20.1 getData() 会消费 buffer：识别为聚合帧后必须 cancel，不能再交给原版。
-        ci.cancel();
-    }
+    @Shadow private io.netty.channel.Channel channel;
 
-    /**
-     * 服务端入站：提前消费 1.20.1 Hassium login query 应答。
-     * 应答可能晚于 listener 切到 Game —— 原版 handleCustomQueryPacket 会
-     * ClassCastException（首连偶发「此服务器发送了一个无效的数据包」）。
-     */
+#if MC_VER >= MC_1_21_1
+    // Only the reconfigurable ProtocolInfo pipeline can pause an already active v3 FIFO.
+    // Legacy setProtocol runs during initial login, before v3 is installed; leave it untouched.
+    @Inject(method = "setupInboundProtocol", at = @At("TAIL"))
+    private void hassium$resumeByteFifo(net.minecraft.network.ProtocolInfo<?> protocol, PacketListener listener, CallbackInfo ci) {
+        if (receiving == PacketFlow.CLIENTBOUND) io.github.limuqy.mc.hassium.protocol.egress.EgressPipeline.inboundReady(channel);
+    }
+#endif
+#if MC_VER < MC_1_21_1
     @Inject(method = "channelRead0", at = @At("HEAD"), cancellable = true)
     private void hassium$consumeLoginQueryAnswer(ChannelHandlerContext ctx, Packet<?> packet, CallbackInfo ci) {
-        if (receiving != PacketFlow.SERVERBOUND) {
-            return;
-        }
-#if MC_VER < MC_1_21_1
-        if (!(packet instanceof net.minecraft.network.protocol.login.ServerboundCustomQueryPacket query)) {
-            return;
-        }
-        if (query.getTransactionId() != io.github.limuqy.mc.hassium.protocol.handshake.LoginHandshake.TRANSACTION_ID) {
-            return;
-        }
-        net.minecraft.network.FriendlyByteBuf data = query.getData();
-        Connection self = (Connection) (Object) this;
-        if (LoginHandshakeManager.consumeQueryAnswerAtChannel(self, data)) {
+        if (receiving != PacketFlow.SERVERBOUND || !(packet instanceof net.minecraft.network.protocol.login.ServerboundCustomQueryPacket query)) return;
+        if (query.getTransactionId() != io.github.limuqy.mc.hassium.protocol.handshake.LoginHandshake.TRANSACTION_ID) return;
+        if (LoginHandshakeManager.consumeQueryAnswerAtChannel((Connection)(Object)this, query.getData())) ci.cancel();
+    }
+#endif
+    @Inject(method = "exceptionCaught", at = @At("HEAD"), cancellable = true)
+    private void hassium$strictDecode(ChannelHandlerContext ctx, Throwable cause, CallbackInfo ci) {
+        if (receiving == PacketFlow.CLIENTBOUND && ctx.pipeline().get("hassium_ingress_v3") != null) {
+            io.github.limuqy.mc.hassium.protocol.egress.EgressPipeline.disconnectInvalid((Connection)(Object)this, ctx, cause);
             ci.cancel();
         }
+    }
+
+    @Inject(method = "doSendPacket", at = @At("HEAD"))
+#if MC_VER < MC_1_21_1
+    private void hassium$beginWrite(Packet<?> packet, net.minecraft.network.PacketSendListener listener, net.minecraft.network.ConnectionProtocol target, net.minecraft.network.ConnectionProtocol previous, CallbackInfo ci) {
+#elif MC_VER < MC_1_21_6
+    private void hassium$beginWrite(Packet<?> packet, net.minecraft.network.PacketSendListener listener, boolean flush, CallbackInfo ci) {
+#else
+    private void hassium$beginWrite(Packet<?> packet, io.netty.channel.ChannelFutureListener listener, boolean flush, CallbackInfo ci) {
 #endif
+        if (receiving == PacketFlow.SERVERBOUND) {
+            io.github.limuqy.mc.hassium.protocol.egress.EgressPipeline.callback(channel, listener != null);
+        }
+    }
+
+    @Inject(method = "doSendPacket", at = @At("RETURN"))
+#if MC_VER < MC_1_21_1
+    private void hassium$endWrite(Packet<?> packet, net.minecraft.network.PacketSendListener listener, net.minecraft.network.ConnectionProtocol target, net.minecraft.network.ConnectionProtocol previous, CallbackInfo ci) {
+#elif MC_VER < MC_1_21_6
+    private void hassium$endWrite(Packet<?> packet, net.minecraft.network.PacketSendListener listener, boolean flush, CallbackInfo ci) {
+#else
+    private void hassium$endWrite(Packet<?> packet, io.netty.channel.ChannelFutureListener listener, boolean flush, CallbackInfo ci) {
+#endif
+        if (receiving == PacketFlow.SERVERBOUND) {
+            io.github.limuqy.mc.hassium.protocol.egress.EgressPipeline.callback(channel, false);
+        }
     }
 
     // review-fix: T7-59: handler 统一加 hassium$ 前缀（Mixin 惯例，避免与目标类未来同名成员 merge 冲突）
@@ -99,22 +91,17 @@ public class MixinConnection {
     //   单参→双参→三参全部汇聚，天然无重复拦截。
     // - 1.21.6+：三参第二参类型改为 ChannelFutureListener，结构同上。
 #if MC_VER < MC_1_21_1
-    @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;Lnet/minecraft/network/PacketSendListener;)V", at = @At("HEAD"), cancellable = true)
-    private void hassium$onSendPacket(Packet<?> packet, net.minecraft.network.PacketSendListener sendListener, CallbackInfo ci) {
-        hassium$tryAggregate(packet, sendListener != null, ci);
-    }
+    @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;Lnet/minecraft/network/PacketSendListener;)V", at = @At("HEAD"))
+    private void hassium$onSendPacket(Packet<?> packet, net.minecraft.network.PacketSendListener listener, CallbackInfo ci) {
 #elif MC_VER < MC_1_21_6
-    @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;Lnet/minecraft/network/PacketSendListener;Z)V", at = @At("HEAD"), cancellable = true)
-    private void hassium$onSendPacket(Packet<?> packet, net.minecraft.network.PacketSendListener sendListener, boolean flushNow, CallbackInfo ci) {
-        hassium$tryAggregate(packet, sendListener != null, ci);
-    }
+    @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;Lnet/minecraft/network/PacketSendListener;Z)V", at = @At("HEAD"))
+    private void hassium$onSendPacket(Packet<?> packet, net.minecraft.network.PacketSendListener listener, boolean flush, CallbackInfo ci) {
 #else
-    @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;Lio/netty/channel/ChannelFutureListener;Z)V", at = @At("HEAD"), cancellable = true)
-    private void hassium$onSendPacket(Packet<?> packet, io.netty.channel.ChannelFutureListener sendListener, boolean flushNow, CallbackInfo ci) {
-        hassium$tryAggregate(packet, sendListener != null, ci);
-    }
+    @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;Lio/netty/channel/ChannelFutureListener;Z)V", at = @At("HEAD"))
+    private void hassium$onSendPacket(Packet<?> packet, io.netty.channel.ChannelFutureListener listener, boolean flush, CallbackInfo ci) {
 #endif
-
+        hassium$tryAggregate(packet, listener != null, ci);
+    }
     /**
      * 聚合拦截公共逻辑（需回调的包不聚合）。
      */
@@ -126,84 +113,13 @@ public class MixinConnection {
         if (!(packetListener instanceof ServerGamePacketListenerImpl)) {
             return;
         }
-        if (HassiumAggregationManager.isSendingDirect()) {
-            return;
-        }
-
-        // debug.exportAggregatedPackets：导出点在握手/聚合/黑名单 gating 之前，
-        // 单人/LAN 集成服的本机 memory 连接（不握手、不聚合）同样导出
-        AggregatedPacketExporter.exportSendPacket(packet, self);
 
         // 实体更新包实测计数（帧率压力的输入；只计数，不改变投递语义）
         if (io.github.limuqy.mc.hassium.server.entity.EntityPacketCounters.isEntityUpdatePacket(packet)) {
             io.github.limuqy.mc.hassium.server.entity.EntityPacketCounters.observe(self);
         }
 
-        // 聚合包自身不拦截
-        if (PacketTypeHelper.isAggregationPacket(packet)) {
-            return;
-        }
-        // Bundle 保留原版编码，进入同一发送 FIFO；不能把 bundle 本体序列化进聚合帧。
-        // flush 在 bundle 前发出先行聚合帧，客户端也经同一工人提交主线程任务。
-        if (packet instanceof net.minecraft.network.protocol.BundlePacket) {
-            if (!hasSendListener && HassiumConnectionRegistry.isActive(self)
-                    && HassiumConfigService.getInstance().isPacketAggregationEnabled()
-                    && HassiumAggregationManager.takeOverBundle(packet, self)) {
-                ci.cancel();
-            }
-            return;
-        }
-
-        // 获取包类型
-        var packetType = PacketTypeHelper.getPacketType(packet);
-        if (packetType == null) {
-            // 无法识别的包不聚合，直接发送
-            return;
-        }
-
-#if MC_VER >= MC_1_21_1
-        // mod / 加载器注册的 S2C payload：客户端 handler 按具体类型对象分发，
-        // 聚合重放的 RawCustomPayload 会 ClassCastException（neoforge:custom_time_packet 实证）→ 直发
-        if (PacketPayloadCompat.isModdedS2CCustomPayload(packet)) {
-            return;
-        }
-#endif
-
-        // 检查黑名单 / 高频排除：控制面、独立压缩通道、区块图控制包不聚合
-        String packetTypeId = packetType.toString();
-        if (!PacketCompressionBlacklist.shouldAggregate(packetTypeId)) {
-            Constants.LOG.debug("Packet {} skipped aggregation (blacklist or high-freq)", packetTypeId);
-            return;
-        }
-
-        // 会话级序列化失败短路：曾无法聚合的类型（如 client 类引用的第三方 payload）直接放行直发
-        if (HassiumAggregationManager.isAggregationIncompatible(packetTypeId)) {
-            return;
-        }
-
-        // 检查连接是否启用聚合
-        boolean isActive = HassiumConnectionRegistry.isActive(self);
-        if (!isActive) {
-            return;
-        }
-
-        // 检查聚合配置开关
-        if (!HassiumConfigService.getInstance().isPacketAggregationEnabled()) {
-            return;
-        }
-
-        // 需要回调的包不聚合，直接发送
-        if (hasSendListener) {
-            HassiumAggregationManager.flushConnectionSync(self);
-            return;
-        }
-
-        // 将包交给聚合管理器（原版包和自定义包都聚合）
-        Constants.LOG.debug("Aggregating packet: {}", packetType);
-        // 仅入缓冲成功才 cancel；失败（序列化 null/异常、缓冲溢出降级）必须让原版 send 继续，否则丢包
-        if (HassiumAggregationManager.takeOver(packet, self)) {
-            ci.cancel();
-        }
+        // Native PacketEncoder captures the bytes after exactly one invocation of the original codec.
     }
 
     // review-fix: T7-60: 带描述符注入 disconnect——1.21.1+ 有 Component/DisconnectionDetails 双重载
@@ -217,8 +133,6 @@ public class MixinConnection {
         Connection self = (Connection) (Object) this;
         HassiumConnectionRegistry.markDisabled(self);
         io.github.limuqy.mc.hassium.server.entity.EntityPacketCounters.forget(self);
-        HassiumAggregationManager.discardConnection(self);
-        AggregationDecodeQueue.discard(self);
         // 字典 rollout：断连解除其 offer ACK 门控（或触发阻断者离开后的重试）
         io.github.limuqy.mc.hassium.protocol.DictionaryManager.onConnectionGone(self);
         // review-fix: 仅客户端连接断连才清空 pull 解码队列——队列是进程级单例，

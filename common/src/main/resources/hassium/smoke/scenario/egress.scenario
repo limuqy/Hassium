@@ -1,0 +1,12 @@
+# Typed Mod codec, registry values, varying structures and exactly-once events; reconnect resets v3.
+join label=WAIT_JOIN_1 since=start timeoutMs=${joinTimeoutMs}
+wait ms=30000
+assertProbe key=egress.fixtureReceived op=eq value=512
+dump label=ROUND1 round=1
+disconnect
+reconnect
+join label=WAIT_JOIN_2 since=reconnect timeoutMs=${joinTimeoutMs}
+wait ms=30000
+assertProbe key=egress.fixtureReceived op=eq value=512
+dump label=ROUND2 round=2
+exit rounds=2

@@ -9,6 +9,28 @@ import net.minecraft.server.level.ServerPlayer;
  */
 public interface INetworkManagerService {
 
+    /** Construct the registered carrier; the actual bound native codec encodes it on EventLoop. */
+    default net.minecraft.network.protocol.Packet<?> createAggregationCarrier(byte[] data) {
+        throw new UnsupportedOperationException("No aggregation carrier registered");
+    }
+
+    default String egressPacketKey(net.minecraft.network.protocol.Packet<?> packet, io.netty.buffer.ByteBuf encoded, String fallback) { return fallback; }
+    default int egressEnvelopePrefixBytes(String type) { return 0; }
+    default void inspectAggregationCarrier(io.netty.buffer.ByteBuf encoded) {}
+
+    /** Inspect only the owned carrier envelope, before vanilla or loader decoding. */
+    default byte[] extractAggregationFrame(String channel, FriendlyByteBuf body) {
+        if (!io.github.limuqy.mc.hassium.protocol.HassiumPacketIds.AGGREGATION_S2C.equals(channel)) return null;
+        int length = body.readVarInt();
+        if (length <= 0 || length > io.github.limuqy.mc.hassium.protocol.egress.EgressFrameCodec.MAX_FRAME_BYTES || body.readableBytes() != length)
+            throw new IllegalArgumentException("Invalid native aggregation envelope");
+        byte[] frame = new byte[length]; body.readBytes(frame); return frame;
+    }
+    default boolean isEgressControlChannel(String channel) { return false; }
+    default net.minecraft.network.protocol.Packet<?> createEgressFixtureCarrier(io.github.limuqy.mc.hassium.protocol.egress.EgressFixture.Payload payload) {
+        return io.github.limuqy.mc.hassium.compat.EgressFixtureCompat.packet(payload);
+    }
+
     /** 发送 shadowPullV1 区块请求到服务端（客户端调用）。 */
     default void sendShadowPullRequest(FriendlyByteBuf buf) {
         if (buf != null && buf.refCnt() > 0) {
@@ -74,13 +96,9 @@ public interface INetworkManagerService {
      */
     default void sendAggregationReady(int dictionaryEpoch, long dictionaryId) {
     }
-
-    /**
-     * 客户端请求字典重同步（C2S；解码到未知 epoch 聚合帧后的恢复动作，客户端节流）。
-     * 载体沿用 {@code aggregation_ready} 的 {@code ready=false} 语义，服务端重发当前激活字典。
-     */
-    default void sendDictionaryResyncRequest() {
+    /** Bind initial readiness to the connection whose byte receiver was installed. */
+    default void sendAggregationReady(net.minecraft.network.Connection connection, int dictionaryEpoch, long dictionaryId) {
+        throw new UnsupportedOperationException("No bound aggregation acknowledgement registered");
     }
 
 }
-
