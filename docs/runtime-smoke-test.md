@@ -27,6 +27,8 @@ Hassium 26.x 三锚点（26.1.2 / 26.2 / 26.3）× Fabric/NeoForge 的实跑验�
 
 当前复采回放与指标口径见 [egress-v3.md](egress-v3.md)，结果记录见 [2026-10-13 交接](handoff/handoff-2026-10-13-egress-v3.md)。冒烟期间不要在另一个会话启动任何版本的 Gradle 编译/测试：开发运行类路径会受到共享输出重写影响；需等当前游戏脚本退出，再运行构建或回放任务。
 
+`factoryegress20/100/200` 使用实际氙氪重工 2.0 存档；传 `-WorldZip` 后每场恢复到独立 `smoke_fixture_*` 世界，原 ZIP 只读，重复 session 的旧副本移至 `build/smoke-test/fixture-archives/`。此存档出生点 Y=-60，场景使用 `join requirePositiveY=false`，随后观察模式定位、预热、原版 tick 命令解除冻结并计量。目标 TPS 和实际 TPS 分别报告。依赖已缓存但仓库暂不可用时可传 `-Offline`；不修改全局 Gradle 配置。具体坐标、门禁与有效数据见 [工厂复测](handoff/handoff-2026-10-13-factory-egress-v3.md)。
+
 ## 前置条件
 
 1. **JDK 25**：26.x 编译需要（toolchain 自动供给）

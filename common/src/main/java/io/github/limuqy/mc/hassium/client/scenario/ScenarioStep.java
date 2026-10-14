@@ -22,7 +22,7 @@ public final class ScenarioStep {
 
     /** 步骤原语集。 */
     public enum Type {
-        /** 等待进服（player/level/connection 就绪、非内嵌服、y&gt;0）。 */
+        /** 等待进服；默认要求 y&gt;0，导入负高度存档可显式 requirePositiveY=false。 */
         JOIN,
         /** 等待：定时（ms）。 */
         WAIT,

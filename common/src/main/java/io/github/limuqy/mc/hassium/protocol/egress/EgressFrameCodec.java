@@ -21,11 +21,14 @@ public final class EgressFrameCodec implements AutoCloseable {
     private final boolean historyEnabled, templatesEnabled;
     private byte[] history = new byte[0];
     private long epoch, sequence;
+    private long templateAttempts, templateSkips, templateWins;
     private boolean closed;
 
     public record PacketBytes(String key, byte[] bytes) {
         public PacketBytes { if (key == null || bytes == null || bytes.length == 0 || bytes.length > MAX_FRAME_BYTES) throw EgressBytes.invalid("Invalid packet"); bytes = bytes.clone(); }
         @Override public byte[] bytes() { return bytes.clone(); }
+        // Package-private, read-only view: the record owns this immutable copy.
+        byte[] content() { return bytes; }
     }
     public record Dictionary(int epoch, byte[] bytes) {
         public Dictionary { if (epoch <= 0 || bytes == null || bytes.length == 0) throw EgressBytes.invalid("Invalid dictionary"); bytes = bytes.clone(); }
@@ -59,7 +62,11 @@ public final class EgressFrameCodec implements AutoCloseable {
         int checksum = checksum(logical);
         long next = sequence + 1;
         Candidate best = choose(logical, false, logical.length, checksum, next, dictionary);
-        TemplateDictionary.Transaction transaction = templatesEnabled ? templates.prepare(packets) : null;
+        TemplateDictionary.Transaction transaction = null;
+        if (templatesEnabled) {
+            if (templates.shouldAttempt(packets, best.frame.length, logical.length)) { templateAttempts++; transaction = templates.prepare(packets); }
+            else templateSkips++;
+        }
         if (transaction != null && transaction.bytes().length <= MAX_LOGICAL_BYTES) {
             Candidate mapped = choose(transaction.bytes(), true, logical.length, checksum, next, dictionary);
             if (mapped.frame.length < best.frame.length) best = mapped;
@@ -67,11 +74,17 @@ public final class EgressFrameCodec implements AutoCloseable {
         if (best.frame.length > MAX_FRAME_BYTES) throw EgressBytes.invalid("Carrier exceeds payload limit");
         int exact = 0, partial = 0, definitions = 0;
         if (best.mapped) { transaction.commit(); exact = transaction.exact; partial = transaction.partial; definitions = transaction.definitions; }
+        if (templatesEnabled) {
+            templates.selected(best.mapped);
+            if (best.mapped) templateWins++;
+        }
         if (historyEnabled) appendHistory(best.payload);
         sequence = next;
         return new Encoded(best.frame, logical.length, best.mode, best.mapped, exact, partial, definitions,
                 dictionary == null ? 0 : dictionary.epoch);
     }
+    public record TemplateStats(long attempts, long skips, long wins) {}
+    public synchronized TemplateStats templateStats() { return new TemplateStats(templateAttempts, templateSkips, templateWins); }
     private Candidate choose(byte[] payload, boolean mapped, int length, int crc, long next, Dictionary dictionary) {
         Candidate best = candidate(payload, payload, mapped, RAW, 0, length, crc, next);
         if (historyEnabled && history.length != 0 && !dictionaryMagic(history)) {

@@ -1,0 +1,4 @@
+"targetTPS","frames","aggregatePackets","independentAggregateWire","historyAggregateWire","oldTemplateAggregateWire","newTemplateAggregateWire","newMinusOldBytes","newMinusHistoryBytes","newExactRefs","newPartialRefs","newDefinitionBytes","newAttempts","newSkips","newWinningFrames","oldFullCpuUsPerFrame","newFullCpuUsPerFrame","newHistoryCpuUsPerFrame","fullCpuReductionPercent","oldAllPhaseAggregateWire","newAllPhaseAggregateWire","allPhaseWireIncreaseBytes"
+"20","679","63670","689682","460039","460100","459966","-134","-73","0","0","0","41","638","0","731.775","340.574","276.141","53.459","528384","529106","722"
+"100","3146","242384","2672429","1755234","1755336","1755263","-73","29","0","0","0","281","2865","0","708.241","339.717","270.184","52.034","1833675","1834669","994"
+"200","3367","275171","2994208","1953685","1953843","1953677","-166","-8","0","0","0","176","3191","0","719.298","318.347","274.725","55.742","2049155","2049787","632"

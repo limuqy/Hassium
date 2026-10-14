@@ -62,6 +62,9 @@ param(
     # seedgen/dimension 场景强制 -CleanWorld 语义；存在 scripts/smoke/profiles/<name>.profile.properties
     # 时按键值对 patch 双端 hassium toml（见 Invoke-SmokeProfilePatch）。
     [string]$Scenario = "classic",
+    # Always restore a new isolated copy of a supplied world. The source archive is read-only.
+    [string]$WorldZip = "",
+    [switch]$Offline,
     # FULL compare 取证：非空时经 -PhassiumCompareFullDumpDir → buildSrc 三端映射为客户端
     # JVM 属性 hassium.compareFullDumpDir。CompareFullDump 对每个 FULL 落盘
     # server-full.bin（服务端解压后的原版区块包）+ local-baseline.bin（影子端本地生成柱，
@@ -113,6 +116,10 @@ $serverRunDir = Join-Path $loaderRunDir "server"
 # Unidentified mapping 等会卡低版本冒烟的日志审计门禁）。命名与 build 产物目录风格
 # 一致（1.20.1 → 1_20_1）。旧固定 world/ 目录不主动删除，仅不再使用。
 $serverLevelName = "parity_${Loader}_" + ($Ver -replace '\.', '_')
+if ($WorldZip) {
+    if ($SessionId -notmatch '^[a-zA-Z0-9_.-]+$') { throw 'Fixture SessionId must use letters, digits, dots, hyphens or underscores' }
+    $serverLevelName = "smoke_fixture_${Loader}_" + ($Ver -replace '\.', '_') + "_${SessionId}"
+}
 $serverLevelDir = Join-Path $serverRunDir $serverLevelName
 
 # Loader × MC 版本支持校验：真相源是 versionProperties/{Ver}.properties 的 builds_for
@@ -498,7 +505,10 @@ if ($Scenario -eq "classic") {
 
 # 3. 清理存档。CleanWorld = 删除本 loader×ver 的 $serverLevelName 目录后空世界启动。
 #    不再从 pregen-world 恢复（预生成已退役）。非 CleanWorld 时该目录跨轮持久复用。
-if ($CleanWorld) {
+if ($WorldZip) {
+    . (Join-Path $PSScriptRoot 'smoke/world-fixture.ps1')
+    Initialize-SmokeWorldFixture -ZipPath $WorldZip -Target $serverLevelDir -ServerRunDir $serverRunDir -ArchiveDir (Join-Path $logRoot 'fixture-archives')
+} elseif ($CleanWorld) {
     Write-Host "[$SessionId] [3/9] 清理服务端存档 ($Loader/run/server/$serverLevelName/)..."
     Remove-Item -Recurse -Force $serverLevelDir -ErrorAction SilentlyContinue
     Remove-Item -Recurse -Force (Join-Path $serverRunDir "cache") -ErrorAction SilentlyContinue
@@ -586,6 +596,7 @@ $gradlew = Join-Path $projectRoot "gradlew.bat"
 # 5.1 再起服务端 —— 显式 --no-daemon 确保不复用任何 daemon
 Write-Host "[$SessionId] [4/9] 启动服务端 ($Loader / $Ver)..."
 $serverArgs = @("--no-daemon", "-Dorg.gradle.jvmargs=-Xmx2G -DsmokeSession=${SessionId}", ":${Loader}:runServer", "-PhassiumSmokeTest=true", "-PhassiumSmokePhases=${SmokePhases}", "-PhassiumSmokeVd1=$Vd1", "-PhassiumSmokeVd2=$Vd2", "-Pmc_ver=${Ver}")
+if ($Offline) { $serverArgs += '--offline' }
 if ($PSBoundParameters.ContainsKey('Scenario')) {
     # T7/T8：显式 -Scenario 时向服务端注入场景（buildSrc 三端映射为 -Dhassium.serverSmokeScenario，
     # 配合 ScenarioEngine 服务端 op 逻辑；仅 serverSide 注入，客户端走 -PhassiumSmokeScenario）
@@ -665,6 +676,7 @@ $clientArgs = @(
     "-Pmc_ver=${Ver}",
     "-PhassiumSmokeProbeDir=$probeDir"
 )
+if ($Offline) { $clientArgs += '--offline' }
 if ($PSBoundParameters.ContainsKey('Scenario')) {
     # T8：显式 -Scenario 时经 loom 属性透传链注入 -Dhassium.smokeScenario=<name>
     $clientArgs += "-PhassiumSmokeScenario=$Scenario"

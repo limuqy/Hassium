@@ -1,0 +1,4 @@
+targetTPS,actualTPS,ticks,durationMs,packets,originalBytes,actualTcpBytes,independentTcpBytes,historyTcpBytes,benefitPercent,meanQueueMs,onlineCpuMs,independentCpuUsPerFrame,historyCpuUsPerFrame,templateCpuUsPerFrame,independentWallUsPerFrame,templateWallUsPerFrame,exactRefs,templateRefs,definitionBytes,blockEvents,sectionUpdates,motionPackets,errors,session
+20,20.186,404,20014,64235,798438,461316,690898,461255,33.23,12.165,328.125,115.059,299.153,782.401,128.061,816.732,0,0,0,1195,2828,21892,0,factory_final_26.1.2_fabric_20_20261013
+100,94.881,1898,20004,244208,3069989,1760518,2677611,1760416,34.25,10.013,1546.875,74.499,268.198,725.127,75.239,725.09,0,0,0,5370,12445,82166,0,factory_fixed_26.1.2_fabric_100_20261013
+200,103.89,2078,20002,277182,3458152,1959559,2999924,1959401,34.68,9.829,1390.625,74.25,273.797,728.579,74.306,739.149,0,0,0,5876,13688,95560,0,factory_fixed_26.1.2_fabric_200_20261013

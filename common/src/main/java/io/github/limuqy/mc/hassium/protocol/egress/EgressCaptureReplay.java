@@ -7,7 +7,7 @@ import java.io.*;
 import java.nio.file.*;
 import java.util.*;
 
-/** Replays actual current-version v3 captures with their exact batching and active trained dictionary. */
+/** Replays v3 captures with exact batching/dictionaries; encoding policy may evolve without changing v3. */
 public final class EgressCaptureReplay {
     private static final class Session implements AutoCloseable {
         final EgressFrameCodec receiver = new EgressFrameCodec(3);
@@ -22,10 +22,14 @@ public final class EgressCaptureReplay {
     }
     private static final class Phase {
         long frames, packets, actualWire, exact, partial, definitions;
+        long attempts = -1, skips = -1, wins = -1;
         final long[] wire = new long[3], wall = new long[3], cpu = new long[3];
     }
     public static void main(String[] args) throws Exception {
-        if (args.length != 2) throw new IllegalArgumentException("Usage: EgressCaptureReplay <native.jsonl> <report.csv>");
+        if (args.length < 2 || args.length > 4) throw new IllegalArgumentException("Usage: EgressCaptureReplay <native.jsonl> <report.csv> [repeats=1] [verifySelected=true]");
+        int repeats = args.length >= 3 ? Integer.parseInt(args[2]) : 1;
+        if (repeats < 1 || repeats > 20) throw new IllegalArgumentException("Repeats must be 1..20");
+        boolean verifySelected = args.length < 4 || Boolean.parseBoolean(args[3]);
         Map<Integer, byte[]> dictionaries = new HashMap<>(); Map<Integer,String> packetTypes = new HashMap<>();
         Map<String, Session> sessions = new HashMap<>(); Map<String, Phase> phases = new LinkedHashMap<>();
         Map<Integer, EgressFrameCodec.Dictionary> immutableDictionaries = new HashMap<>();
@@ -77,7 +81,8 @@ public final class EgressCaptureReplay {
         int[] baselineLengths = new int[frames.size()];
         // Windows CPU clocks have coarse resolution. Measure a whole contiguous phase per mode,
         // excluding native restoration and verification, rather than summing tiny interleaved samples.
-        for (int mode = 0; mode < 3; mode++) {
+        // With repeats > 1 discard the first full pass to warm the Java/JNI paths.
+        for (int iteration = 0; iteration < repeats; iteration++) for (int mode = 0; mode < 3; mode++) {
             Map<String, ReplayState> states = new HashMap<>();
             try {
                 for (int start = 0; start < frames.size();) {
@@ -90,37 +95,57 @@ public final class EgressCaptureReplay {
                         String connection = frames.get(i).connection();
                         if (!states.containsKey(connection)) states.put(connection, new ReplayState(mode));
                     }
+                    long[] before = mode == 2 && iteration == repeats - 1 ? templateStats(states) : null;
                     long wall = System.nanoTime(), cpu = EgressCpuClock.now();
                     for (int i = start; i < end; i++) {
                         ReplayFrame frame = frames.get(i);
                         encodedFrames.add(states.get(frame.connection()).sender.encode(frame.packets(), frame.epoch(), frame.dictionary()));
                     }
                     Phase totals = phases.get(name);
-                    totals.wall[mode] += System.nanoTime() - wall; totals.cpu[mode] += EgressCpuClock.now() - cpu;
+                    long elapsedWall = System.nanoTime() - wall, elapsedCpu = EgressCpuClock.now() - cpu;
+                    if (repeats == 1 || iteration > 0) { totals.wall[mode] += elapsedWall; totals.cpu[mode] += elapsedCpu; }
+                    if (before != null) {
+                        long[] after = templateStats(states);
+                        if (totals.attempts < 0) totals.attempts = totals.skips = totals.wins = 0;
+                        totals.attempts += after[0] - before[0]; totals.skips += after[1] - before[1]; totals.wins += after[2] - before[2];
+                    }
                     for (int i = start; i < end; i++) {
                         ReplayFrame frame = frames.get(i);
                         var encoded = encodedFrames.get(i - start);
-                        totals.wire[mode] += wireSize(encoded.bytes().length, customPayloadId);
+                        if (iteration == repeats - 1) totals.wire[mode] += wireSize(encoded.bytes().length, customPayloadId);
                         if (mode == 0) baselineLengths[i] = encoded.bytes().length;
                         else if (encoded.bytes().length > baselineLengths[i]) throw new IllegalStateException("Final-size selection exceeded baseline");
-                        if (mode == 2 && !Arrays.equals(encoded.bytes(), frame.captured())) throw new IllegalStateException("Replay did not reproduce the actual selected frame");
+                        if (mode == 2 && verifySelected && !Arrays.equals(encoded.bytes(), frame.captured())) throw new IllegalStateException("Replay did not reproduce the actual selected frame");
                         List<byte[]> replayed = states.get(frame.connection()).verifier.decode(encoded.bytes(), dictionaries::get);
                         if (replayed.size() != frame.packets().size()) throw new IllegalStateException("Replay packet count mismatch");
                         for (int p = 0; p < replayed.size(); p++) if (!Arrays.equals(frame.packets().get(p).bytes(), replayed.get(p))) throw new IllegalStateException("Replay packet bytes/order mismatch");
-                        if (mode == 2) { totals.exact += encoded.exactReferences(); totals.partial += encoded.templateReferences(); totals.definitions += encoded.definitionBytes(); }
+                        if (mode == 2 && iteration == repeats - 1) { totals.exact += encoded.exactReferences(); totals.partial += encoded.templateReferences(); totals.definitions += encoded.definitionBytes(); }
                     }
                     start = end;
                 }
             } finally { states.values().forEach(ReplayState::close); }
         }
         try (var out = Files.newBufferedWriter(Path.of(args[1]))) {
-            out.write("phase,frames,packets,actualAggregateWire,independentAggregateWire,historyAggregateWire,templateAggregateWire,exactRefs,templateRefs,definitionBytes,independentWallNs,historyWallNs,templateWallNs,independentCpuNs,historyCpuNs,templateCpuNs\n");
+            out.write("phase,frames,packets,actualAggregateWire,independentAggregateWire,historyAggregateWire,templateAggregateWire,exactRefs,templateRefs,definitionBytes,independentWallNs,historyWallNs,templateWallNs,independentCpuNs,historyCpuNs,templateCpuNs,templateAttempts,templateSkips,templateWinningFrames\n");
             for (var entry : phases.entrySet()) {
+                int measured = Math.max(1, repeats - 1);
+                for (int mode = 0; mode < 3; mode++) { entry.getValue().wall[mode] /= measured; entry.getValue().cpu[mode] /= measured; }
                 Phase p = entry.getValue(); String row = entry.getKey()+","+p.frames+","+p.packets+","+p.actualWire+","+p.wire[0]+","+p.wire[1]+","+p.wire[2]
-                        +","+p.exact+","+p.partial+","+p.definitions+","+p.wall[0]+","+p.wall[1]+","+p.wall[2]+","+p.cpu[0]+","+p.cpu[1]+","+p.cpu[2];
+                        +","+p.exact+","+p.partial+","+p.definitions+","+p.wall[0]+","+p.wall[1]+","+p.wall[2]+","+p.cpu[0]+","+p.cpu[1]+","+p.cpu[2]+","+p.attempts+","+p.skips+","+p.wins;
                 out.write(row + "\n"); System.out.println(row);
             }
         }
+    }
+    /** Reflection keeps this replay runner usable with archived pre-admission codec classes. */
+    private static long[] templateStats(Map<String, ReplayState> states) throws Exception {
+        var method = Arrays.stream(EgressFrameCodec.class.getMethods()).filter(m -> m.getName().equals("templateStats")).findFirst();
+        if (method.isEmpty()) return null;
+        long[] result = new long[3]; String[] names = {"attempts", "skips", "wins"};
+        for (ReplayState state : states.values()) {
+            Object stats = method.get().invoke(state.sender);
+            for (int i = 0; i < 3; i++) result[i] += (long)stats.getClass().getMethod(names[i]).invoke(stats);
+        }
+        return result;
     }
     private static int wireSize(int frame, int packetId) {
         int packet = varIntSize(packetId) + 1 + HassiumPacketIds.AGGREGATION_S2C.length() + varIntSize(frame) + frame;

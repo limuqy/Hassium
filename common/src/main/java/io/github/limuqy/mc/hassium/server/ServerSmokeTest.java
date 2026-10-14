@@ -152,6 +152,7 @@ public final class ServerSmokeTest {
         // T7：OP 提升只依赖 enabled（hassium.serverSmokeTest=true），不随阶段 armed 关闭失效
         opSmokePlayers(server);
         io.github.limuqy.mc.hassium.protocol.egress.EgressFixture.tickServer(server);
+        io.github.limuqy.mc.hassium.protocol.egress.FactoryEgressBenchmark.tickServer(server);
         if (!armed) {
             return;
         }

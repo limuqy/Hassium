@@ -279,8 +279,8 @@ public final class ScenarioEngine {
         if (mc.getSingleplayerServer() != null) {
             return Outcome.RUNNING;
         }
-        // 等到玩家位置被服务端确认（收到 ClientboundPlayerPositionPacket 后 y > 0）
-        if (mc.player.getY() <= 0) {
+        // Legacy smoke worlds use positive Y; imported void/deep worlds may spawn below zero.
+        if (step.boolParam("requirePositiveY", true) && mc.player.getY() <= 0) {
             return Outcome.RUNNING;
         }
         if (!joinAnnounced) {
