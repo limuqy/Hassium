@@ -1,6 +1,7 @@
 package io.github.limuqy.mc.hassium.client.scenario;
 
 import io.github.limuqy.mc.hassium.client.SmokeProbeWriter;
+import io.github.limuqy.mc.hassium.compat.LevelHeightCompat;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientPacketListener;
 import org.slf4j.Logger;
@@ -321,9 +322,9 @@ public final class ScenarioEngine {
         movePhase = 1;
         cruiseSeconds = seconds;
         int startY = mc.player.blockPosition().getY();
-        moveTargetY = Math.min(mc.level.getMaxBuildHeight() - 16, Math.max(256, startY + 16));
+        moveTargetY = Math.min(LevelHeightCompat.getMaxBlockYExclusive(mc.level) - 16, Math.max(256, startY + 16));
         if (moveTargetY <= startY + 1) {
-            fail("MOVE_TP_NO_HEADROOM startY=" + startY + " maxY=" + mc.level.getMaxBuildHeight(), 3);
+            fail("MOVE_TP_NO_HEADROOM startY=" + startY + " maxY=" + LevelHeightCompat.getMaxBlockYExclusive(mc.level), 3);
             return Outcome.DONE;
         }
         moveUntilMs = now + 20_000L;
