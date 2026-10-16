@@ -12,13 +12,14 @@
 |------|------|
 | Bobby / 同类客户端视距外缓存 | **不兼容**；Hassium 影子端自行管理缓存与重交付，勿与 Bobby 同装 |
 | Immersive Portals | **不兼容** |
-| 同类压缩 / 协议替换（改 Netty Zlib 等） | **不兼容**；Hassium 通道压缩虽不触碰 vanilla 压缩层，但同类 mod 若替换原版压缩管线仍有冲突面 |
+| 同类压缩 / 协议替换（改变 Netty wire 格式或 handler 顺序） | **不兼容**；保留原版 zlib 帧格式的 Lomka 旧版实测边界见 §6.1 |
 | Starlight / ScalableLux | **主动兼容**（见 §7b）：光照引擎被整体替换，影子端 4 处控制面已适配 |
 | Twilight Forest | **主动兼容**（见 §7c）：自定义维装配 + 影子端写入全局 `currentServer` 供 TF `getOverworldSeed` |
 | 包聚合导致第三方包异常 | 关 `master.enablePacketAggregation`，或把**第三方**包 ID 加入 `master.compressionBlacklist`（Hassium 控制面已硬编码排除，与本列表无关） |
 | 反透视（改 chunk 发包内容） | **希望兼容**（miss 路径复用已构建包字节，见 §3） |
 | Distant Horizons / Voxy | **希望兼容**（独立 LOD 通道；见 §4） |
 | Sodium / Iris / Lithium / FerriteCore 等热门优化 | **冒烟通过**（Fabric 1.20.1，见 §6 / §10） |
+| Lomka | **光照 Mixin 冲突已修**（见 §6.1；26.x 共装仍需对应版本验证） |
 | C2ME | **主动兼容**（读天然兼容 + 写侧接管，见 §7） |
 | 文件级服务端备份（含 InstantBackup） | **兼容**（见 §8）；语义级解压 Anvil 的工具不兼容 |
 
@@ -28,7 +29,7 @@ Hassium 主要改动：
 
 1. **存档**：`RegionFile` payload type **126**（ZSTD+字典），`.mca` 外壳不变
 2. **区块下发**：登录期能力握手 + Play 期激活后，服务端原版 tracking 推送 / 影子端统一 ShadowPull；全部以**原版包形态**走 vanilla TCP
-3. **网络**：聚合包内部字典 ZSTD + 区块推送自有压缩 + 可选包聚合——均不触碰原版压缩层；未握手客户端零干扰
+3. **网络**：聚合包内部字典 ZSTD + 区块推送自有压缩 + 可选包聚合；出口 v3 发送 carrier 时暂时提高原版压缩阈值、写后恢复，不改变原版帧格式；未握手客户端零干扰
 
 **第三方可见性**：Hassium 私有 payload（`hassium:*`）对第三方按原版 CustomPayload 可见、可拦截；区块数据本体以原版 `ClientboundLevelChunkWithLightPacket` 形态交付。
 
@@ -73,6 +74,39 @@ NeoForge `GenericPacketSplitter` 会先编码检查大小；`MixinNeoForgePacket
 Sodium / Iris / Lithium / FerriteCore / EntityCulling / ImmediatelyFast 等通常不抢 Region 压缩类型与区块广播接管。
 
 常见摩擦：Hassium 引擎默认开启（进服启动影子端统一算光并回传官方光照包，客户端光照计算仍保持 vanilla 默认开启）。出现光照异常时关闭 `chunk.enabled` 即可（关闭后服务端不剥光，光照随包自带）。
+
+### 6.1 Lomka 光照覆盖
+
+Lomka 0.7.0 覆写 `LayerLightSectionStorage.setStoredLevel`，默认 Mixin 优先级为 1000。
+Hassium 原本同为 1000，`hassium$nullSafeSetStoredLevel` 无法注入覆写后的方法，
+客户端进服时会报 `InvalidInjectionException`。`MixinLayerLightSectionStorage` 提升为
+1100 后，原有的读路径保护和写路径空值保护可保留在 Lomka 的替换方法中；
+无需拆除光照邻域门禁。该优先级修复也适用于 26.x 的同名光照方法。
+
+用户提供的 Lomka 0.7.0 Forge 1.20.1、NeoForge 1.21 JAR 对应旧版 Minecraft，
+不能拿它们测试 26.x。2.x 分支的旧版本实测见其维护记录；master 的 26.x
+共装结论须用对应版本的 Lomka 构建另行验证。Lomka 还覆写原版压缩编码器、
+均匀调色板读取和随机源；这些行为不由光照优先级修复覆盖。
+
+2.x 分支在该修复后，以上两份 JAR 的 Forge 1.20.1、NeoForge 1.21.1
+各完成 seedGen 关闭的 classic 双轮与 seedGen 开启的冷场测试，四场均 PASS。
+这项实测只证明旧版组合；master 目前仅完成 26.x 源码编译验证。
+Lomka 0.7.0 的 `CompressionEncoder.encode` 仍每次读取当前阈值，并在高阈值下写
+原版 `VarInt(0)` 加原始字节，因此与出口 v3 的短时阈值切换兼容；这一结论
+不覆盖改变压缩帧格式或 handler 顺序的其他模组。
+
+先前四场标为 `-MoveSeconds 10` 的 2.x Forge / NeoForge 复跑，运行参数未透传到
+客户端 JVM，实际 `execFly` 收到 0 秒并跳过；原 PASS 不能作为移动验证。
+修复透传后，seedGen 关闭的 Forge 1.20.1 与 NeoForge 1.21.1 classic 均通过
+两轮真实飞行：每轮服务端 TP 至安全高度，随后客户端水平飞行跨越区块，日志的
+`MOVE_TP_REQUEST` / `MOVE_START` / `MOVE_END` 齐全，analyzer 两轮 PASS。
+seedGen 开启的同两组合也各通过单轮 seedgen 真实飞行（NeoForge 水平跨 6 柱、
+Forge 跨 7 柱），四场客户端均退出码 0。旧会话的 176 / 159 个差集虽在当时
+交付形状外，其来源不再从未飞行的证据推断。analyzer 现仅在
+classic 第一轮、VD≥20、最终窗口完整驻留时将这种差集记为 INFO；任何窗内
+缺柱和第二轮 OVD16 仍有效的交付带继续判 P0；R2 缓存重连只对最终
+`serverVD ∪ OVD16` 交付域外的差集降 P1；`MoveSeconds>0` 时还要求 TP 确认
+和独立水平段跨区块，否则判 P0。
 
 ## 7. C2ME
 

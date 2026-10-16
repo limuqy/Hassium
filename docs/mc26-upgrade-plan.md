@@ -19,10 +19,11 @@
 | D1 | **master 走 26.x 单线**：删除所有 ≤1.21.11 版本适配后升级 26.x；不做单分支多段共存 | 26.1 起去混淆导致构建链断裂（architectury-loom issue #328 未修），单分支需双 DSL 条件切换，成本与风险更高 |
 | D2 | **1.21.11-only 打基线后再升级**：先删 `<1.21.11` 适配、冒烟通过、提交「升版前基线」 | 机械清理（~119 文件）用现成可编译冒烟的 1.21.11 工具链验证；把「清理风险」与「升级风险」切成两个可二分的边界 |
 | D3 | **移除 Forge**：三阶段内 forge/ 子项目整体删除；`legacy-1.21` 也不含 Forge | 用户拍板「不再兼容 forge」；1.21.11 本就无 Forge（sunset）；1.21.11-only 的 legacy 不需要 Forge |
-| D4 | **1.20.1–1.21.10 整体 sunset**：不为其建维护分支，已发布产物继续在 Modrinth/CurseForge 可用；以 `archive/pre-baseline` git 引用保留完整历史后手 | D2 的连带决策（基线 = 1.21.11-only，fork 点不再携带更老版本） |
+| D4（已由 D8 更新） | **当时决定 1.20.1–1.21.10 整体 sunset**：不另建维护分支，已发布产物继续可用；以 `archive/pre-baseline` 保留历史 | 2026-10-16 用户明确现有 `2.0.0` 分支继续维护，见 D8 |
 | D5 | **legacy = `legacy-1.21` 分支，从基线提交切出**：冻结功能，仅收 crash/安全修复；修复只从 master 单向 cherry-pick 落地，禁止反向合并 | 基线已坍缩为零版本块代码，cherry-pick 冲突最小化 |
 | D6（版本号已确认 / 支持窗口待确认） | legacy 支持窗口 **6 个月**（或 26 线稳定即 EOL，先到为准）；26 线版本号从 **3.0.0** 起 | 2026-10-12 用户确认 master 改为 3.0.0；legacy 支持窗口仍待确认，不阻塞阶段①②③ |
 | D7 | **取消 NeoForge 测试版本支持**：26.2/26.3 仅 fabric（`builds_for=fabric`），NeoForge 仅 26.1.2；NeoForge 兼容代码与编译保留，不发布、不进冒烟矩阵 | 用户拍板 2026-09-30：非正式版本下 NeoForge 启动弹窗警告挡住自动进服（26.2/26.3 neoforge 冒烟六连 FAIL 实证：客户端停在弹窗、`ConnectScreen` 从不出现；26.1.2 neoforge 正常）。上游 NeoForge 正式版解除弹窗后可恢复 |
+| D8 | **现有 `2.0.0` 分支持续维护**；Lomka 兼容及移动诊断修复同步到 master；版本分别升到 2.1.1 / 3.0.1 | 2026-10-16 用户明确；旧版 JAR 实测只归 2.x，26.x 不借用旧版结果 |
 
 ---
 
@@ -325,6 +326,13 @@ archive/pre-baseline = 当前 HEAD 的引用（1.20.1–1.21.10 完整历史后�
 
 按工厂候选诊断改进发送端学习和定义准入：跨帧多样本变量并集、按当前批次定义回本粗筛、16 个新定义上限、失败退避与周期探测；线格式与最终完整帧择优不变。对同一三档采集使用旧/新 codec 串行六遍回放，首遍预热剔除。运行期模板仍无额外带宽贡献；完整编码 CPU 降约 52–56%，整段含预热/冻结增加约 0.6–1.0 KiB。具体权衡见 [工厂报告后续分析](handoff/handoff-2026-10-13-factory-egress-v3.md)，不将未验证的模板收益写成承诺。
 
+### 2026-10-16 Lomka 兼容与移动 trace 复核
+
+- 用户明确 `2.0.0` 分支继续维护（D8），master 补丁版本改为 **3.0.1**。master 的 `LayerLightSectionStorage` Mixin 优先级从默认 1000 提到 1100，使已有 `getStoredLevel` / `setStoredLevel` 空层保护可装饰 Lomka 对 `setStoredLevel` 的覆写；光照邻域门禁及交付域均未改。Lomka 上游当前 0.7.0 源码仍默认优先级 1000 并覆写该方法；用户给的 Forge 1.20.1、NeoForge 1.21 JAR 只用于 2.x 联测，不能作为 master 26.x 共装证明。
+- 2.x 先前四场 `-MoveSeconds 10` Forge / NeoForge 复跑实际上没有飞行：脚本传入 Gradle 属性，但旧 2.x loader 配置未映射到客户端 JVM；`execFly` 得到 0 秒而跳过，日志没有 `MOVE_START` / `MOVE_END`。其 PASS 不能作为移动验收。旧 probe 中 NeoForge 176、Forge 159 个 `injectedNotReady` 均在最终交付形状外，且最终 ready/applied/actualPresent 覆盖当时完整权威形状；缺口来源不从未飞行的会话推断。修复透传及飞行执行后，Forge 1.20.1 / NeoForge 1.21.1 的 seedGen 关闭 classic 新会话各两轮真实高空 TP 后水平跨 10–12 柱并 PASS；seedGen 开启的 seedgen 新会话各单轮水平跨 6–7 柱并 PASS，四场客户端退出码均为 0。
+- analyzer 修复只在 classic 第一轮、VD≥20 且最终 `actualPresent` 与当前完整原版形状精确一致时，将窗外差集记为 INFO。复核旧 R2 缓存重连与静止 `halo_only` 两个分支后，均以最终 `serverVD` 原版形状与 OVD16 方窗的并集为交付域；第二轮 VD10/OVD16 的有效交付带仍判 P0，域外真正光环仍可记 INFO。分类使用原始全量集合，避免报告仅显示前 64 个坐标时漏判第 65 个窗内缺口。master 同步判据并加 26.3 新圆形视距（VD20=1573 柱）反例测试。
+- master 同步高空 TP、等待客户端位置确认、水平段独立计时与真实位移 P0 门禁；NeoForge 26.1.2 / Fabric 26.2 / Fabric 26.3 的 common 与 loader 编译成功，NeoForge 26.1.2 / Fabric 26.3 `build` 重新生成含新场景代码的 **3.0.1** JAR，内嵌 zstd-jni 检查通过。先前 26.3 `common:test` **422 tests / 0 failures / 0 errors / 0 skipped**、`scanVersionBoundaries` 通过；analyzer 43 项测试通过。未运行 26.x Lomka 共装游戏测试，移动屋檐/洞口目视验收仍待完成。
+
 ## 9. 进度表（滚动更新，收工必更）
 
 | 阶段 | 任务 | 状态 | 会话备注 |
@@ -379,6 +387,13 @@ archive/pre-baseline = 当前 HEAD 的引用（1.20.1–1.21.10 完整历史后�
 | 服务端出口无损节流 v3 | ✅ 实施与验收完成 | 实际 native 字节管线、promise/FIFO、历史/模板择优、严格校验和出口计量已落地；每锚点 417 项单测、六组合编译、边界扫描与 30 个场景会话通过。8 份旧采集逐包回放；26.3 两加载器复采实际帧重现通过，对独立字典基线出口降约 12–22%，codec CPU 增加。完整指标、补跑失败证据及范围限制见 [出口 v3 交接](handoff/handoff-2026-10-13-egress-v3.md)。随本次实现提交，未推送/发布。 |
 | 26.1.2 实际红石工厂复测 | ✅ 采集与回放完成 | 三次新副本有效场次 PASS，实测 20.19/94.88/103.89 TPS，对独立字典出口降 33.23–34.68%；每包/顺序及线上帧重现通过，错误 0。计量期模板引用 0，完整候选 CPU 高于历史。目标 200 TPS 未达到，不作为满速容量证明。测试工具与 [报告](handoff/handoff-2026-10-13-factory-egress-v3.md) 随本次提交。 |
 | 出口模板学习、准入与 CPU 改进 | ✅ 实施与工厂回放验证完成 | 三锚点各 422 项单测、六加载器组合编译、边界扫描通过；三采集/三模式/旧新策略各六遍逐包校验与独立基线上限通过。运行期模板引用仍为 0，完整 CPU 降约 52–56%；预热/冻结使整段多 632–994 B，不能承诺额外省流量。未重新跑游戏；源码及 [报告](handoff/handoff-2026-10-13-factory-egress-v3.md) 随本次提交。 |
+
+### 2026-10-16 Lomka 与 trace 修复进度
+
+| 任务 | 状态 | 证据 / 剩余工作 |
+|------|------|-----------------|
+| master 光照 Mixin 优先级与 3.0.1 | ✅ 源码、文档、打包完成 | 1100 保留两处空层保护；三锚点对应加载器编译、26.1.2 NeoForge / 26.3 Fabric 3.0.1 打包通过。26.x 对应版本 Lomka 共装尚未测试，不引用两份旧版 JAR 的实测。 |
+| 移动 trace 门禁误报复核与同步 | ✅ 2.x 四场真移动通过；master 静态修复完成 | 旧 2.x Forge / NeoForge 四场实际未飞行，原 PASS 撤回；新 seedGen 关闭 classic 两加载器各两轮、seedGen 开启 seedgen 两加载器各单轮高空 TP 后水平跨区块并 PASS。master 已同步 TP/独立计时、日志真实水平位移 P0、全量集合分类及 R2 `serverVD ∪ OVD16` P0 保护（含静止 halo 分支）；43 项 analyzer 测试通过，两个主锚点 3.0.1 JAR 已重打。26.x 游戏场未跑。 |
 
 ## 10. 风险与回退
 
