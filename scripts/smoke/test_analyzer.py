@@ -321,19 +321,20 @@ class MobileSessionTraceTest(unittest.TestCase):
         "clientCache": {"actualPresent": {"positions": []}},
     }
 
-    def _analyze(self, move_seconds, probe):
+    def _analyze(self, move_seconds, probe, vd1=0, vd2=0, move_log=""):
         from scripts.smoke.analyzer import analyze_result
         from pathlib import Path
         import tempfile
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "logs").mkdir()
-            (root / "logs" / "s.log").write_text(
+            (root / "logs" / "client_s.log").write_text(
                 "HassiumSmokeTest:PASS\n"
                 "CLIENT_STATS ROUND1 begin\nCLIENT_STATS ROUND1 end\n"
-                "CLIENT_STATS ROUND2 begin\nCLIENT_STATS ROUND2 end\n")
+                "CLIENT_STATS ROUND2 begin\nCLIENT_STATS ROUND2 end\n" + move_log)
             result = {"SessionId": "s", "Scenario": "classic", "ServerSwitched": True,
-                      "MoveSeconds": move_seconds,
+                       "MoveSeconds": move_seconds, "Vd1": vd1, "Vd2": vd2,
+                       "Ver": "1.21.1",
                       "Probe": {"Round1": probe, "Round2": probe},
                       "GatewayRound1": {"gatewayState": "ACTIVE", "gatewayC2s": 1},
                       "GatewayRound2": {"gatewayState": "ACTIVE", "gatewayC2s": 1, "gatewayS2c": 1}}
@@ -349,6 +350,21 @@ class MobileSessionTraceTest(unittest.TestCase):
         self.assertNotIn("TRACE_EXPECTED_NOT_PRESENT", codes)
         self.assertNotIn("TRACE_READY_NOT_APPLIED", codes)
         self.assertIn("TRACE_EXPECTED_NOT_PRESENT", {item["code"] for item in analysis["skipped"]})
+
+    def test_mobile_requires_java_movement_and_chunk_displacement(self):
+        missing = self._analyze(10, self._RETENTION_GAP_PROBE)
+        self.assertIn("MOVEMENT_NOT_EXECUTED", {item["code"] for item in missing["failures"]})
+        tp = "HassiumSmokeTest:MOVE_TP_REQUEST targetY=256 pos=(0, 80, 0)\n"
+        start = "HassiumSmokeTest:MOVE_START cruise 10s pos=(0, 256, 0) targetY=256\n"
+        zero = (tp + start + "HassiumSmokeTest:MOVE_END pos=(0, 256, 0)\n") * 2
+        stationary = self._analyze(10, self._RETENTION_GAP_PROBE, move_log=zero)
+        self.assertIn("MOVEMENT_NOT_EXECUTED", {item["code"] for item in stationary["failures"]})
+        moved = (tp + start + "HassiumSmokeTest:MOVE_END pos=(0, 256, 64)\n") * 2
+        executed = self._analyze(10, self._RETENTION_GAP_PROBE, move_log=moved)
+        self.assertNotIn("MOVEMENT_NOT_EXECUTED", {item["code"] for item in executed["failures"]})
+        tp_only = (tp + start + "HassiumSmokeTest:MOVE_END pos=(0, 256, 0)\n") * 2
+        self.assertIn("MOVEMENT_NOT_EXECUTED", {item["code"] for item in
+                      self._analyze(10, self._RETENTION_GAP_PROBE, move_log=tp_only)["failures"]})
 
     def test_mobile_session_delivery_gap_still_fails(self):
         """投递链缺口（networkReceived→injected→ready）与驻留无关，移动会话同样把守。"""
@@ -454,6 +470,120 @@ class HaloAnchorTest(unittest.TestCase):
                 "expectedNotPresent": {"count": len(gap), "positions": [list(p) for p in gap]}}
         self.assertTrue(_halo_only_gap(probe, gaps, 20, "1.21.4"))
         self.assertTrue(_halo_only_gap(probe, gaps, 20, "1.21.3"))
+
+    def test_mobile_trace_retires_only_outside_final_complete_window(self):
+        """累计注入来自旧中心；最终窗完整驻留时旧窗差集无交付义务。"""
+        from scripts.smoke.analyzer import _mobile_retired_gap, _in_authority_shape
+
+        cx, cz, vd = -2, -1, 20
+        current = {(x, z) for x in range(cx - 22, cx + 23)
+                   for z in range(cz - 22, cz + 23)
+                   if _in_authority_shape(cx, cz, vd, x, z, "1.21.1")}
+        old = {(x, z) for x in range(-22, 23) for z in range(-22, 23)
+               if _in_authority_shape(0, 0, vd, x, z, "1.21.1")}
+        retired = old - current
+        self.assertTrue(retired)
+        probe = {"playerPos": [-23.5, 76, -4.5],
+                 "clientCache": {"actualPresent": {
+                     "count": len(current), "positions": [list(p) for p in current]}}}
+        self.assertTrue(_mobile_retired_gap(probe, retired, vd, "1.21.1"))
+        # 一个真正的窗内未 ready 柱，即使排在 64 项报告之外，也必须仍为 P0。
+        self.assertFalse(_mobile_retired_gap(probe, retired | {(cx, cz)}, vd, "1.21.1"))
+        probe["clientCache"]["actualPresent"]["positions"].remove([cx, cz])
+        self.assertFalse(_mobile_retired_gap(probe, retired, vd, "1.21.1"))
+
+    def test_mobile_final_window_missing_column_is_p0(self):
+        from scripts.smoke.analyzer import _in_authority_shape
+
+        vd = 20
+        current = {(x, z) for x in range(-22, 23) for z in range(-22, 23)
+                   if _in_authority_shape(0, 0, vd, x, z, "1.21.1")}
+        old = {(x, z) for x in range(-23, 22) for z in range(-23, 22)
+               if _in_authority_shape(-1, -1, vd, x, z, "1.21.1")}
+        resident = current - {(0, 0)}
+        probe = probe_for(resident, current | old, (0, 0))
+        probe["chunkTrace"]["shadowReady"]["count"] = len(resident)
+        probe["clientCache"]["actualPresent"]["count"] = len(resident)
+        analysis = MobileSessionTraceTest()._analyze(10, probe, vd1=vd, vd2=10)
+        self.assertIn(("TRACE_INJECTED_NOT_READY", 1),
+                      {(item["code"], item.get("round")) for item in analysis["failures"]})
+
+    def test_mobile_r2_ovd_belt_still_p0(self):
+        from scripts.smoke.analyzer import _in_authority_shape
+
+        vd = 10
+        authority = {(x, z) for x in range(-12, 13) for z in range(-12, 13)
+                     if _in_authority_shape(0, 0, vd, x, z, "1.21.1")}
+        probe = probe_for(authority, authority | {(14, 0)}, (0, 0))
+        probe["clientCache"]["actualPresent"]["count"] = len(authority)
+        # 精确命中旧 cache_only_reconnect 分支；(14,0) 在 OVD16 内但在 VD10 外。
+        probe["chunkTrace"]["networkReceived"]["positions"] = []
+        probe["stats"] = {"fullChunkRequestCount": 0,
+                          "clientLandedChunkCount": len(authority)}
+        probe["clientCache"]["loadedChunks"] = len(authority)
+        analysis = MobileSessionTraceTest()._analyze(10, probe, vd1=20, vd2=vd)
+        self.assertIn(("TRACE_INJECTED_NOT_READY", 2),
+                      {(item["code"], item.get("round")) for item in analysis["failures"]})
+
+    def test_cache_only_r2_retired_outside_ovd_is_p1(self):
+        from scripts.smoke.analyzer import _in_authority_shape
+
+        vd = 10
+        authority = {(x, z) for x in range(-12, 13) for z in range(-12, 13)
+                     if _in_authority_shape(0, 0, vd, x, z, "1.21.1")}
+        probe = probe_for(authority, authority | {(17, 0)}, (0, 0))
+        probe["chunkTrace"]["networkReceived"]["positions"] = []
+        probe["stats"] = {"fullChunkRequestCount": 0,
+                          "clientLandedChunkCount": len(authority)}
+        probe["clientCache"]["loadedChunks"] = len(authority)
+        analysis = MobileSessionTraceTest()._analyze(10, probe, vd1=20, vd2=vd)
+        self.assertIn(("TRACE_INJECTED_NOT_READY", 2),
+                      {(item["code"], item.get("round")) for item in analysis["warnings"]})
+
+    def test_stationary_cache_only_r2_ovd_belt_is_not_halo(self):
+        from scripts.smoke.analyzer import _in_authority_shape
+
+        vd = 10
+        authority = {(x, z) for x in range(-12, 13) for z in range(-12, 13)
+                     if _in_authority_shape(0, 0, vd, x, z, "1.21.1")}
+        for gap_pos, expected_bucket in (((14, 0), "failures"),
+                                         ((17, 0), "skipped")):
+            with self.subTest(gap_pos=gap_pos):
+                probe = probe_for(authority, authority | {gap_pos}, (0, 0))
+                probe["chunkTrace"]["networkReceived"]["positions"] = []
+                probe["stats"] = {"fullChunkRequestCount": 0,
+                                  "clientLandedChunkCount": len(authority)}
+                probe["clientCache"]["loadedChunks"] = len(authority)
+                analysis = MobileSessionTraceTest()._analyze(0, probe, vd1=20, vd2=vd)
+                self.assertIn(("TRACE_INJECTED_NOT_READY", 2),
+                              {(item["code"], item.get("round"))
+                               for item in analysis[expected_bucket]})
+
+    def test_halo_check_uses_full_probe_not_truncated_report(self):
+        from scripts.smoke.analyzer import _halo_only_gap, _in_authority_shape
+
+        vd = 20
+        authority = {(x, z) for x in range(-22, 23) for z in range(-22, 23)
+                     if _in_authority_shape(0, 0, vd, x, z, "1.21.1")}
+        halo = {(x, z) for x in range(-23, 24) for z in range(-23, 24)
+                if (x, z) not in authority and max(abs(x), abs(z)) <= 23}
+        # 报告前 64 个全是窗外；第 65 个窗内残差不能被截断隐藏。
+        gap = halo | {(0, 0)}
+        probe = probe_for(authority, authority | gap, (0, 0))
+        report = {"injectedNotReady": {"count": len(gap),
+                                        "positions": [list(p) for p in sorted(halo)[:64]],
+                                        "truncated": True},
+                  "expectedNotPresent": {"count": len(gap),
+                                         "positions": [list(p) for p in sorted(halo)[:64]],
+                                         "truncated": True}}
+        # probe_for 会把当前形状全部标 ready；明确把中心移出 ready/applied/actual。
+        probe["chunkTrace"]["shadowReady"]["positions"] = [
+            p for p in probe["chunkTrace"]["shadowReady"]["positions"] if p != [0, 0]]
+        probe["chunkTrace"]["clientApplied"]["positions"] = [
+            p for p in probe["chunkTrace"]["clientApplied"]["positions"] if p != [0, 0]]
+        probe["clientCache"]["actualPresent"]["positions"] = [
+            p for p in probe["clientCache"]["actualPresent"]["positions"] if p != [0, 0]]
+        self.assertFalse(_halo_only_gap(probe, report, vd, "1.21.1"))
 
 
 def _old_dilated(x: int, z: int, vd: int) -> bool:

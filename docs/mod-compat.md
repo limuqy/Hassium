@@ -17,6 +17,7 @@
 | 反透视（改 chunk 发包内容） | **希望兼容**（miss 路径复用已构建包字节，见 §3） |
 | Distant Horizons / Voxy | **希望兼容**（独立 LOD 通道；见 §4） |
 | Sodium / Iris / Lithium / FerriteCore 等热门优化 | **冒烟通过**（Fabric 1.20.1，见 §6 / §10） |
+| Lomka 0.7.0 | **主动兼容**（光照注入优先级；见 §6.1） |
 | C2ME | **主动兼容**（读天然兼容 + 写侧接管，见 §7） |
 | 文件级服务端备份（含 InstantBackup） | **兼容**（见 §8）；语义级解压 Anvil 的工具不兼容 |
 
@@ -71,6 +72,55 @@ NeoForge `GenericPacketSplitter` 会先编码检查大小；`MixinNeoForgePacket
 Sodium / Iris / Lithium / FerriteCore / EntityCulling / ImmediatelyFast 等通常不抢 Region 压缩类型与区块广播接管。
 
 常见摩擦：Hassium 引擎默认开启（进服启动影子端统一算光并回传官方光照包，客户端光照计算仍保持 vanilla 默认开启）。出现光照异常时关闭 `chunk.enabled` 即可（关闭后服务端不剥光，光照随包自带）。
+
+### 6.1 Lomka 0.7.0
+
+Lomka 用默认优先级 1000 覆写 `LayerLightSectionStorage.setStoredLevel`。Hassium 的
+`MixinLayerLightSectionStorage` 原来也使用 1000，Mixin 会拒绝向同优先级的覆写方法注入
+`hassium$nullSafeSetStoredLevel`，导致客户端进服时崩溃。`chunk.seedGenEnabled=false`
+同样受影响，因为影子端缓存与光照仍需装配该类。
+
+Hassium 将这个 Mixin 的优先级设为 **1100**，使原有局部变量空值保护可以注入 Lomka
+的替换方法。读光照保护、写光照两个分支的保护和 Lomka 的收集器缓存均保留；不关闭
+Lomka 优化，也不移除 `LightNeighborhoodGate` 或改动交付域。
+
+兼容范围按实际共装冒烟记录确认，不将这些旧版 JAR 的结果外推到其他 MC 版本。
+
+2026-10-16，在 `2.0.0` 分支基线 `493a3d64` 加上述修复后，使用用户提供的两份
+Lomka 0.7.0 成品 JAR（经 Loom 转为开发环境映射），双端保留 Lomka 默认开启的优化：
+
+| MC / 加载器 | seedGen 关闭（classic 两轮） | seedGen 开启（seedgen 冷场） | 开启组本地生成次数 |
+|---|---|---|---|
+| 1.20.1 / Forge 47.4.21 | PASS | PASS | 1643 |
+| 1.21.1 / NeoForge 21.1.236 | PASS | PASS | 1576 |
+
+开启组 `authoritativeRequests=0`，关闭组 `locallyGenerated=0`；四场均客户端退出码 0、
+无探针失败或 P1 告警。结果会话名为 `lomka_070_{1201_forge,1211_neoforge}_{seedoff,seedon}_fixed`，
+JSON、probe、双端日志与配置位于验证用隔离工作树的 `build/smoke-test/`。
+
+最初的额外 `MoveSeconds=10` 记录**没有实际飞行**：2.x Forge/NeoForge 开发启动配置
+漏传客户端 JVM 的 `hassium.smokeTest.moveSeconds`，Java 侧 `fly seconds=0` 跳过；
+这些旧结果不作为移动验收。其 R1 累计注入 1705、最终 ready/applied/actualPresent
+各 1529 的 176 差集全部在最终 VD20 形状外，属窗口中心下的计算候选；原分析器将报告
+截为前 64 个坐标再判光环，既误报，又可能漏掉第 65 个真正的窗内缺口。
+
+2.1.1 修复 Forge/NeoForge 冒烟飞行参数透传。客户端先请求服务端 TP 到安全高空
+（本轮 y=256，重连后 y=272），确认客户端实际到达后才独立计时 10 秒水平飞行；
+前进输入每 tick 维持，未到达高空、没有 Java TP/起点/终点日志、或 TP 后没有水平跨区块
+位移均判 P0。新增真实共装移动回归（2026-10-16）如下；classic 两轮，seedgen 单轮：
+
+| MC / 加载器 | seedGen 关闭 classic | seedGen 开启 seedgen | Java 水平 z 位移 |
+|---|---|---|---|
+| 1.20.1 / Forge | PASS（R1+R2） | PASS（R1） | 0→202、213→383；开启场 0→124 |
+| 1.21.1 / NeoForge | PASS（R1+R2） | PASS（R1） | 9→199、210→390；开启场 1→107 |
+
+四场客户端退出码均 0，开启场本地生成分别 1616/1567 柱且
+`authoritativeRequests=0`。会话名 `lomka_070_{1201_forge,1211_neoforge}_{seedoff,seedon}_tpflight2_211`，
+配置、结果 JSON、probe、双端日志在验证用隔离工作树 `build/smoke-test/`。
+分析器现在使用全量 trace 集合；classic R1 只有最终实测驻留精确覆盖完整 VD20
+形状且差集全在最终交付域外时，才将累计候选记 INFO。R2 缩为 VD10 时仍有 OVD16
+方窗，任何权威形状或 OVD 有效带内的未 ready 柱保持 P0；窗外的 cache-only 残差
+保留原有 P1 诊断。
 
 ## 7. C2ME
 

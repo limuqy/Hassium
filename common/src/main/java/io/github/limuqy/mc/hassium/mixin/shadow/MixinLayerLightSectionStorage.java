@@ -29,7 +29,9 @@ import org.spongepowered.asm.mixin.injection.ModifyVariable;
  * 存储点（STORE）把 null DataLayer 替换为兜底层——不触碰 protected 方法/字段，零
  * 跨版本签名风险（1.20.1~1.21.11 两方法均只含一个 DataLayer 局部变量）。
  */
-@Mixin(LayerLightSectionStorage.class)
+// Lomka 0.7.0 overwrites setStoredLevel at priority 1000. A higher injector priority
+// allows our null guard to decorate that replacement instead of failing injection.
+@Mixin(value = LayerLightSectionStorage.class, priority = 1100)
 public abstract class MixinLayerLightSectionStorage {
 
     /** 只读空光层：getStoredLevel 读路径 null 兜底。共享只读，绝不被写。

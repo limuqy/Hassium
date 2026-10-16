@@ -58,19 +58,18 @@ def _player_chunk(probe: dict[str, Any]) -> tuple[int, int] | None:
         return None
 
 
-def _all_outside_final_vd_window(probe: dict[str, Any], gap: dict[str, Any], server_vd: int) -> bool:
-    """缺口坐标是否全部落在玩家区块 Chebyshev 半径 server_vd 之外（明确窗外）。"""
-    positions = gap.get("positions") or []
+def _all_outside_final_delivery_window(probe: dict[str, Any], positions: set[tuple[int, int]],
+                                       server_vd: int, ovd: int, mc_ver: Any = None) -> bool:
+    """缺口是否全在最终 serverVD 权威形状与 OVD Chebyshev 窗的并集之外。"""
     if not positions:
         return False
     chunk = _player_chunk(probe)
     if chunk is None:
         return False
     px, pz = chunk
-    for item in positions:
-        if not isinstance(item, (list, tuple)) or len(item) < 2:
-            return False
-        if max(abs(int(item[0]) - px), abs(int(item[1]) - pz)) <= server_vd:
+    for x, z in positions:
+        if (_in_authority_shape(px, pz, server_vd, x, z, mc_ver)
+                or max(abs(x - px), abs(z - pz)) <= ovd):
             return False
     return True
 
@@ -120,7 +119,7 @@ def _in_authority_shape(cx: int, cz: int, vd: int, x: int, z: int,
     return l * l + k * k < vd * vd
 
 
-def _all_outside_authority_shape(probe: dict[str, Any], gap: dict[str, Any], server_vd: int,
+def _all_outside_authority_shape(probe: dict[str, Any], positions: set[tuple[int, int]], server_vd: int,
                                  mc_ver: Any = None) -> bool:
     """缺口坐标是否**全部**落在权威形状（交付域）之外 ⇒ 只可能是光照光环柱。
 
@@ -128,33 +127,59 @@ def _all_outside_authority_shape(probe: dict[str, Any], gap: dict[str, Any], ser
     光环柱被拉取/注入/算光但**不交付**。故 `networkReceived`/`shadowInjected` 会比
     `shadowReady`/`clientApplied` 多出恰好一环——这是设计，不是丢柱。
     """
-    positions = gap.get("positions") or []
     if not positions or server_vd <= 0:
         return False
     chunk = _player_chunk(probe)
     if chunk is None:
         return False
     px, pz = chunk
-    for item in positions:
-        if not isinstance(item, (list, tuple)) or len(item) < 2:
-            return False
-        if _in_authority_shape(px, pz, server_vd, int(item[0]), int(item[1]), mc_ver):
+    for x, z in positions:
+        if _in_authority_shape(px, pz, server_vd, x, z, mc_ver):
             return False
     return True
 
 
 def _halo_only_gap(probe: dict[str, Any], gaps: dict[str, Any], server_vd: int,
-                   mc_ver: Any = None) -> bool:
-    """两个「收到/注入但未交付」缺口是否**都**（凡非空者）全在权威形状之外 ⇒ 判为光照光环。"""
+                   mc_ver: Any = None, ovd: int = 0) -> bool:
+    """两个交付缺口是否都在最终交付域外；R2 须包含仍有效的 OVD 方窗。"""
+    full_gaps = _trace_gap_sets(probe)
     checked = False
     for key in ("injectedNotReady", "expectedNotPresent"):
         gap = _obj(gaps.get(key))
         if not gap.get("count"):
             continue
-        if not _all_outside_authority_shape(probe, gap, server_vd, mc_ver):
+        positions = full_gaps[key]
+        # 报告只展示前 64 个坐标；若原始集合缺失或数量不符，必须保守判失败。
+        outside = (_all_outside_final_delivery_window(
+            probe, positions, server_vd, ovd, mc_ver) if ovd > 0 else
+            _all_outside_authority_shape(probe, positions, server_vd, mc_ver))
+        if len(positions) != gap["count"] or not outside:
             return False
         checked = True
     return checked
+
+
+def _mobile_retired_gap(probe: dict[str, Any], positions: set[tuple[int, int]],
+                        server_vd: int, mc_ver: Any = None) -> bool:
+    """移动后退役的累计 trace：差集全在最终交付窗外，且最终窗已完整驻留。
+
+    注入时和 ready 时的视窗可不同。只有实测 actualPresent 恰覆盖最终原版视窗，
+    才能把旧视窗候选视为已退役；任何窗内缺口、缺失或截断的驻留探针仍走 P0。
+    """
+    center = _player_chunk(probe)
+    cache = _obj(probe.get("clientCache"))
+    present_report = _obj(cache.get("actualPresent"))
+    if center is None or server_vd <= 0 or not positions or present_report.get("truncated"):
+        return False
+    present = _positions(present_report)
+    if present_report.get("count") != len(present):
+        return False
+    cx, cz = center
+    radius = server_vd + 2
+    required = {(x, z) for x in range(cx - radius, cx + radius + 1)
+                for z in range(cz - radius, cz + radius + 1)
+                if _in_authority_shape(cx, cz, server_vd, x, z, mc_ver)}
+    return present == required and positions.isdisjoint(required)
 
 
 def _num(value: Any) -> int | float | None:
@@ -244,13 +269,13 @@ def _check_probe_metrics(probe: dict[str, Any], round_number: int) -> list[dict[
     return failures
 
 
-def _trace_analysis(probe: dict[str, Any]) -> dict[str, Any]:
+def _trace_gap_sets(probe: dict[str, Any]) -> dict[str, set[tuple[int, int]]]:
     trace = _obj(probe.get("chunkTrace"))
     stages = {name: _positions(trace.get(name)) for name in _STAGE_NAMES}
     cache = _obj(probe.get("clientCache"))
     actual = _positions(cache.get("actualPresent"))
     expected = stages["networkReceived"] or stages["shadowReady"]
-    gaps = {
+    return {
         # 纯原版 world-side 路径会直接 networkReceived → clientApplied，不经过已裁剪的影子注入/ready 阶段。
         "receivedNotInjected": stages["networkReceived"] - (stages["shadowInjected"] | stages["clientApplied"]),
         "injectedNotReady": stages["shadowInjected"] - stages["shadowReady"],
@@ -260,6 +285,15 @@ def _trace_analysis(probe: dict[str, Any]) -> dict[str, Any]:
         "appliedNotMeshed": stages["clientApplied"] - stages["meshCompiled"],
         "expectedNotPresent": expected - actual,
     }
+
+
+def _trace_analysis(probe: dict[str, Any]) -> dict[str, Any]:
+    trace = _obj(probe.get("chunkTrace"))
+    stages = {name: _positions(trace.get(name)) for name in _STAGE_NAMES}
+    cache = _obj(probe.get("clientCache"))
+    actual = _positions(cache.get("actualPresent"))
+    expected = stages["networkReceived"] or stages["shadowReady"]
+    gaps = _trace_gap_sets(probe)
     return {"available": bool(expected or actual),
             "actualSource": "clientCache.actualPresent" if "actualPresent" in cache else "missing",
             "counts": {name: len(value) for name, value in stages.items()},
@@ -407,6 +441,41 @@ def _late_near_player(probe: dict[str, Any], threshold_ms: int = 10_000) -> list
     return sorted(late, key=lambda item: (item["networkDelayMs"], item["applyDelayMs"]), reverse=True)
 
 
+def _movement_segments(client_log: str) -> list[dict[str, Any]]:
+    """Java TP 请求、客户端到高空后的水平起点、水平终点三点配对。"""
+    tp_re = re.compile(r"HassiumSmokeTest:MOVE_TP_REQUEST targetY=(-?\d+) "
+                       r"pos=\((-?\d+), (-?\d+), (-?\d+)\)")
+    start_re = re.compile(r"HassiumSmokeTest:MOVE_START cruise (\d+)s "
+                          r"pos=\((-?\d+), (-?\d+), (-?\d+)\) targetY=(-?\d+)")
+    end_re = re.compile(r"HassiumSmokeTest:MOVE_END pos=\((-?\d+), (-?\d+), (-?\d+)\)")
+    pending_tp: tuple[int, int, int, int] | None = None
+    pending_start: tuple[int, int, int, int, int] | None = None
+    segments: list[dict[str, Any]] = []
+    for line in client_log.splitlines():
+        tp = tp_re.search(line)
+        if tp:
+            pending_tp = tuple(map(int, tp.groups()))
+            pending_start = None
+            continue
+        start = start_re.search(line)
+        if start and pending_tp is not None:
+            pending_start = tuple(map(int, start.groups()))
+            continue
+        end = end_re.search(line)
+        if end and pending_tp is not None and pending_start is not None:
+            requested_y, tx, ty, tz = pending_tp
+            seconds, sx, sy, sz, reached_y = pending_start
+            ex, ey, ez = map(int, end.groups())
+            segments.append({"seconds": seconds, "tpRequest": [tx, ty, tz],
+                             "targetY": requested_y, "start": [sx, sy, sz], "end": [ex, ey, ez],
+                             "reachedTarget": reached_y == requested_y and sy >= requested_y - 1,
+                             "chunkDelta": [_chunk_of(ex) - _chunk_of(sx),
+                                            _chunk_of(ez) - _chunk_of(sz)]})
+            pending_tp = None
+            pending_start = None
+    return segments
+
+
 def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
     scenario = str(result.get("Scenario") or "classic")
     # 移动会话标记（由 runtime-smoke-test.ps1 透传 -MoveSeconds）。>0 ⇒ 走开后柱会合法卸载，
@@ -418,15 +487,33 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
     checks: dict[str, str] = {}
     session = str(result.get("SessionId") or "")
     log_text = ""
+    client_log = ""
     # Exact session files only. A prefix glob (`*1.21.1_fabric_I*.log`) also
     # swallows historical `*_p1b` / `*_task` logs and poisons smoke_markers.
     logs_dir = root / "logs"
     for name in (f"client_{session}.log", f"server_{session}.log", f"{session}.log"):
         path = logs_dir / name
         try:
-            log_text += path.read_text(encoding="utf-8", errors="replace") + "\n"
+            content = path.read_text(encoding="utf-8", errors="replace") + "\n"
+            log_text += content
+            if name.startswith("client_"):
+                client_log = content
         except OSError:
             pass
+
+    if mobile_session:
+        segments = _movement_segments(client_log)
+        required = 2 if scenario in ("classic", "lightdiag", "flyroundtrip") else 1
+        requested = int(_num(result.get("MoveSeconds")) or 0)
+        moved = (len(segments) >= required and all(
+            item["seconds"] == requested and item["reachedTarget"]
+            and item["start"][1] > item["tpRequest"][1]
+            and any(item["chunkDelta"])
+            for item in segments[:required]))
+        if not moved:
+            failures.append(_failure("MOVEMENT_NOT_EXECUTED", expectedSegments=required,
+                                     requestedSeconds=requested, segments=segments))
+        checks["movement"] = "PASS" if moved else "FAIL"
 
     has_pass = "HassiumSmokeTest:PASS" in log_text
     has_fail = "HassiumSmokeTest:FAIL" in log_text
@@ -528,13 +615,15 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
                 and loaded_n is not None
                 and landed_n >= loaded_n
             )
-            # 光照光环（S3b，2026-09-19）：交付域 = 权威形状(serverVD)，计算域 = 权威形状 + 光环。
-            # 光环柱「收到/注入但不交付」是设计（`chunk.lightHaloRadius`）——凡缺口**全部**在权威
-            # 形状之外即判为光环；只要有一个在形状内，一律不放行（窗内缺口仍是 P0）。
+            # 光照光环（S3b，2026-09-19）：R1 交付域为权威形状(serverVD)；
+            # R2 缩距后还包括 OVD16 方窗。只有全量缺口都在本轮交付域外才可判光环；
+            # OVD 有效带内缺口不能绕过 P0 门禁。
             server_vd = _num(result.get(f"Vd{number}")) or 0
             # 透传 mc 版本：原版 1.21.4 起改了视距形状公式（见 _in_authority_shape）。
+            full_gaps = _trace_gap_sets(probe)
             halo_only = (not mobile_session and server_vd > 0
-                         and _halo_only_gap(probe, gaps, int(server_vd), result.get("Ver")))
+                         and _halo_only_gap(probe, gaps, int(server_vd), result.get("Ver"),
+                                            ovd=16 if number == 2 else 0))
             for key, code in (("expectedNotPresent", "TRACE_EXPECTED_NOT_PRESENT"),
                               ("readyNotApplied", "TRACE_READY_NOT_APPLIED")):
                 if not gaps[key]["count"]:
@@ -561,9 +650,9 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
                 else:
                     failures.append(_failure(code, round=number, gap=gaps[key]))
             # 投递链缺口：与驻留无关（注入/ready 是交付路径本身），移动会话同样把守。
-            # R4 降级策略：classic R2 cache-only + VD 缩距后，injectedNotReady 若**全部**
-            # 落在最终玩家 ServerVD 窗外（Chebyshev > VD，经典 R2=10），视为票/红发残留
-            # 的窗外 inject 未 publish，降 P1；窗内缺口仍 P0。窗内虚空由 enclosed-hole 把守。
+            # R4 降级策略：classic R2 cache-only + VD 缩距后，仅当 injectedNotReady
+            # 全在最终交付域（serverVD 原版权威形状 ∪ OVD16 方窗）之外，才将
+            # 退役 inject 降 P1；OVD 带内仍 P0。classic 脚本固定 OVD16。
             for key, code in (("receivedNotInjected", "TRACE_RECEIVED_NOT_INJECTED"),
                               ("injectedNotReady", "TRACE_INJECTED_NOT_READY")):
                 if not gaps[key]["count"]:
@@ -575,12 +664,24 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
                                 "authority columns but deliberately NOT delivered; "
                                 "inside-authority gaps remain P0")))
                     continue
+                # 只在 classic R1 的宽 VD20 窗口应用：R2 缩为 VD10 后，OVD16
+                # 仍有有效交付带，不能把 VD10 外的柱一概视为退役。
+                if (mobile_session and number == 1 and server_vd >= 20
+                        and code == "TRACE_INJECTED_NOT_READY"
+                        and _mobile_retired_gap(probe, full_gaps[key], int(server_vd), result.get("Ver"))):
+                    skipped.append(_failure(
+                        code, "INFO", round=number, gap=gaps[key],
+                        detail=("mobile session: injected under an earlier delivery window; "
+                                "all unmatched columns are outside the final authority shape, "
+                                "and actualPresent covers that entire shape. Inside gaps remain P0")))
+                    continue
                 if (code == "TRACE_INJECTED_NOT_READY" and cache_only_reconnect
-                        and _all_outside_final_vd_window(probe, gaps[key], 10)):
+                        and _all_outside_final_delivery_window(
+                            probe, full_gaps[key], int(server_vd), 16, result.get("Ver"))):
                     warnings.append(_failure(
                         code, "P1", round=number, gap=gaps[key],
                         detail=("classic R2 cache-only after VD shrink: inject-without-ready "
-                                "entirely outside final ServerVD window; "
+                                "entirely outside final serverVD + OVD16 delivery window; "
                                 "enclosed-hole + stats remain authoritative")))
                     continue
                 failures.append(_failure(code, round=number, gap=gaps[key]))

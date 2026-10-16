@@ -65,11 +65,12 @@ public final class ScenarioEngine {
     /** R2 重连有界自愈：本步骤是否已强制重连过一次。 */
     private static boolean reconnectRetried;
 
-    // 飞行注入：爬升阶段到期 → 转平飞；平飞到期或玩家消失 → 复位按键
+    // 飞行注入：服务端 TP 到安全高度并确认客户端同步后才平飞；平飞独立计时。
     private static long moveUntilMs = -1L;
-    /** 1=爬升（按住跳跃）2=平飞（按住前进） */
+    /** 1=等待服务端 TP 同步 2=平飞（按住前进） */
     private static int movePhase;
     private static long cruiseSeconds;
+    private static int moveTargetY;
 
     private ScenarioEngine() {
     }
@@ -117,9 +118,8 @@ public final class ScenarioEngine {
         vars.put("reconnectDelayMs", Long.toString(reconnectDelayMs));
         vars.put("joinTimeoutMs", Long.toString(joinTimeoutMs));
         vars.put("moveSeconds", Long.toString(moveSeconds));
-        // fly 是**非阻塞**原语（爬升 2s + 平飞 Ns 由 tick 泵推进，步骤立即 DONE）：
-        // 紧跟其后的步骤会立刻执行并覆盖飞行。要真正飞完再走下一步，必须显式 wait 这段：
-        // moveWaitMs = 爬升 2s + 平飞 Ns + 4s 余量（flyroundtrip 等移动场景用）。
+        // fly 是**非阻塞**原语，TP 到安全高度和平飞 Ns 由 tick 泵推进；
+        // 后续 wait 会等飞行完成。moveWaitMs 另留场景稳定余量。
         // moveSeconds=0 时 fly 空操作，wait 必须为 0，避免 classic 每场白等 6s。
         vars.put("moveWaitMs", Long.toString(
                 moveSeconds <= 0L ? 0L : moveSeconds * 1000L + 6_000L));
@@ -165,6 +165,9 @@ public final class ScenarioEngine {
         long now = System.currentTimeMillis();
 
         tickMovement(mc, now);
+        if (finished) {
+            return;
+        }
 
         // 全局超时：两轮 joinTimeout + R1 40s + R2 20s + 重连间隔 + R2 dump 等 OVD
         if (startAtMs > 0L && now - startAtMs > joinTimeoutMs * 2 + 60_000L + reconnectDelayMs) {
@@ -298,27 +301,36 @@ public final class ScenarioEngine {
             fail(e.getMessage(), 3);
             return Outcome.DONE;
         }
-        return now - stepStartMs >= ms ? Outcome.DONE : Outcome.RUNNING;
+        // fly 非阻塞；后续 wait 仍须等 TP 同步与实际平飞完成。
+        return now - stepStartMs >= ms && movePhase == 0 ? Outcome.DONE : Outcome.RUNNING;
     }
 
-    /** 非阻塞飞行注入：creative 冒烟本地激活飞行，先爬升 2s 再平飞 Ns（seconds=0 不动）。 */
+    /** 非阻塞飞行注入：服务端 TP 到安全高度，客户端确认位置后再平飞 Ns。 */
     private static Outcome execFly(ScenarioStep step, Minecraft mc, long now) {
         long seconds = step.longParam("seconds", 0L);
-        String tag = step.param("tag");
         if (seconds <= 0L || mc.player == null) {
             cruiseSeconds = 0L;
             return Outcome.DONE;
         }
-        if (tag == null) {
-            tag = "MOVE_";
+        ClientPacketListener conn = mc.getConnection();
+        if (conn == null || mc.level == null) {
+            fail("MOVE_TP_NO_CONNECTION", 3);
+            return Outcome.DONE;
         }
         mc.player.getAbilities().flying = true;
-        mc.options.keyJump.setDown(true);
         movePhase = 1;
         cruiseSeconds = seconds;
-        moveUntilMs = now + 2000L;
-        LOGGER.info("HassiumSmokeTest:{}START climb 2s + cruise {}s pos=({}, {})", tag, seconds,
-                mc.player.blockPosition().getX(), mc.player.blockPosition().getZ());
+        int startY = mc.player.blockPosition().getY();
+        moveTargetY = Math.min(mc.level.getMaxBuildHeight() - 16, Math.max(256, startY + 16));
+        if (moveTargetY <= startY + 1) {
+            fail("MOVE_TP_NO_HEADROOM startY=" + startY + " maxY=" + mc.level.getMaxBuildHeight(), 3);
+            return Outcome.DONE;
+        }
+        moveUntilMs = now + 20_000L;
+        LOGGER.info("HassiumSmokeTest:MOVE_TP_REQUEST targetY={} pos=({}, {}, {})", moveTargetY,
+                mc.player.blockPosition().getX(), startY,
+                mc.player.blockPosition().getZ());
+        conn.sendCommand("tp @s ~ " + moveTargetY + " ~");
         return Outcome.DONE;
     }
 
@@ -329,26 +341,42 @@ public final class ScenarioEngine {
         }
         if (mc.player == null) {
             moveUntilMs = -1L;
-            mc.options.keyJump.setDown(false);
+            movePhase = 0;
             mc.options.keyUp.setDown(false);
             mc.options.keySprint.setDown(false);
-        } else if (now >= moveUntilMs) {
-            if (movePhase == 1) {
-                // 爬升结束：松开跳跃，按住前进+疾跑平飞（creative 飞行疾跑 zza×2，规避地形阻挡）
+            fail("MOVE_INTERRUPTED player disappeared", 3);
+        } else if (movePhase == 1) {
+            if (mc.player.getY() >= moveTargetY - 1) {
+                // 以 TP 同步后的当前位置为水平段基准，TP 本身绝不计入水平位移。
                 movePhase = 2;
-                mc.options.keyJump.setDown(false);
                 mc.options.keyUp.setDown(true);
                 mc.options.keySprint.setDown(true);
                 moveUntilMs = now + cruiseSeconds * 1000L;
-                LOGGER.info("HassiumSmokeTest:MOVE_CRUISE_START pos=({}, {})",
-                        mc.player.blockPosition().getX(), mc.player.blockPosition().getZ());
-            } else {
+                LOGGER.info("HassiumSmokeTest:MOVE_START cruise {}s pos=({}, {}, {}) targetY={}",
+                        cruiseSeconds, mc.player.blockPosition().getX(),
+                        mc.player.blockPosition().getY(), mc.player.blockPosition().getZ(), moveTargetY);
+            } else if (now >= moveUntilMs) {
+                moveUntilMs = -1L;
+                movePhase = 0;
+                fail("MOVE_TP_TIMEOUT targetY=" + moveTargetY + " actualY=" + mc.player.getY(), 3);
+            }
+        } else if (movePhase == 2) {
+            if (now >= moveUntilMs) {
+                LOGGER.info("HassiumSmokeTest:MOVE_INPUT flying={} forward={} yaw={} pitch={}",
+                        mc.player.getAbilities().flying, mc.options.keyUp.isDown(),
+                        mc.player.getYRot(), mc.player.getXRot());
                 mc.options.keyUp.setDown(false);
                 mc.options.keySprint.setDown(false);
                 moveUntilMs = -1L;
                 movePhase = 0;
-                LOGGER.info("HassiumSmokeTest:MOVE_END pos=({}, {})",
-                        mc.player.blockPosition().getX(), mc.player.blockPosition().getZ());
+                LOGGER.info("HassiumSmokeTest:MOVE_END pos=({}, {}, {})",
+                        mc.player.blockPosition().getX(), mc.player.blockPosition().getY(),
+                        mc.player.blockPosition().getZ());
+            } else {
+                // TP 后客户端输入状态可能被同步清空，水平段每 tick 重新维持按键。
+                mc.player.getAbilities().flying = true;
+                mc.options.keyUp.setDown(true);
+                mc.options.keySprint.setDown(true);
             }
         }
     }
