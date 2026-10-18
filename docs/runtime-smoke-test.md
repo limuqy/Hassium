@@ -666,3 +666,11 @@ build/smoke-test/
 ## 退役说明（UdpFailover / Nginx harness）
 
 1.1.2 的 UDP 控制面 failover 冒烟（`udp-failover` phase + nginx stream 反代 harness）已随 2.0.0 客户端 failover 套件退役并**全链删除**：脚本层 `-Phase UdpFailover` / `-NginxExePath` / `-ProxyPort` / `-DryRun` / `-InjectTcpClose` / `-SeamlessMode` 参数、`scripts/smoke/UdpFailoverSmoke.psm1`、`runtime-smoke-test.Tests.ps1`（Pester）、Java 侧 `udp-failover` / `dataplane` / `all` 死分支均已不存在；`network.dataPlane.recoveryFreeze` / `controlStallMs` / `failoverExpiryMs` 配置键亦已删。当前 `-SmokePhases` 仅剩 `classic` / `pregen`。历史拓扑与设计决策见 `docs/archive/multi-channel_network_research.md` 与 `docs/handoff/handoff-2026-08-09-network-core.md`。
+
+
+## 客户端隔离专项（2026-10-18）
+
+- `-Scenario fallback`：profile 关闭客户端区块、OVD、SeedGen，冷加载和重连均要求真实客户端区块驻留与非空气地形、零 Pull、无影子创建。此场景允许不协商 Hassium 协议；其它场景仍要求握手和聚合激活。
+- `scripts/runtime-integrated-isolation-test.ps1 -Ver <版本> -SessionId <新名称>`：Fabric 真实内置服专项。先跑同锚点 Fabric 专用服场景提供 parity 测试世界，或以 `-SourceWorld` 指定夹具。脚本创建独立副本，保留旧进程影子标志来复现污染条件，检查 memory 连接、方块/流体 tick 入队、原版区块内容与退出后的 region 格式；临时配置在 finally 恢复。测试副本保留供检查，已存在时拒绝覆盖。
+- 关闭功能回退按关闭后重新连接/启动验证；登录期能力不会因在线修改本地开关而自动撤销。
+- 结果和逐功能隔离说明见 [双线修复验收](handoff/handoff-2026-10-18-client-server-isolation-fixes.md)。单人脚本记录 `Pass`、原版 region 槽数及压缩类型；联机脚本沿用现有结果 JSON 和 analyzer。

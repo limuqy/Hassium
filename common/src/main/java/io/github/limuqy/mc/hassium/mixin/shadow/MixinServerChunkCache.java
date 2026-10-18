@@ -1,9 +1,7 @@
 package io.github.limuqy.mc.hassium.mixin.shadow;
 import io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat;
 import io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer;
-import io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry;
 import io.github.limuqy.mc.hassium.shadow.server.SeedGenExecutor;
-import io.github.limuqy.mc.hassium.server.RuntimeServerContext;
 import net.minecraft.world.level.chunk.status.ChunkStatus;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.chunk.LightChunk;
@@ -23,13 +21,15 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
  * 影子服务端无真实连接，不再需要自建 section 级回传。
  * 详见 {@code docs/client-chunk-light-flow.md} §7。
  * <p>
- * 门控：仅影子服务端上下文生效（{@link RuntimeServerContext#isShadowServerContext()}）；
+ * 门控：仅影子服务端上下文生效（按本实例的 ServerLevel.getServer() 识别）；
  * 专用服务器 / 普通集成服务器不受影响。
  * <p>
  * 1.20.1 / 1.21.11 方法签名一致（已双版本验证），零 #if。
  */
 @Mixin(net.minecraft.server.level.ServerChunkCache.class)
 public class MixinServerChunkCache {
+    @org.spongepowered.asm.mixin.Shadow @org.spongepowered.asm.mixin.Final
+    private net.minecraft.server.level.ServerLevel level;
 
     /**
      * 影子服务端：光照传播取数桥（T2）。
@@ -44,11 +44,7 @@ public class MixinServerChunkCache {
      */
     @Inject(method = "getChunkForLighting", at = @At("HEAD"), cancellable = true)
     private void hassium$shadowChunkForLighting(int x, int z, CallbackInfoReturnable<LightChunk> cir) {
-        if (!RuntimeServerContext.isShadowServerContext()) {
-            return;
-        }
-        ShadowSeedServer server = ShadowServerRegistry.getInstance().get();
-        if (server == null) {
+        if (!(level.getServer() instanceof ShadowSeedServer server)) {
             return;
         }
         // F17：必须按本 ChunkCache 实例的维度查注入表 —— 2 参数 injectedChunk(x, z) 写死主世界，
@@ -83,11 +79,7 @@ public class MixinServerChunkCache {
     @Inject(method = "getChunk", at = @At("HEAD"), cancellable = true)
     private void hassium$shadowGetChunk(int x, int z, ChunkStatus status, boolean load,
                                         CallbackInfoReturnable<net.minecraft.world.level.chunk.ChunkAccess> cir) {
-        if (!RuntimeServerContext.isShadowServerContext()) {
-            return;
-        }
-        ShadowSeedServer server = ShadowServerRegistry.getInstance().get();
-        if (server == null) {
+        if (!(level.getServer() instanceof ShadowSeedServer server)) {
             return;
         }
         // F17：必须按本 ChunkCache 实例的维度查注入表 —— 2 参数 injectedChunk(x, z) 写死主世界，

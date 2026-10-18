@@ -10,13 +10,9 @@ package io.github.limuqy.mc.hassium.server;
  * 默认 {@code false}：标志未写入（客户端上下文 / 启动早期 / 测试）时视为
  * 非专用服务器，任何调用方都应保守走原版行为，绝不改写存档。
  * <p>
- * <b>影子端代际（shadowGeneration）</b>：影子服务端关停是异步的（saver 线程），
- * 而新会话的影子端允许在旧会话 saveAll 落盘期间并发创建（T5cShadowReady 设计）。
- * 若旧会话关停末尾无条件 {@code setShadowServer(false)}，会清掉新会话在
- * {@code initServer} 里置位的标志 → 新会话的 RegionFile 读写 gate 全部失效
- * （原版直读 126 → "invalid chunk stream version 126" 风暴；原版格式写入混入
- * 126 文件）。代际计数：每次置 true 递增，关停末尾仅当代际未变（无新端接管）
- * 时才复位——两处转换均在锁内完成，杜绝检查与置位之间的交错。
+ * 影子端标志和代际只用于生命周期记账、诊断及代际保护的共享状态清理。
+ * 行为隔离必须检查 MinecraftServer/ServerLevel 实例、LevelTicks 绑定归属、
+ * RegionFile 目录令牌或显式传播的 ShadowAssemblyScope，禁止把进程标志当世界归属。
  */
 public final class RuntimeServerContext {
 

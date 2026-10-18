@@ -127,7 +127,16 @@ public final class ShadowServerRegistry {
      * 换服（serverId 不同）→ 先 {@link #shutdown()} 再创建。
      * 无握手亦可创建（seed 可为 0）；消费仍需握手。
      */
+    private boolean canUseShadow() {
+        if (!io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance().isHassiumEngineEnabled()
+                || client().getGameDir() == null
+                || io.github.limuqy.mc.hassium.server.RuntimeServerContext.isDedicatedServerContext()) return false;
+        Minecraft mc = Minecraft.getInstance();
+        return mc != null && mc.getSingleplayerServer() == null;
+    }
+
     public ShadowSeedServer getOrCreate() {
+        if (!canUseShadow()) return null;
         String wantId = client().getServerId();
         ShadowSeedServer existing = server;
         if (existing != null) {
@@ -162,6 +171,7 @@ public final class ShadowServerRegistry {
             if (client().getGameDir() == null) {
                 return null;
             }
+            if (!canUseShadow()) return null;
             long seed = client().getServerSeed();
             long createStartNs = System.nanoTime();
             DebugLogger.info(DebugLogger.LogType.ASYNC,
@@ -302,6 +312,7 @@ public final class ShadowServerRegistry {
      * 相等 → 不重建，R1/R2 缓存复用不受影响。
      */
     public void onServerSeedArrived(long arrivedSeed) {
+        if (!canUseShadow()) return;
         boolean enabled = io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance()
                 .isClientSeedGenEnabled();
         if (!shouldRebuildForSeed(assembledSeed, arrivedSeed, enabled)) {
@@ -326,6 +337,7 @@ public final class ShadowServerRegistry {
      * 判定推迟到 {@link #scheduleRebuild} 等装配结束之后。
      */
     public void onServerDimensionIdsArrived(java.util.List<String> dimensionIds) {
+        if (!canUseShadow()) return;
         if (dimensionIds == null || dimensionIds.isEmpty()) {
             return;
         }
@@ -359,6 +371,7 @@ public final class ShadowServerRegistry {
     }
 
     private void scheduleRebuild(String reason, java.util.function.BooleanSupplier stillNeeded) {
+        var connection = Minecraft.getInstance().getConnection();
         Runnable rebuild = () -> {
             for (int i = 0; i < SEED_REBUILD_MAX_RETRIES; i++) {
                 if (!creating) {
@@ -371,7 +384,7 @@ public final class ShadowServerRegistry {
                     return;
                 }
             }
-            if (creating || !stillNeeded.getAsBoolean()) {
+            if (!canUseShadow() || Minecraft.getInstance().getConnection() != connection || creating || !stillNeeded.getAsBoolean()) {
                 return; // 创建中超时放弃 / 已被其他线程重建
             }
             Constants.LOG.info("Hassium: Shadow rebuild for {}", reason);

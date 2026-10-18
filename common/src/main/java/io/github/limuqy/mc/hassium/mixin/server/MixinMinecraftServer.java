@@ -38,7 +38,7 @@ public class MixinMinecraftServer {
             target = "Lnet/minecraft/util/Util;backgroundExecutor()Lnet/minecraft/TracingExecutor;"))
     private net.minecraft.TracingExecutor hassium$isolateShadowWorldgenExecutor() {
         return (net.minecraft.TracingExecutor)
-                io.github.limuqy.mc.hassium.compat.ShadowServerCompat.shadowWorldgenExecutor();
+                io.github.limuqy.mc.hassium.compat.ShadowServerCompat.shadowWorldgenExecutor((MinecraftServer) (Object) this);
     }
 
     /**
@@ -53,6 +53,8 @@ public class MixinMinecraftServer {
     // review-fix: T7-59: handler 统一加 hassium$ 前缀（Mixin 惯例，避免与目标类未来同名成员 merge 冲突）
     @Inject(method = "tickServer", at = @At("TAIL"))
     private void hassium$onServerTick(BooleanSupplier hasTimeLeft, CallbackInfo ci) {
+        MinecraftServer server = (MinecraftServer) (Object) this;
+        if (server != RuntimeServerContext.getActiveServer()) return;
         // 刷新服务端主线程回调队列（每 tick 调用）
         long tFlush = System.nanoTime();
         MainThreadDispatcher.flushServer();
@@ -60,7 +62,6 @@ public class MixinMinecraftServer {
         // 按真实 tick 限流序列化区块 + 冲刷 ChunkHash 批次。
         // 仅专用服务器（dedicated）激活：影子端（客户端进程内的 MinecraftServer）
         // 不接网络、无玩家，推送管理器不得对影子端世界生效。
-        MinecraftServer server = (MinecraftServer) (Object) this;
         boolean networkActive = io.github.limuqy.mc.hassium.server.ServerNetworkGate.isNetworkServerActive();
         if (networkActive) {
             ServerChunkPushManager.getInstance().onServerTick(server);
@@ -69,6 +70,7 @@ public class MixinMinecraftServer {
             // tick 尾异步冲刷聚合缓冲（主线程只入队；主线程卡顿由 maxWait watchdog 兜底）
             io.github.limuqy.mc.hassium.protocol.egress.EgressPipeline.flushAll();
         }
+        if (!networkActive) ServerChunkPushManager.getInstance().discardDisabledPulls();
         // 服务端冒烟测试：检测玩家退出后切换视距
         ServerSmokeTest.onServerTick(server);
         // mspt 采样（debug.dispatcherLogging 开启时每秒输出一行 [MSPT]）
@@ -99,6 +101,9 @@ public class MixinMinecraftServer {
     @Inject(method = "stopServer", at = @At("HEAD"))
     private void hassium$onServerStop(CallbackInfo ci) {
         MinecraftServer server = (MinecraftServer) (Object) this;
+        if (server instanceof io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer
+                || server != RuntimeServerContext.getActiveServer()) return;
+        io.github.limuqy.mc.hassium.protocol.ShadowPullServer.clear();
         // 服务器关闭时清理推送管理器
         ServerChunkPushManager.getInstance().shutdown();
         Constants.LOG.info("Hassium: ServerChunkPushManager shutdown");

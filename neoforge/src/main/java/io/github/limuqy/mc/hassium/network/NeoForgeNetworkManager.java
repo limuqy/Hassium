@@ -30,8 +30,6 @@ import io.github.limuqy.mc.hassium.protocol.PayloadHandlers;
 import io.github.limuqy.mc.hassium.protocol.PreHandshakeHelloPayload;
 import io.github.limuqy.mc.hassium.protocol.PreHandshakePayload;
 import io.github.limuqy.mc.hassium.protocol.PreHandshakeProtocol;
-import io.github.limuqy.mc.hassium.protocol.ShadowPullHandler;
-import io.github.limuqy.mc.hassium.protocol.ShadowPullRequestLedger;
 import io.github.limuqy.mc.hassium.protocol.handshake.LoginHandshake;
 import io.github.limuqy.mc.hassium.protocol.handshake.PlayInitClient;
 import io.github.limuqy.mc.hassium.server.ServerHandshakeActivation;
@@ -55,8 +53,6 @@ public class NeoForgeNetworkManager implements INetworkManagerService {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/NeoForgeNetwork");
     private static final String PROTOCOL_VERSION = "3";
-    private static final ShadowPullHandler SHADOW_PULL_HANDLER =
-            new ShadowPullHandler(new ShadowPullRequestLedger());
 
 
     /**
@@ -362,7 +358,7 @@ public class NeoForgeNetworkManager implements INetworkManagerService {
             }
             try {
                 // 解码 + 权威 Compare+Pull 应答编码在 common PayloadHandlers；本端只保留 catch 与发送载体。
-                byte[] response = PayloadHandlers.handleShadowPullRequest(SHADOW_PULL_HANDLER, player, payload.data());
+                byte[] response = PayloadHandlers.handleShadowPullRequest(player, payload.data());
                 sendServerPayload(player, new ByteArrayPayload(SHADOW_PULL_RESPONSE_TYPE, response));
             } catch (Exception e) {
                 LOGGER.warn("[SERVER] Failed to handle shadowPullV1 request", e);

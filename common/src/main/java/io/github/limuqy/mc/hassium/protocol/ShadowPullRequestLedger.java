@@ -18,7 +18,7 @@ public final class ShadowPullRequestLedger {
 
     private final int capacity;
     private final LinkedHashMap<Key, Long> accepted = new LinkedHashMap<>();
-    private long currentEpoch;
+    private final java.util.Map<UUID, Long> epochs = new java.util.HashMap<>();
 
     public ShadowPullRequestLedger() {
         this(256);
@@ -31,20 +31,20 @@ public final class ShadowPullRequestLedger {
         this.capacity = capacity;
     }
 
-    public synchronized void advanceEpoch(long epoch) {
-        if (epoch < currentEpoch) {
+    public synchronized void advanceEpoch(UUID playerId, long epoch) {
+        if (playerId == null || epoch < epochs.getOrDefault(playerId, 0L)) {
             return;
         }
-        currentEpoch = epoch;
-        accepted.entrySet().removeIf(entry -> entry.getKey().epoch() != epoch);
+        epochs.put(playerId, epoch);
+        accepted.entrySet().removeIf(entry -> entry.getKey().playerId().equals(playerId) && entry.getKey().epoch() != epoch);
     }
 
     public synchronized Decision accept(UUID playerId, long epoch, long requestId, long requestFingerprint) {
-        if (playerId == null || epoch < currentEpoch) {
+        if (playerId == null || epoch < epochs.getOrDefault(playerId, 0L)) {
             return Decision.STALE;
         }
-        if (epoch > currentEpoch) {
-            advanceEpoch(epoch);
+        if (epoch > epochs.getOrDefault(playerId, 0L)) {
+            advanceEpoch(playerId, epoch);
         }
         Key key = new Key(playerId, epoch, requestId);
         Long previous = accepted.get(key);

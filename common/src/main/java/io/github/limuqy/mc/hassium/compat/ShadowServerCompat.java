@@ -149,7 +149,7 @@ public final class ShadowServerCompat {
         // （裸 Long2ObjectOpenHashMap / LongLinkedOpenHashSet / Long2ByteOpenHashMap）。
         // 原版靠「单线程 mainThreadExecutor 解码」串行，影子端解码在池线程上
         // ⇒ 必须把这份串行化补回来。见 ShadowPoiGate。
-        return ShadowPoiGate.callExclusive(() -> parseChunkNbtUnlocked(level, levelId, pos, tag));
+        return ShadowPoiGate.callExclusive(level.getServer(), () -> parseChunkNbtUnlocked(level, levelId, pos, tag));
     }
 
     private static ChunkAccess parseChunkNbtUnlocked(
@@ -177,7 +177,7 @@ public final class ShadowServerCompat {
     public static CompoundTag serializeChunk(ServerLevel level, LevelChunk chunk) {
         // 【2026-09-21】同 parseChunkNbt：序列化侧也持同一把闸（影子 flush / saveAll 与解码
         // 并发时会经同一份 POI 状态）。
-        return ShadowPoiGate.callExclusive(() -> serializeChunkUnlocked(level, chunk));
+        return ShadowPoiGate.callExclusive(level.getServer(), () -> serializeChunkUnlocked(level, chunk));
     }
 
     private static CompoundTag serializeChunkUnlocked(ServerLevel level, LevelChunk chunk) {
@@ -205,8 +205,8 @@ public final class ShadowServerCompat {
      * {@code MinecraftServer} 构造里的 worldgen executor：影子端用独立 FJP，
      * 其余仍返回原版 {@code Util.backgroundExecutor()}（1.21.2+ 为 {@code TracingExecutor}）。
      */
-    public static java.util.concurrent.Executor shadowWorldgenExecutor() {
-        if (ShadowWorldgenExecutor.shouldIsolate(RuntimeServerContext.isShadowServerContext())) {
+    public static java.util.concurrent.Executor shadowWorldgenExecutor(MinecraftServer owner) {
+        if (ShadowWorldgenExecutor.shouldIsolate(owner instanceof io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer)) {
             return new net.minecraft.TracingExecutor(ShadowWorldgenExecutor.service());
         }
         return net.minecraft.util.Util.backgroundExecutor();

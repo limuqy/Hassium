@@ -12,7 +12,7 @@ class ShadowPullRequestLedgerTest {
     void enforcesRequestIdentity() {
         ShadowPullRequestLedger ledger = new ShadowPullRequestLedger(2);
         UUID player = UUID.randomUUID();
-        ledger.advanceEpoch(4L);
+        ledger.advanceEpoch(player, 4L);
         assertEquals(ShadowPullRequestLedger.Decision.ACCEPT,
                 ledger.accept(player, 4L, 9L, 100L));
         assertEquals(ShadowPullRequestLedger.Decision.DUPLICATE,
@@ -35,7 +35,7 @@ class ShadowPullRequestLedgerTest {
         assertEquals(ShadowPullRequestLedger.Decision.ACCEPT,
                 ledger.accept(player, 1L, 3L, 3L));
         assertEquals(2, ledger.size());
-        ledger.advanceEpoch(2L);
+        ledger.advanceEpoch(player, 2L);
         assertEquals(0, ledger.size());
         assertEquals(ShadowPullRequestLedger.Decision.ACCEPT,
                 ledger.accept(player, 2L, 1L, 1L));

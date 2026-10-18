@@ -4,7 +4,6 @@ import io.github.limuqy.mc.hassium.compat.LevelCompat;
 import io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat;
 import io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer;
 import io.github.limuqy.mc.hassium.server.PlayerCompressionTracker;
-import io.github.limuqy.mc.hassium.server.RuntimeServerContext;
 import java.util.concurrent.CompletableFuture;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.server.level.ServerLevel;
@@ -58,7 +57,7 @@ public class MixinChunkMap {
     @Inject(method = "scheduleChunkLoad", at = @At("HEAD"), cancellable = true)
     private void hassium$shortCircuitInjectLoad(ChunkPos pos,
             CallbackInfoReturnable<CompletableFuture<ChunkAccess>> cir) {
-        if (!RuntimeServerContext.isShadowServerContext() || pos == null) {
+        if (!(level.getServer() instanceof ShadowSeedServer) || pos == null) {
             return;
         }
         if (ShadowChunkMapCompat.isWorldgenAllowed()
@@ -94,7 +93,7 @@ public class MixinChunkMap {
     /** 影子区块物化桥：1.20.1={@code playerLoadedChunk}，1.21+={@code onChunkReadyToSend}。 */
     @Unique
     private void hassium$notifyShadowMaterialized(LevelChunk chunk) {
-        if (!RuntimeServerContext.isShadowServerContext() || chunk == null) {
+        if (!(level.getServer() instanceof ShadowSeedServer) || chunk == null) {
             return;
         }
         try {
@@ -143,7 +142,7 @@ public class MixinChunkMap {
      */
     @Unique
     private boolean hassium$shadowSuppressGeneration(ChunkPos pos) {
-        if (!RuntimeServerContext.isShadowServerContext() || pos == null) {
+        if (!(level.getServer() instanceof ShadowSeedServer) || pos == null) {
             return false;
         }
         if (ShadowChunkMapCompat.isWorldgenAllowed()) {
@@ -168,10 +167,10 @@ public class MixinChunkMap {
 
     @Unique
     private LevelChunk hassium$chunkForScheduleLoad(ChunkPos pos) {
-        if (pos == null || !RuntimeServerContext.isShadowServerContext()) {
+        if (pos == null || !(level.getServer() instanceof ShadowSeedServer)) {
             return null;
         }
-        ShadowSeedServer server = ShadowChunkMapCompat.shadowServerOrNull();
+        ShadowSeedServer server = (level.getServer() instanceof ShadowSeedServer shadow ? shadow : null);
         if (server == null) {
             return null;
         }
@@ -186,12 +185,12 @@ public class MixinChunkMap {
      * 同一把可重入锁。{@code save} 内部 catch 后仍走 RETURN，成对解锁。
      */
     @Unique
-    private static final ThreadLocal<Integer> hassium$saveLockDepth =
+    private final ThreadLocal<Integer> hassium$saveLockDepth =
             ThreadLocal.withInitial(() -> 0);
 
     @Inject(method = "save(Lnet/minecraft/world/level/chunk/ChunkAccess;)Z", at = @At("HEAD"))
     private void hassium$lockShadowSave(ChunkAccess chunk, CallbackInfoReturnable<Boolean> cir) {
-        if (!RuntimeServerContext.isShadowServerContext() || chunk == null) {
+        if (!(level.getServer() instanceof ShadowSeedServer) || chunk == null) {
             return;
         }
         io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.lockChunk(chunk.getPos());

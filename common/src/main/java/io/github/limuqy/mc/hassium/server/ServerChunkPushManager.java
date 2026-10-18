@@ -80,6 +80,7 @@ public class ServerChunkPushManager {
      */
     private static final class PendingPull {
         final ServerPlayer player;
+        final Object connection;
         final ServerLevel level;
         final String dimension;
         final ShadowPullRequestC2SPacket.Entry entry;
@@ -92,6 +93,7 @@ public class ServerChunkPushManager {
         PendingPull(ServerPlayer player, ServerLevel level, String dimension,
                     ShadowPullRequestC2SPacket.Entry entry, long requestId, long epoch) {
             this.player = player;
+            this.connection = player.connection;
             this.level = level;
             this.dimension = dimension;
             this.entry = entry;
@@ -335,15 +337,21 @@ public class ServerChunkPushManager {
      */
     private boolean dropOrKeepLive(PendingPull pending, long now, List<PendingPull> live) {
         ServerPlayer player = pending.player();
-        if (player == null || player.hasDisconnected() || player.isRemoved()) {
+        if (!io.github.limuqy.mc.hassium.protocol.ShadowPullServer.isCurrentSession(player, pending.connection)
+                || pending.epoch() != io.github.limuqy.mc.hassium.protocol.ShadowPullServer.WIRE_EPOCH) {
             releaseDemandTicket(pending);
             unqueuePull(pending);
             return true;
         }
         ServerLevel level = PlayerCompat.getServerLevel(player);
-        if (level == null || !LevelCompat.getDimensionId(level).equals(pending.dimension())) {
+        if (level == null || level != pending.level()
+                || !LevelCompat.getDimensionId(level).equals(pending.dimension())
+                || !io.github.limuqy.mc.hassium.protocol.ShadowPullRequestValidator.inRange(pending.entry(),
+                        player.chunkPosition().x(), player.chunkPosition().z(),
+                        PlayerCompat.getViewDistance(player) + io.github.limuqy.mc.hassium.protocol.ShadowPullRadii.AUTHORITY_MARGIN)) {
             releaseDemandTicket(pending);
             unqueuePull(pending);
+            sendPullFailure(pending, "range");
             return true;
         }
         LevelChunk chunk = LevelCompat.loadedFullChunk(level, pending.entry().chunkX(), pending.entry().chunkZ());
@@ -413,8 +421,10 @@ public class ServerChunkPushManager {
                                                                   ShadowPullRequestC2SPacket request,
                                                                   ShadowPullRequestC2SPacket.Entry entry,
                                                                   String dimension) {
-        if (player == null || entry == null) {
-            return null;
+        if (player == null || entry == null) return null;
+        if (request == null || request.epoch() != io.github.limuqy.mc.hassium.protocol.ShadowPullServer.WIRE_EPOCH
+                || !io.github.limuqy.mc.hassium.protocol.ShadowPullServer.isCurrentSession(player, player.connection)) {
+            return ShadowPullResponseS2CPacket.Result.error(entry.chunkX(), entry.chunkZ(), "permission");
         }
         ServerLevel level = PlayerCompat.getServerLevel(player);
         if (level == null || !LevelCompat.getDimensionId(level).equals(dimension)) {
@@ -476,7 +486,7 @@ public class ServerChunkPushManager {
         if (sectionHashArray == null) {
             sectionHashArray = ChunkContentHashUtil.sectionHashesToArray(
                     ChunkContentHashUtil.computeSectionHashes(chunk));
-            ChunkAuthorityHashes.putSections(dimension, pos, sectionHashArray);
+            ChunkAuthorityHashes.putSections(level, dimension, pos, sectionHashArray);
         }
         long chunkHash = ChunkContentHashUtil.combineSectionHashesFromArray(sectionHashArray);
         List<Long> sectionHashList = new ArrayList<>(sectionHashArray.length);
@@ -556,6 +566,14 @@ public class ServerChunkPushManager {
     /** 待推送柱主动推送（复用原 requestId：客户端按原分类记账）。 */
     private void sendPullResponse(ServerPlayer player, PendingPull pending,
                                   ShadowPullResponseS2CPacket.Result result) {
+        var owner = PlayerCompat.getMinecraftServer(player);
+        if (owner == null) return;
+        if (!owner.isSameThread()) {
+            owner.execute(() -> sendPullResponse(player, pending, result));
+            return;
+        }
+        if (!io.github.limuqy.mc.hassium.protocol.ShadowPullServer.isCurrentSession(player, pending.connection)
+                || PlayerCompat.getServerLevel(player) != pending.level()) return;
         ShadowPullResponseS2CPacket response = new ShadowPullResponseS2CPacket(
                 pending.dimension(), pending.epoch(), pending.requestId(), List.of(result));
         FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
@@ -902,6 +920,11 @@ public class ServerChunkPushManager {
     /**
      * 移除玩家的 Pull 队列与能力表。
      */
+    /** Run even with master disabled so already acquired vanilla tickets are released. */
+    public void discardDisabledPulls() {
+        for (UUID playerId : java.util.List.copyOf(pullQueues.keySet())) removePlayer(playerId);
+    }
+
     public void removePlayer(UUID playerId) {
         ArrayDeque<PendingPull> pulls = pullQueues.remove(playerId);
         if (pulls != null) {

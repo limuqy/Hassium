@@ -68,7 +68,7 @@ public abstract class MixinPlayerChunkSender {
     }
 
     /**
-     * 截获原版首包：压缩门已开的玩家（Hassium 客户端）**停发整柱**，整柱数据改由客户端影子
+     * 截获原版首包：满足区块接管门的玩家**停发整柱**，整柱数据改由客户端影子
      * tracking 统一 Compare+Pull / 本地生成交付；其它玩家原样交回原版发送路径。
      * <p>
      * 不能只丢弃 packet——客户端既收不到原版包，也不会进入 Hassium 的替代数据流；
@@ -79,14 +79,14 @@ public abstract class MixinPlayerChunkSender {
                     target = "Lnet/minecraft/server/network/ServerGamePacketListenerImpl;send(Lnet/minecraft/network/protocol/Packet;)V",
                     ordinal = 0))
     private static void hassium$onChunkPacketSend(ServerGamePacketListenerImpl listener, Packet<?> packet) {
-        if (!PlayerCompressionTracker.isCompressionEnabled(listener.getPlayer())) {
-            listener.send(packet); // 未开压缩门：原样下发（vanilla 客户端 / 未握手）
+        if (!ServerNetworkGate.shouldTakeOverChunks(listener.getPlayer())) {
+            listener.send(packet); // 未协商区块接管：保留原版（含仅启用聚合的客户端）
             return;
         }
         if (!hassium$isWholeChunkPayload(packet)) {
             listener.send(packet); // 非整柱载荷：原样下发
         }
-        // 压缩门已开：整柱一律不下发。bundle 情形下连同其辅助光照子包一并丢弃，
+        // 区块接管已协商：整柱不下发。bundle 情形下连同其辅助光照子包一并丢弃，
         // 与 lightStrip 语义一致——Hassium 客户端光照由影子端统一计算。
     }
 

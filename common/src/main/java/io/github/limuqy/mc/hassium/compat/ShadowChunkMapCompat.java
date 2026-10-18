@@ -2,8 +2,6 @@ package io.github.limuqy.mc.hassium.compat;
 
 import io.github.limuqy.mc.hassium.mixin.shadow.ChunkMapAccessor;
 import io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer;
-import io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry;
-import io.github.limuqy.mc.hassium.server.RuntimeServerContext;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import net.minecraft.server.level.ChunkHolder;
@@ -155,12 +153,6 @@ public final class ShadowChunkMapCompat {
         }
     }
 
-    public static ShadowSeedServer shadowServerOrNull() {
-        if (!RuntimeServerContext.isShadowServerContext()) {
-            return null;
-        }
-        return ShadowServerRegistry.getInstance().get();
-    }
 
     /**
      * {@code scheduleChunkLoad} 短路：注入表或影子存档已有柱则直接 Imposter，

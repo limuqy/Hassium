@@ -1,0 +1,17 @@
+# chunk.enabled=false: both cold load and reconnect must use vanilla chunks/light.
+join label=WAIT_JOIN_1 since=start timeoutMs=${joinTimeoutMs}
+wait ms=15000
+assertProbe key=isolation.shadowRunning op=eq value=0
+assertProbe key=stats.fullChunkRequestCount op=eq value=0
+assertProbe key=clientCache.loadedChunks op=gt value=64
+assertProbe key=contentCheck.chunksWithNonAir op=gt value=0
+dump round=1 vanilla=true
+disconnect
+reconnect delayMs=${reconnectDelayMs}
+join label=WAIT_JOIN_2 since=disconnect timeoutMs=${joinTimeoutMs}
+wait ms=10000
+assertProbe key=isolation.shadowRunning op=eq value=0
+assertProbe key=stats.fullChunkRequestCount op=eq value=0
+assertProbe key=clientCache.loadedChunks op=gt value=64
+dump round=2 vanilla=true
+exit

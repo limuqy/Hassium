@@ -29,10 +29,10 @@ public abstract class MixinServerPlayer extends Player {
     @Inject(method = "<init>(Lnet/minecraft/server/MinecraftServer;Lnet/minecraft/server/level/ServerLevel;Lcom/mojang/authlib/GameProfile;Lnet/minecraft/server/level/ClientInformation;)V", at = @At("TAIL"))
     private void hassium$onPlayerInit(CallbackInfo ci) {
         ServerPlayer self = (ServerPlayer) (Object) this;
-        if (io.github.limuqy.mc.hassium.server.RuntimeServerContext.isShadowServerContext()) {
+        if ((io.github.limuqy.mc.hassium.compat.PlayerCompat.getMinecraftServer((ServerPlayer) (Object) this) instanceof io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer)) {
             return;
         }
-        // 登录期握手协商结果消费：启用压缩门（原版区块窗口自此压制）+ Play 激活入队。
+        // 登录期握手协商结果消费：登记协议/压缩能力 + Play 激活入队；是否压制整柱另查区块接管门。
         io.github.limuqy.mc.hassium.server.ServerHandshakeActivation.onPlayerInit(self);
     }
 

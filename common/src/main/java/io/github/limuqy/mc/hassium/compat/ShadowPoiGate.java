@@ -1,8 +1,6 @@
 package io.github.limuqy.mc.hassium.compat;
 
-import io.github.limuqy.mc.hassium.server.RuntimeServerContext;
 import io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer;
-import io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry;
 
 /**
  * 影子端「碰原版 POI / SectionStorage 状态」的串行化入口——**转影子主循环 dispatch，不用锁**。
@@ -27,7 +25,7 @@ import io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry;
  * 改为**调度**：把解码/序列化提交到影子主循环线程执行并同步等待（{@link ShadowSeedServer#runOnMainLoopAndWait}），
  * 与主循环 tick 天然同线程 ⇒ 结构性串行，无锁、无锁序、不可能 ABBA。
  * <p>
- * <b>影响面严格限定影子端</b>：{@link RuntimeServerContext#isShadowServerContext()} 为假
+ * <b>影响面严格限定影子端</b>：传入的 owner 不是 {@link ShadowSeedServer}
  * （专用服 / 集成服真实服务端 / 未装配影子端 / 单测）时**直接执行**，与改动前行为完全一致——
  * 专用服不装配 {@code ShadowSeedServer}，原版自身就是单线程 mainThreadExecutor 解码，
  * 不需要也不得引入任何调度。
@@ -41,8 +39,8 @@ public final class ShadowPoiGate {
      * <p>
      * 非影子端上下文 ⇒ 直接执行（零行为变化）。
      */
-    public static <T> T callExclusive(java.util.function.Supplier<T> action) {
-        ShadowSeedServer shadow = shadowServer();
+    public static <T> T callExclusive(net.minecraft.server.MinecraftServer owner, java.util.function.Supplier<T> action) {
+        ShadowSeedServer shadow = owner instanceof ShadowSeedServer server ? server : null;
         if (shadow == null) {
             return action.get();
         }
@@ -50,8 +48,8 @@ public final class ShadowPoiGate {
     }
 
     /** 串行执行（无返回值）。 */
-    public static void runExclusive(Runnable action) {
-        callExclusive(() -> {
+    public static void runExclusive(net.minecraft.server.MinecraftServer owner, Runnable action) {
+        callExclusive(owner, () -> {
             action.run();
             return null;
         });
@@ -71,11 +69,4 @@ public final class ShadowPoiGate {
         return true;
     }
 
-    /** 影子端实例；非影子端上下文返回 {@code null}（调用方据此走零影响路径）。 */
-    private static ShadowSeedServer shadowServer() {
-        if (!RuntimeServerContext.isShadowServerContext()) {
-            return null;
-        }
-        return ShadowServerRegistry.getInstance().get();
-    }
 }

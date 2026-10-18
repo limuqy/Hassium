@@ -28,6 +28,7 @@
   "shadow.MixinServerChunkCache",
   "shadow.ServerChunkCacheAccessor",
   "server.MixinLevelTicks",
+  "server.MixinServerLevel",
   "shadow.MixinLightDataWrite",
   "shadow.ThreadedLevelLightEngineAccessor",
   "shadow.MixinThreadedLevelLightEngine",

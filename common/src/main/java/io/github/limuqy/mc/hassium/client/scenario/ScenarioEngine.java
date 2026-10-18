@@ -99,6 +99,7 @@ public final class ScenarioEngine {
         if (name == null || name.isBlank()) {
             name = "classic";
         }
+        if ("integrated".equals(name)) IsolationSmokeProbe.arm();
         String resource = "/hassium/smoke/scenario/" + name + ".scenario";
         List<String> lines;
         try (var in = ScenarioEngine.class.getResourceAsStream(resource)) {
@@ -280,7 +281,7 @@ public final class ScenarioEngine {
             return Outcome.RUNNING;
         }
         // 单人内嵌服不计入多人连服冒烟
-        if (mc.getSingleplayerServer() != null) {
+        if (mc.getSingleplayerServer() != null && !step.boolParam("integrated", false)) {
             return Outcome.RUNNING;
         }
         // Legacy smoke worlds use positive Y; imported void/deep worlds may spawn below zero.
@@ -701,7 +702,15 @@ public final class ScenarioEngine {
                 LOGGER.info("{} {} stats gate=false (validation skipped)", MARKER_STATS, roundLabel);
                 return Outcome.DONE;
             }
-            boolean ok = validateStats(plain, roundLabel);
+            boolean ok;
+            if (step.boolParam("vanilla", false)) {
+                var content = SmokeProbeWriter.sampleContentCheck(mc);
+                ok = SmokeProbeWriter.currentLoadedChunkCount(mc) > 64 && content.chunksWithNonAir() > 0;
+                LOGGER.info("HassiumSmokeTest: vanilla delivery {} loaded={} nonAir={} pass={}",
+                        roundLabel, SmokeProbeWriter.currentLoadedChunkCount(mc), content.chunksWithNonAir(), ok);
+            } else {
+                ok = validateStats(plain, roundLabel);
+            }
             if (isRound1) {
                 round1Pass = ok;
             } else {
@@ -854,6 +863,11 @@ public final class ScenarioEngine {
         io.github.limuqy.mc.hassium.shadow.light.SmokeChunkTrace.Snapshot trace =
                 io.github.limuqy.mc.hassium.shadow.light.SmokeChunkTrace.snapshot(dim);
         return switch (key) {
+            case "isolation.integrated" -> mc.getSingleplayerServer() != null ? 1L : 0L;
+            case "isolation.shadowRunning" -> io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry.getInstance().get() != null ? 1L : 0L;
+            case "isolation.processShadowFlag" -> io.github.limuqy.mc.hassium.server.RuntimeServerContext.isShadowServerContext() ? 1L : 0L;
+            case "isolation.scheduleTicks" -> IsolationSmokeProbe.scheduleTicks(mc);
+            case "isolation.memoryConnection" -> mc.getConnection() != null && mc.getConnection().getConnection().isMemoryConnection() ? 1L : 0L;
             case "egress.fixtureReceived" -> (long)io.github.limuqy.mc.hassium.protocol.egress.EgressFixture.receivedCount();
             case "flight.anchorUnloaded" -> flightAnchorUnloaded && flightAnchorAbsent ? 1L : 0L;
             case "flight.anchorReturned" -> flightAnchorReturned ? 1L : 0L;
@@ -967,7 +981,8 @@ public final class ScenarioEngine {
         // T6 实体冒烟增强（dev 测试代码）：R2 断线 → 影子端异步保存（park 线程）。
         // 不主动断连直接退出时，JVM 终止会打断 daemon saveAll。先被动断连，关闭线程
         // 等 saveAll 序号递增后再 stop()，不占客户端 tick。
-        long saveSeq = io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer.saveAllSeq();
+        long saveSeq = io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry.getInstance().get() == null
+                ? Long.MIN_VALUE : io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer.saveAllSeq();
         triggerDisconnect(mc);
         LOGGER.info("HassiumSmokeTest: ROUND2 exit scheduling code={} saveSeq={}",
                 allPass ? 0 : 2, saveSeq);

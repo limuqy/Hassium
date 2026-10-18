@@ -280,6 +280,7 @@ public final class ServerHandshakeActivation {
 
     /** 玩家断开清理（MixinServerGamePacketListenerImpl.onDisconnect 清理点转调）。 */
     public static void removePlayer(UUID playerId) {
+        io.github.limuqy.mc.hassium.protocol.ShadowPullServer.removePlayer(playerId);
         ACTIVE_CAPS.remove(playerId);
         READY_HANDLED.remove(playerId);
         ACTIVATE_RETRIES.remove(playerId);

@@ -45,14 +45,17 @@ public final class ServerLifecycleHooksCompat {
      * 槽已被真服占用（单人集成服）时跳过。
      */
     public static void adoptCurrentServer(MinecraftServer shadow) {
-        if (shadow == null) {
+        if (!(shadow instanceof io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer)) {
             return;
         }
+        MinecraftServer active = io.github.limuqy.mc.hassium.server.RuntimeServerContext.getActiveServer();
+        if (active != null && active != shadow) return;
         for (Field field : currentServerFields()) {
             try {
-                Object current = field.get(null);
-                if (current == null || current == shadow) {
-                    field.set(null, shadow);
+                var slot = java.lang.invoke.MethodHandles.privateLookupIn(
+                        field.getDeclaringClass(), java.lang.invoke.MethodHandles.lookup()).unreflectVarHandle(field);
+                // Loader writes may race shadow assembly. A read followed by set can overwrite a real server.
+                if (slot.getVolatile() == shadow || slot.compareAndSet(null, shadow)) {
                     Constants.LOG.debug("Hassium: adopted shadow server as currentServer via {}",
                             field.getDeclaringClass().getName());
                 }
@@ -68,13 +71,14 @@ public final class ServerLifecycleHooksCompat {
      * 不清集成服真服。
      */
     public static void releaseCurrentServer(MinecraftServer shadow) {
-        if (shadow == null) {
+        if (!(shadow instanceof io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer)) {
             return;
         }
         for (Field field : currentServerFields()) {
             try {
-                if (field.get(null) == shadow) {
-                    field.set(null, null);
+                var slot = java.lang.invoke.MethodHandles.privateLookupIn(
+                        field.getDeclaringClass(), java.lang.invoke.MethodHandles.lookup()).unreflectVarHandle(field);
+                if (slot.compareAndSet(shadow, null)) {
                     Constants.LOG.debug("Hassium: released shadow server from currentServer via {}",
                             field.getDeclaringClass().getName());
                 }

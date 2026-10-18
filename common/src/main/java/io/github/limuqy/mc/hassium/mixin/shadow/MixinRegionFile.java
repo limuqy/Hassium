@@ -160,7 +160,7 @@ public abstract class MixinRegionFile {
 
     @Inject(method = "getChunkDataInputStream", at = @At("HEAD"), cancellable = true)
     private void hassium$onGetChunkDataInputStream(ChunkPos pos, CallbackInfoReturnable<DataInputStream> cir) {
-        boolean shadow = io.github.limuqy.mc.hassium.server.RuntimeServerContext.isShadowServerContext();
+        boolean shadow = hassium$shadowOwner() != null;
 
         try {
             DataInputStream result = hassium$tryReadHassiumChunk(pos);
@@ -185,7 +185,7 @@ public abstract class MixinRegionFile {
     @Inject(method = "getChunkDataOutputStream", at = @At("HEAD"), cancellable = true)
     private void hassium$onGetChunkDataOutputStream(ChunkPos pos, CallbackInfoReturnable<DataOutputStream> cir) {
         HassiumConfigService configService = HassiumConfigService.getInstance();
-        boolean shadow = io.github.limuqy.mc.hassium.server.RuntimeServerContext.isShadowServerContext();
+        boolean shadow = hassium$shadowOwner() != null;
         hassium$LOGGER.debug("Hassium: RegionFile write gate pos={} storageEnabled={} dedicated={} shadow={}",
                 pos, configService.isStorageEnabled(), hassium$isDedicatedServerContext(), shadow);
         if (!configService.isStorageEnabled() && !shadow) {
@@ -241,6 +241,22 @@ public abstract class MixinRegionFile {
     private void hassium$adoptShadowWrite(ChunkPos pos, ByteBuffer buffer, CallbackInfo ci) {
         io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager mgr = hassium$shadowStorage();
         if (mgr == null) {
+            // Early loadLevel (including external C2ME IO): the directory is already owned,
+            // but dimension images do not exist yet. Re-enter write only with a complete 126
+            // sector; that type guard terminates recursion and preserves ordinary-world IO.
+            if (hassium$shadowOwner() != null && buffer != null && buffer.limit() >= 5
+                    && (buffer.get(4) & 127) != HASSIUM_COMPRESSION_TYPE) {
+                try {
+                    byte[] raw = HassiumType126Codec.decodeVanillaPayload(buffer.get(4), hassium$copyPayload(buffer));
+                    byte[] sector = HassiumType126Codec.encodeSector(raw, null,
+                            HassiumConfigService.getInstance().getStorageCompressionLevel());
+                    hassium$self().invokeWrite(pos, ByteBuffer.wrap(sector));
+                } catch (Exception e) {
+                    // Cache is non-authoritative; never mix a failed vanilla sector into its 126 world.
+                    hassium$LOGGER.error("Hassium: early shadow sector conversion failed for {}", pos, e);
+                }
+                ci.cancel();
+            }
             return;
         }
         hassium$adoptShadowSector(mgr, pos, buffer);
@@ -268,17 +284,31 @@ public abstract class MixinRegionFile {
      * 等存储装配完成后的下次写入再试。
      */
     @Unique
+    private volatile io.github.limuqy.mc.hassium.shadow.server.ShadowServerOwnership.Owner hassium$owner;
+
+    @Inject(method = "<init>", at = @At("RETURN"))
+    private void hassium$bindRegionOwner(CallbackInfo ci) {
+        hassium$shadowOwner();
+    }
+
+    @Unique
+    private io.github.limuqy.mc.hassium.shadow.server.ShadowServerOwnership.Owner hassium$shadowOwner() {
+        if (hassium$owner == null) {
+            hassium$owner = io.github.limuqy.mc.hassium.shadow.server.ShadowServerOwnership
+                    .find(hassium$self().hassium$getExternalFileDir());
+        }
+        return hassium$owner;
+    }
+
+    @Unique
     @Nullable
     private io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager hassium$shadowStorage() {
         io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager cached = hassium$shadowStorage;
         if (cached != null) {
             return cached;
         }
-        if (!io.github.limuqy.mc.hassium.server.RuntimeServerContext.isShadowServerContext()) {
-            return null;
-        }
-        io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer server =
-                io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry.getInstance().get();
+        var owner = hassium$shadowOwner();
+        io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer server = owner == null ? null : owner.server();
         if (server == null) {
             return null;
         }
@@ -358,7 +388,9 @@ public abstract class MixinRegionFile {
             byte[] vanillaPayload = hassium$copyPayload(buffer);
             int level = HassiumConfigService.getInstance().getStorageCompressionLevel();
             // 先解压拿到列 NBT，才能按 Status 判定是否准带 hash（T1 不变量）。
-            byte[] rawNbt = HassiumType126Codec.decodeVanillaPayload(compressionType, vanillaPayload);
+            byte[] rawNbt = (compressionType & 127) == HASSIUM_COMPRESSION_TYPE
+                    ? HassiumType126Codec.decode(vanillaPayload).nbt()
+                    : HassiumType126Codec.decodeVanillaPayload(compressionType, vanillaPayload);
             Long hash = io.github.limuqy.mc.hassium.shadow.storage.ShadowColumnContent.effectiveHash(
                     rawNbt,
                     io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes

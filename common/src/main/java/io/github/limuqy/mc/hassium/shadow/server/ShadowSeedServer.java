@@ -1771,7 +1771,7 @@ public class ShadowSeedServer extends MinecraftServer {
         if (io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager.isEncodingPaused()) {
             return null;
         }
-        return io.github.limuqy.mc.hassium.compat.ShadowPoiGate.callExclusive(() ->
+        return io.github.limuqy.mc.hassium.compat.ShadowPoiGate.callExclusive(this, () ->
                 ShadowLightCompute.withChunkLock(pos, () -> serializeInjectedColumnLocked(dimension, pos)));
     }
 

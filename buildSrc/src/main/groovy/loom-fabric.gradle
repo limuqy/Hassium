@@ -86,9 +86,10 @@ loom {
                 if (manualLogout != null && manualLogout.toString() == 'true') {
                     jvmArguments.add("-Dhassium.smokeTest.manualLogout=true")
                 }
-                programArguments.addAll([
-                        '--quickPlayMultiplayer', host.toString()
-                ])
+                def singleplayer = project.findProperty('hassiumSmokeSingleplayer')
+                programArguments.addAll(singleplayer != null
+                        ? ['--quickPlaySingleplayer', singleplayer.toString()]
+                        : ['--quickPlayMultiplayer', host.toString()])
             }
         } else if (name == 'server') {
             // T10 双主控演练：-PhassiumServerRunDir=run/serverB 让 B 服务端用独立 run 目录
