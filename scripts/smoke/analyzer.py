@@ -535,12 +535,15 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
     # 管线级全局包压缩已退役（run9 退役波）：原 ZSTD_NOT_ACTIVE 门由聚合门替代。
     has_handshake = "Hassium: play init (caps=" in log_text
     has_agg = "Hassium: Aggregation enabled for" in log_text
-    if not has_handshake:
+    require_hassium = scenario != "fallback"
+    if require_hassium and not has_handshake:
         failures.append(_failure("HANDSHAKE_NOT_NEGOTIATED"))
-    if not has_agg:
+    if require_hassium and not has_agg:
         failures.append(_failure("AGGREGATION_NOT_ACTIVE"))
-    checks["login_handshake"] = "PASS" if has_handshake else "FAIL"
-    checks["zstd_pipeline"] = "PASS" if has_agg else "FAIL"
+    checks["login_handshake"] = ("PASS" if has_handshake else "FAIL") if require_hassium else "NOT_REQUIRED"
+    checks["zstd_pipeline"] = ("PASS" if has_agg else "FAIL") if require_hassium else "NOT_REQUIRED"
+    if scenario == "fallback" and "[SHADOW] Creating shadow server" in log_text:
+        failures.append(_failure("FALLBACK_SHADOW_CREATED"))
 
     # 字典热更 rollout 门禁（scenario=dictionary 专属）：冒烟服务端以 SMOKE 模式跑
     # （预删字典文件 + 语料攒批高频采集 + 语料达标主动触发一次重训练），必须出现
@@ -570,6 +573,15 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
             skipped.append({"code": "PROBE_MISSING", "round": number})
             continue
         failures.extend(_check_probe_metrics(probe, number))
+        if scenario == "fallback":
+            if probe.get("joined") is not True or (_num(_obj(probe.get("clientCache")).get("loadedChunks")) or 0) <= 64:
+                failures.append(_failure("FALLBACK_CHUNKS_MISSING", round=number))
+            if _obj(probe.get("isolation")).get("shadowRunning") is not False:
+                failures.append(_failure("FALLBACK_SHADOW_RUNNING", round=number))
+            if _num(_obj(probe.get("stats")).get("fullChunkRequestCount")) != 0:
+                failures.append(_failure("FALLBACK_PULL_REQUESTED", round=number))
+            if (_num(_obj(probe.get("contentCheck")).get("chunksWithNonAir")) or 0) <= 0:
+                failures.append(_failure("FALLBACK_CONTENT_MISSING", round=number))
         trace_report = _trace_analysis(probe)
         trace_reports[f"round{number}"] = trace_report
         spatial = _spatial_check(probe)

@@ -122,11 +122,17 @@ public final class ChunkAuthorityHashes {
         if (dimension == null || pos == null || sectionHashes == null) {
             return;
         }
-        if (io.github.limuqy.mc.hassium.server.RuntimeServerContext.isShadowServerContext()) {
+        putByKey(DimensionKey.key(dimension, pos.x, pos.z), sectionHashes.clone());
+    }
+
+    public static void putSections(net.minecraft.server.level.ServerLevel level, String dimension,
+                                   ChunkPos pos, long[] sectionHashes) {
+        if (level == null) return;
+        if (level.getServer() instanceof io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer) {
             SHADOW_REJECTS.incrementAndGet();
             return;
         }
-        putByKey(DimensionKey.key(dimension, pos.x, pos.z), sectionHashes.clone());
+        putSections(dimension, pos, sectionHashes);
     }
 
     /** 方块变更失效（旧的权威 hash 已不再代表内容）。 */

@@ -608,5 +608,39 @@ def probe_for(authority: set[tuple[int, int]], compute: set[tuple[int, int]],
             "clientCache": {"actualPresent": {"positions": positions_authority}}}
 
 
+
+class FallbackIsolationTest(unittest.TestCase):
+    def analyze(self, *, shadow=False, pulls=0, loaded=100, scenario="fallback", creation=False):
+        from scripts.smoke.analyzer import analyze_result
+        from pathlib import Path
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "logs").mkdir()
+            (root / "logs" / "s.log").write_text("HassiumSmokeTest:PASS\n" +
+                    ("[SHADOW] Creating shadow server\n" if creation else ""))
+            probe = {"joined": True, "isolation": {"shadowRunning": shadow},
+                     "clientCache": {"loadedChunks": loaded},
+                     "stats": {"fullChunkRequestCount": pulls},
+                     "contentCheck": {"chunksWithNonAir": 9}}
+            return analyze_result({"SessionId": "s", "Scenario": scenario,
+                                   "Probe": {"Round1": probe, "Round2": probe}}, root)
+
+    def test_native_fallback_does_not_require_mod_handshake_or_aggregation(self):
+        self.assertTrue(self.analyze()["pass"])
+
+    def test_shadow_instance_and_even_transient_creation_fail_fallback(self):
+        self.assertIn("FALLBACK_SHADOW_RUNNING", {f["code"] for f in self.analyze(shadow=True)["failures"]})
+        self.assertIn("FALLBACK_SHADOW_CREATED", {f["code"] for f in self.analyze(creation=True)["failures"]})
+
+    def test_missing_chunks_or_pull_activity_fail_fallback(self):
+        self.assertIn("FALLBACK_CHUNKS_MISSING", {f["code"] for f in self.analyze(loaded=0)["failures"]})
+        self.assertIn("FALLBACK_PULL_REQUESTED", {f["code"] for f in self.analyze(pulls=1)["failures"]})
+
+    def test_normal_scenarios_still_require_hassium_activation(self):
+        codes = {f["code"] for f in self.analyze(scenario="classic")["failures"]}
+        self.assertIn("HANDSHAKE_NOT_NEGOTIATED", codes)
+        self.assertIn("AGGREGATION_NOT_ACTIVE", codes)
+
 if __name__ == "__main__":
     unittest.main()

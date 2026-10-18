@@ -1,0 +1,13 @@
+# Keep the legacy process flag armed while a real integrated world loads/saves.
+join integrated=true label=WAIT_SINGLEPLAYER since=start timeoutMs=${joinTimeoutMs}
+wait ms=10000
+assertProbe key=isolation.integrated op=eq value=1
+assertProbe key=isolation.memoryConnection op=eq value=1
+assertProbe key=isolation.processShadowFlag op=eq value=1
+assertProbe key=isolation.shadowRunning op=eq value=0
+assertProbe key=isolation.scheduleTicks op=eq value=2
+assertProbe key=stats.fullChunkRequestCount op=eq value=0
+assertProbe key=clientCache.loadedChunks op=gt value=64
+assertProbe key=contentCheck.chunksWithNonAir op=gt value=0
+dump round=1 vanilla=true
+exit rounds=1

@@ -155,18 +155,19 @@ public final class SeedGenLevelCompat {
     /** 纯装配（专用线程内）：持久世界目录 + 存档 + 数据包 + 世界 stem + initServer。 */
     private static ShadowSeedServer assembleShadowServer(long seed) throws IOException {
         long t0Ns = System.nanoTime(); // T0b 诊断：装配各阶段耗时
-        // 影子上下文须在 WorldLoader.load 之前置位：ReloadableServerResources.listeners()
-        // Mixin 据此跳过 recipe/advancement/function/loot（保留 TagManager）。
+        // 代际仅用于生命周期清理；资源裁剪由显式 ShadowAssemblyScope 隔离。
         int assemblyGeneration = io.github.limuqy.mc.hassium.server.RuntimeServerContext.beginShadowServer();
         // 影子端世界根 = 客户端缓存目录下原版存档结构（hassium_cache/<serverId>/world）。
         // 断连保存、重连复用，不删除（不再兼容旧 HBT1 客户端缓存格式，数据不迁移）。
-        Path worldRoot = resolveShadowWorldRoot();
-        long tResolveNs = System.nanoTime();
-        LevelStorageSource storage = LevelStorageSource.createDefault(worldRoot);
+        ShadowServerOwnership.Owner ownership = null;
         LevelStorageSource.LevelStorageAccess access = null;
         PackRepository repo = null;
         WorldStem stem = null;
         try {
+            Path worldRoot = resolveShadowWorldRoot();
+            ownership = ShadowServerOwnership.register(worldRoot.resolve("world"));
+            long tResolveNs = System.nanoTime();
+            LevelStorageSource storage = LevelStorageSource.createDefault(worldRoot);
             access = storage.validateAndCreateAccess("world");
             long tAccessNs = System.nanoTime();
 #if MC_VER < MC_1_21_1
@@ -219,6 +220,7 @@ public final class SeedGenLevelCompat {
         // 影子端不走 runServer → 必须在 createLevels（ChunkMap.<init>）之前补齐，
         // 否则 C2ME 的 ChunkMap postInit 直接抛 ISE（见 C2meOpenClCompat）。
         io.github.limuqy.mc.hassium.compat.mods.C2meOpenClCompat.armFor(server);
+        ownership.attach(server);
         server.initServer();
         // 镜像集成服：把影子实例写入加载器全局 currentServer 槽（仅空槽）。
         // TF 等 mod 的 getOverworldSeed() 经 requireNonNull(getCurrentServer()) 取种子，
@@ -243,7 +245,8 @@ public final class SeedGenLevelCompat {
                 server.storageDimensions());
         return server;
 
-        } catch (Exception e) {
+        } catch (Throwable e) {
+            if (ownership != null) ownership.close();
             // 装配失败：复位影子标志（代际由本轮 setShadowServer(true) 递增）后回收资源
             try {
                 int gen = assemblyGeneration;
@@ -323,7 +326,7 @@ public final class SeedGenLevelCompat {
         for (int attempt = 0; attempt <= retries; attempt++) {
             try {
                 return Util.<WorldStem>blockUntilDone(
-                                executor -> WorldLoader.load(
+                                executor -> ShadowAssemblyScope.call(() -> WorldLoader.load(
                                         initConfig,
                                         dataLoadContext -> {
                                             Registry<LevelStem> stemRegistry =
@@ -337,8 +340,8 @@ public final class SeedGenLevelCompat {
                                                     worldData, complete.dimensionsRegistryAccess());
                                         },
                                         WorldStem::new,
-                                        Util.backgroundExecutor(),
-                                        executor)
+                                        ShadowAssemblyScope.wrap(Util.backgroundExecutor()),
+                                        ShadowAssemblyScope.wrap(executor)))
                         )
                         .get(120, TimeUnit.SECONDS);
             } catch (Exception e) {
@@ -717,6 +720,7 @@ public final class SeedGenLevelCompat {
         // 与 NeoForge expectServerStopped 对齐：槽仍指向本影子实例时清空；
         // 不覆盖集成服/专用服真服。放在代际复位之外——新会话接管前旧槽必须让出。
         io.github.limuqy.mc.hassium.compat.ServerLifecycleHooksCompat.releaseCurrentServer(server);
+        ShadowServerOwnership.release(server);
         io.github.limuqy.mc.hassium.server.RuntimeServerContext.finishShadowServer(shadowGeneration, () -> {
             io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes.clear();
             io.github.limuqy.mc.hassium.protocol.sectiondelta.SectionDeltaSnapshots.clear();

@@ -50,6 +50,19 @@ public final class ServerNetworkGate {
         return isNetworkServerActive();
     }
 
+    /** Compression/aggregation alone never authorizes replacing vanilla chunk or light delivery. */
+    public static boolean shouldTakeOverChunks(net.minecraft.server.level.ServerPlayer player) {
+        if (player == null || player.level() == null || !PlayerCompressionTracker.isCompressionEnabled(player)) return false;
+        MinecraftServer owner = io.github.limuqy.mc.hassium.compat.PlayerCompat.getMinecraftServer(player);
+        return owner != null && owner == RuntimeServerContext.getActiveServer()
+                && !(owner instanceof io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer)
+                && shouldUseForConnection(io.github.limuqy.mc.hassium.compat.PlayerCompat.getConnection(player))
+                && ServerHandshakeActivation.hasCaps(player.getUUID(),
+                        io.github.limuqy.mc.hassium.protocol.handshake.LoginCaps.PULL_MODE)
+                && ServerHandshakeActivation.hasCaps(player.getUUID(),
+                        io.github.limuqy.mc.hassium.protocol.handshake.LoginCaps.SHADOW_PULL);
+    }
+
     /** 1.20.1 login query 是否发送（无 connection 时按非 memory 保守处理）。 */
     public static boolean shouldSendLoginHandshake(Connection connection) {
         return shouldUseForConnection(connection);
@@ -91,7 +104,8 @@ public final class ServerNetworkGate {
      * 不得因 Hassium 未启用而让原版客户端打满带宽。
      */
     public static boolean shouldRateLimitChunkSend(net.minecraft.server.level.ServerPlayer player) {
-        if (RuntimeServerContext.isShadowServerContext()) {
+        if (player == null || player.level() == null || io.github.limuqy.mc.hassium.compat.PlayerCompat.getMinecraftServer(player)
+                instanceof io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer) {
             return false;
         }
         if (RuntimeServerContext.isDedicatedServerContext()) {

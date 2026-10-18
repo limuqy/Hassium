@@ -11,9 +11,7 @@ import io.github.limuqy.mc.hassium.protocol.IndexSyncManager;
 import io.github.limuqy.mc.hassium.protocol.PayloadHandlers;
 import io.github.limuqy.mc.hassium.protocol.PreHandshakePayload;
 import io.github.limuqy.mc.hassium.protocol.PreHandshakeProtocol;
-import io.github.limuqy.mc.hassium.protocol.ShadowPullHandler;
 import io.github.limuqy.mc.hassium.protocol.ShadowPullRequestC2SPacket;
-import io.github.limuqy.mc.hassium.protocol.ShadowPullRequestLedger;
 import io.github.limuqy.mc.hassium.protocol.ShadowPullResponseS2CPacket;
 import io.github.limuqy.mc.hassium.protocol.ShadowPullServer;
 import io.github.limuqy.mc.hassium.protocol.handshake.LoginHandshake;
@@ -149,15 +147,10 @@ Identifier
 #endif
 PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
 
-    /** review-fix: 进程级单例（对齐 Forge/NeoForge），ShadowPullRequestLedger 幂等依赖跨请求状态。 */
-    private static final ShadowPullHandler SHADOW_PULL_HANDLER = new ShadowPullHandler(new ShadowPullRequestLedger());
 
     public void registerChannels() {
-        if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()
-                && !HassiumConfigService.getInstance().isClientCacheEnabled()) {
-            LOGGER.warn("Hassium: master.enabled=false and chunk.enabled=false, skipping channel registration");
-            return;
-        }
+        // Registration is structural: receivers/codecs must exist even when features are disabled.
+        // Runtime admission and handshake gates decide whether any traffic is allowed.
         LOGGER.debug("Hassium: Registering Fabric network channels");
 #if MC_VER >= MC_1_21_1
         FabricPayloadRegistry.registerAll();
@@ -403,7 +396,7 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
                     DebugLogger.info(LogType.NETWORK,
                             "[SHADOW_PULL] server request player={} count={} epoch={}", player.getUUID(),
                             request.entries().size(), request.epoch());
-                    ShadowPullResponseS2CPacket response = ShadowPullServer.handleRequest(SHADOW_PULL_HANDLER, player, request);
+                    ShadowPullResponseS2CPacket response = ShadowPullServer.handleRequest(player, request);
                     FriendlyByteBuf out = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
                     response.encode(out);
                     ServerPlayNetworking.send(player, SHADOW_PULL_RESPONSE_S2C, out);
@@ -419,7 +412,7 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
                 ShadowPullRequestC2SPacket request = ShadowPullRequestC2SPacket.decode(buf);
                 context.server().execute(() -> {
                     ServerPlayer player = (ServerPlayer) context.player();
-                    ShadowPullResponseS2CPacket response = ShadowPullServer.handleRequest(SHADOW_PULL_HANDLER, player, request);
+                    ShadowPullResponseS2CPacket response = ShadowPullServer.handleRequest(player, request);
                     FriendlyByteBuf out = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
                     response.encode(out);
                     ServerPlayNetworking.send(player, FabricPayloadRegistry.toPayload(

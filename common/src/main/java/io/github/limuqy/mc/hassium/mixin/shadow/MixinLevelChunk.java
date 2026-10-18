@@ -2,7 +2,6 @@ package io.github.limuqy.mc.hassium.mixin.shadow;
 
 import io.github.limuqy.mc.hassium.compat.LevelCompat;
 import io.github.limuqy.mc.hassium.server.ChunkAuthorityHashes;
-import io.github.limuqy.mc.hassium.server.RuntimeServerContext;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.block.state.BlockState;
@@ -61,7 +60,7 @@ public class MixinLevelChunk {
             return; // 权威缓存空闲：不触碰 level / 维度
         }
         LevelChunk self = (LevelChunk) (Object) this;
-        if (!(self.getLevel() instanceof ServerLevel level) || RuntimeServerContext.isShadowServerContext()) {
+        if (!(self.getLevel() instanceof ServerLevel level) || level.getServer() instanceof io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer) {
             return;
         }
         ChunkAuthorityHashes.invalidate(LevelCompat.getDimensionId(level), self.getPos());

@@ -37,10 +37,10 @@ public abstract class MixinServerPlayer extends Player {
 #endif
     private void hassium$onPlayerInit(CallbackInfo ci) {
         ServerPlayer self = (ServerPlayer) (Object) this;
-        if (io.github.limuqy.mc.hassium.server.RuntimeServerContext.isShadowServerContext()) {
+        if ((io.github.limuqy.mc.hassium.compat.PlayerCompat.getMinecraftServer((ServerPlayer) (Object) this) instanceof io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer)) {
             return;
         }
-        // 登录期握手协商结果消费：启用压缩门（原版区块窗口自此压制）+ Play 激活入队。
+        // 登录期握手协商结果消费：登记协议/压缩能力 + Play 激活入队；是否压制整柱另查区块接管门。
         io.github.limuqy.mc.hassium.server.ServerHandshakeActivation.onPlayerInit(self);
     }
 
@@ -58,7 +58,7 @@ public abstract class MixinServerPlayer extends Player {
     @Inject(method = "trackChunk", at = @At("HEAD"), cancellable = true)
     private void hassium$onTrackChunk(ChunkPos pos, Packet<?> chunkPacket, CallbackInfo ci) {
         ServerPlayer self = (ServerPlayer) (Object) this;
-        if (io.github.limuqy.mc.hassium.server.RuntimeServerContext.isShadowServerContext()) {
+        if ((io.github.limuqy.mc.hassium.compat.PlayerCompat.getMinecraftServer((ServerPlayer) (Object) this) instanceof io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer)) {
             // S3 接法 B：影子专用服官方包 → 真实客户端（带来源维度，桥侧做维度闸）
             if (chunkPacket != null) {
                 io.github.limuqy.mc.hassium.shadow.track.ShadowOfficialPacketBridge
@@ -69,14 +69,9 @@ public abstract class MixinServerPlayer extends Player {
             ci.cancel();
             return;
         }
-        if (PlayerCompressionTracker.isCompressionEnabled(self)) {
-            // Pull 模式：服务端停发 chunk_payload，区块由影子 Provider/票窗交付
-            if (io.github.limuqy.mc.hassium.server.ServerHandshakeActivation.hasCaps(
-                    self.getUUID(), io.github.limuqy.mc.hassium.protocol.handshake.LoginCaps.PULL_MODE)) {
-                ci.cancel();
-                return;
-            }
-            // 非 pull 兼容路径：落入下方原版滴灌判定
+        if (io.github.limuqy.mc.hassium.server.ServerNetworkGate.shouldTakeOverChunks(self)) {
+            ci.cancel();
+            return;
         }
         if (chunkPacket != null
                 && io.github.limuqy.mc.hassium.server.ServerNetworkGate.shouldRateLimitChunkSend(self)) {
@@ -141,7 +136,7 @@ public abstract class MixinServerPlayer extends Player {
                     target = "Lnet/minecraft/server/level/ServerPlayer;fudgeSpawnLocation(Lnet/minecraft/server/level/ServerLevel;)V"))
     private void hassium$skipFudgeSpawn(net.minecraft.server.level.ServerPlayer self,
                                         net.minecraft.server.level.ServerLevel level) {
-        if (!io.github.limuqy.mc.hassium.server.RuntimeServerContext.isShadowServerContext()) {
+        if (!(io.github.limuqy.mc.hassium.compat.PlayerCompat.getMinecraftServer((ServerPlayer) (Object) this) instanceof io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer)) {
             ((MixinServerPlayer) (Object) self).invokeFudgeSpawnLocation(level);
         }
     }

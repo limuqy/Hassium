@@ -177,12 +177,12 @@ public final class PayloadHandlers {
      * 字节（非 null）。不捕获异常（decode 校验失败由 loader 侧 catch 落 warn 日志）；
      * 发送载体由 loader 决定（各端通道封装不同）。
      */
-    public static byte[] handleShadowPullRequest(ShadowPullHandler handler, ServerPlayer player,
+    public static byte[] handleShadowPullRequest(ServerPlayer player,
                                                  byte[] requestBytes) {
         FriendlyByteBuf buf = wrap(requestBytes);
         try {
             ShadowPullRequestC2SPacket request = ShadowPullRequestC2SPacket.decode(buf);
-            ShadowPullResponseS2CPacket response = ShadowPullServer.handleRequest(handler, player, request);
+            ShadowPullResponseS2CPacket response = ShadowPullServer.handleRequest(player, request);
             FriendlyByteBuf out = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
             try {
                 response.encode(out);

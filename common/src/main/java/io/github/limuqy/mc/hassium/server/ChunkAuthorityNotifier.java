@@ -312,7 +312,7 @@ public final class ChunkAuthorityNotifier {
             hashBudget[0]--;
             sections = ChunkContentHashUtil.sectionHashesToArray(
                     ChunkContentHashUtil.computeSectionHashes(chunk));
-            ChunkAuthorityHashes.putSections(dimension, pos, sections);
+            ChunkAuthorityHashes.putSections(level, dimension, pos, sections);
         }
         return ChunkContentHashUtil.combineSectionHashesFromArray(sections);
     }

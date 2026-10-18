@@ -10,24 +10,10 @@ import java.io.OutputStream;
 import java.nio.ByteBuffer;
 
 /**
- * C2ME 自实现区块 IO（{@code ioSystem.replaceImpl}）下的 type 126 写侧接管。
- * <p>
- * <b>问题</b>：C2ME 的 {@code C2MEStorageThread} 自己拼 sector
- * （{@code out.write(0)×4} → {@code out.write(format.getId())} → {@code format.wrap(out)} →
- * {@code putInt(0, size-5+1)} → {@code invokeWriteChunk(pos, buf)}），**绕过** vanilla 的
- * {@code getChunkDataOutputStream}，因此挂在后者的 Hassium 写钩子永不触发 → type 126 永不产生，
- * 影子缓存读侧又拒绝非 126（{@code shouldSkipVanillaChunkParse}）→ 缓存永久 miss。
- * <p>
- * <b>接管方式（零重压）</b>：两个 hook 都落在 **vanilla 类**上，不引用 C2ME 内部类：
- * <ul>
- *   <li>{@code RegionFileVersion.wrap(OutputStream)} — 这是 C2ME 与 vanilla
- *       {@code getChunkDataOutputStream} 压缩载荷的唯一入口；在该 gate 下 vanilla 路径已被
- *       {@code MixinRegionFile} HEAD 取消，故此处必为外部 IO 调用。替换为
- *       {@link HassiumPayloadStream}，从原始 NBT 一次性 ZSTD+字典压缩（不重压）。</li>
- *   <li>{@code RegionFile.write(ChunkPos, ByteBuffer)} — 所有写入者的汇合点，在此按坐标回填
- *       type 字节与 chunkHash。签名检测（magic + 全零 hash）保证对 vanilla 压缩载荷与
- *       Hassium 自身已完成的 126 槽都是幂等 no-op。</li>
- * </ul>
+ * C2ME external IO: ownerless RegionFileVersion.wrap may replace compression only on a
+ * dedicated server with storage enabled. Physical clients retain vanilla compression here;
+ * MixinRegionFile.write identifies the owning shadow directory and re-encodes/adopts the sector.
+ * This costs one decode/encode for external shadow IO, but cannot rewrite integrated-world IO.
  */
 public final class C2meChunkIoCompat {
 
@@ -35,8 +21,7 @@ public final class C2meChunkIoCompat {
     }
 
     /**
-     * 与 {@code MixinRegionFile} 写路径同口径的门控：仅"专用服开启存储"或"影子端"
-     * （影子存档固定写 126，不受 storage.enabled 约束）时接管。
+     * 无目录参数的压缩入口只允许专用服存储模式；影子存档在有归属的 RegionFile.write 收编。
      */
     public static boolean takeoverEnabled() {
         if (!ModCompatFlags.c2meChunkIoReplaced()) {
@@ -44,11 +29,8 @@ public final class C2meChunkIoCompat {
         }
         try {
             HassiumConfigService config = HassiumConfigService.getInstance();
-            boolean shadow = RuntimeServerContext.isShadowServerContext();
-            if (shadow) {
-                ModCompatFlags.announceOnce();
-                return true;
-            }
+            // wrap(OutputStream) has no world owner. On physical clients keep vanilla encoding;
+            // the owning shadow RegionFile.write adopts/re-encodes the sector into its image.
             if (RuntimeServerContext.isDedicatedServerContext() && config.isStorageEnabled()) {
                 ModCompatFlags.announceOnce();
                 return true;

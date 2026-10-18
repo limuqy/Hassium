@@ -3,34 +3,49 @@ package io.github.limuqy.mc.hassium.protocol;
 import io.github.limuqy.mc.hassium.compat.LevelCompat;
 import io.github.limuqy.mc.hassium.compat.PlayerCompat;
 import io.github.limuqy.mc.hassium.server.ServerChunkPushManager;
+import io.github.limuqy.mc.hassium.server.ServerNetworkGate;
 import net.minecraft.server.level.ServerPlayer;
+import java.util.UUID;
 
-/**
- * ShadowPull 服务端统一入口（Fabric/Forge/NeoForge 三端逐字重复的
- * {@code ShadowPullHandler.handle} 参数组装收敛点）。
- * <p>
- * 必须在服务端主线程（{@code server.execute(...)}）内调用；loader 侧只保留
- * 「解包 → 本类 → 编码 → 各自通道回发」的收发外框。
- */
+/** All loaders share this admission boundary; ledger lifetime is one real connection. */
 public final class ShadowPullServer {
+    private ShadowPullServer() {}
+    // Wire v1 clients use epoch zero. The connection identity, not a client-supplied epoch, owns a session.
+    public static final long WIRE_EPOCH = 0L;
+    private static final ShadowPullSessions SESSIONS = new ShadowPullSessions();
 
-    private ShadowPullServer() {
+    public static boolean isAuthorized(ServerPlayer player) {
+        if (!ServerNetworkGate.shouldTakeOverChunks(player) || player.connection == null
+                || !player.isAlive() || player.isRemoved() || player.hasDisconnected()) return false;
+        var connection = PlayerCompat.getConnection(player);
+        return connection != null && connection.isConnected();
     }
 
-    /**
-     * 组装请求上下文（维度 / 权威视距 margin / resolver）并执行统一 Compare+Pull 裁决。
-     * 返回编码前的响应包；调用方负责 encode 后经各自通道回发。
-     * <p>
-     * {@code handler} 由调用方传入以保留各加载器既有 ledger 语义
-     * （三端均为进程级 {@code SHADOW_PULL_HANDLER} 单例，review §2.2）。
-     */
-    public static ShadowPullResponseS2CPacket handleRequest(ShadowPullHandler handler, ServerPlayer player,
+    public static boolean isCurrentSession(ServerPlayer player, Object connection) {
+        if (player == null || player.connection != connection) return false;
+        return SESSIONS.matches(player.getUUID(), connection) && isAuthorized(player);
+    }
+
+    public static void removePlayer(UUID playerId) { SESSIONS.remove(playerId); }
+    public static void clear() { SESSIONS.clear(); }
+
+    /** Called on the owning real server thread; invalid requests never create a session or touch chunks. */
+    public static ShadowPullResponseS2CPacket handleRequest(ServerPlayer player,
                                                             ShadowPullRequestC2SPacket request) {
+        if (!isAuthorized(player)) {
+            // No world, position, chunk source or session access on the rejected path.
+            return new ShadowPullHandler(new ShadowPullRequestLedger()).handle(
+                    player == null ? null : player.getUUID(), request, null, WIRE_EPOCH,
+                    0, 0, 0, false, false, (req, entry) -> null);
+        }
+        boolean newConnection = !SESSIONS.matches(player.getUUID(), player.connection);
+        if (newConnection) ServerChunkPushManager.getInstance().removePlayer(player.getUUID());
+        ShadowPullHandler handler = SESSIONS.handler(player.getUUID(), player.connection);
         String dimension = LevelCompat.getDimensionId(player.level());
-        return handler.handle(player.getUUID(), request, dimension, request.epoch(), player.chunkPosition().x,
-                player.chunkPosition().z,
+        return handler.handle(player.getUUID(), request, dimension, WIRE_EPOCH,
+                player.chunkPosition().x, player.chunkPosition().z,
                 PlayerCompat.getViewDistance(player) + ShadowPullRadii.AUTHORITY_MARGIN,
-                true, player.isAlive() && !player.hasDisconnected(),
+                true, true,
                 (req, entry) -> ServerChunkPushManager.getInstance().resolveShadowPull(player, req, entry, dimension));
     }
 }

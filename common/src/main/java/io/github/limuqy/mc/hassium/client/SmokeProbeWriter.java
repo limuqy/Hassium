@@ -76,6 +76,7 @@ public final class SmokeProbeWriter {
                 sb.append("null");
             }
             sb.append(",\n");
+            io.github.limuqy.mc.hassium.client.scenario.IsolationSmokeProbe.appendJson(sb, mc);
             appendStats(sb, NetworkStats.getMetrics());
             io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.appendLightProbeJson(sb);
             appendClientCache(sb, mc, dimension);

@@ -16,9 +16,7 @@ import io.github.limuqy.mc.hassium.protocol.PayloadHandlers;
 import io.github.limuqy.mc.hassium.protocol.PreHandshakeHelloPayload;
 import io.github.limuqy.mc.hassium.protocol.PreHandshakePayload;
 import io.github.limuqy.mc.hassium.protocol.PreHandshakeProtocol;
-import io.github.limuqy.mc.hassium.protocol.ShadowPullHandler;
 import io.github.limuqy.mc.hassium.protocol.ShadowPullRequestC2SPacket;
-import io.github.limuqy.mc.hassium.protocol.ShadowPullRequestLedger;
 import io.github.limuqy.mc.hassium.protocol.ShadowPullResponseS2CPacket;
 import io.github.limuqy.mc.hassium.protocol.ShadowPullServer;
 import io.github.limuqy.mc.hassium.protocol.handshake.LoginHandshake;
@@ -150,8 +148,6 @@ public class ForgeNetworkManager implements INetworkManagerService {
 #endif
     }
 
-    private static final ShadowPullHandler SHADOW_PULL_HANDLER =
-            new ShadowPullHandler(new ShadowPullRequestLedger());
 
 #if MC_VER < MC_1_21_1
     public static final SimpleChannel CHANNEL = NetworkRegistry.newSimpleChannel(
@@ -168,11 +164,8 @@ public class ForgeNetworkManager implements INetworkManagerService {
 #endif
 
     public void registerChannels() {
-        if (!HassiumConfigService.getInstance().isNetworkCompressionEnabled()
-                && !HassiumConfigService.getInstance().isClientCacheEnabled()) {
-            LOGGER.warn("Hassium: master.enabled=false and chunk.enabled=false, skipping Forge channel registration");
-            return;
-        }
+        // Optional channel definitions must exist independently of chunk takeover/configuration.
+        // Runtime handshake/admission gates decide which connection can actually use them.
         LOGGER.debug("Hassium: Registering Forge network channels");
 #if MC_VER < MC_1_21_1
         registerLegacyChannels();
@@ -509,7 +502,7 @@ public class ForgeNetworkManager implements INetworkManagerService {
             return;
         }
         try {
-            byte[] response = PayloadHandlers.handleShadowPullRequest(SHADOW_PULL_HANDLER, player, msg.data());
+            byte[] response = PayloadHandlers.handleShadowPullRequest(player, msg.data());
 #if MC_VER < MC_1_21_1
             if (CHANNEL != null) {
                 CHANNEL.sendTo(new ShadowPullResponseWrapper(response),

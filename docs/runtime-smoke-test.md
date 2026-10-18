@@ -660,3 +660,10 @@ build/smoke-test/
 同一 checkout 的不同 `-Pmc_ver` 构建/冒烟必须串行：Manifold 定义由根 `build.properties` 生成，共享文件会被后启动的版本覆盖。仅分开输出目录不足以隔离此定义文件。
 
 `egressbench` 可采集空闲、移动实体和 Mod 密集阶段。`factoryegress20/100/200` 要求 1.21.1+ 的 tick 管理器及与目标 MC 兼容的工厂存档；提供的 26.1.2 工厂 ZIP 不能向 1.x 降级加载。历史 JSONL 可通过 `EgressCaptureReplay` 做不透明字节算法对照，不作为 2.x 原生运行时或出口收益证据。
+
+## 客户端隔离专项（2026-10-18）
+
+- `-Scenario fallback`：profile 关闭客户端区块、OVD、SeedGen，冷加载和重连均要求真实客户端区块驻留与非空气地形、零 Pull、无影子创建。此场景允许不协商 Hassium 协议；其它场景仍要求握手和聚合激活。
+- `scripts/runtime-integrated-isolation-test.ps1 -Ver <版本> -SessionId <新名称>`：Fabric 真实内置服专项。先跑同锚点 Fabric 专用服场景提供 parity 测试世界，或以 `-SourceWorld` 指定夹具。脚本创建独立副本，保留旧进程影子标志来复现污染条件，检查 memory 连接、方块/流体 tick 入队、原版区块内容与退出后的 region 格式；临时配置在 finally 恢复。测试副本保留供检查，已存在时拒绝覆盖。
+- 关闭功能回退按关闭后重新连接/启动验证；登录期能力不会因在线修改本地开关而自动撤销。
+- 结果和逐功能隔离说明见 [双线修复验收](handoff/handoff-2026-10-18-client-server-isolation-fixes.md)。单人脚本记录 `Pass`、原版 region 槽数及压缩类型；联机脚本沿用现有结果 JSON 和 analyzer。

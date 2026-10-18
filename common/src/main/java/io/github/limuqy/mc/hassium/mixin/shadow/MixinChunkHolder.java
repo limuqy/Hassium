@@ -1,6 +1,6 @@
 package io.github.limuqy.mc.hassium.mixin.shadow;
 
-import io.github.limuqy.mc.hassium.server.PlayerCompressionTracker;
+import io.github.limuqy.mc.hassium.server.ServerNetworkGate;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import net.minecraft.network.protocol.game.ClientboundLightUpdatePacket;
@@ -10,35 +10,19 @@ import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
-
 import java.util.List;
 
-/**
- * 只隔离真实服务端到 Hassium 客户端的原版 chunk/light admission。
- * 影子端不注册 vanilla tracking 玩家，因此不会产生原版区块下行。
- */
+/** Filter only negotiated chunk takeover recipients. Block/entity updates always use vanilla. */
 @Mixin(ChunkHolder.class)
 public class MixinChunkHolder {
     @Inject(method = "broadcast", at = @At("HEAD"), cancellable = true)
     private void hassium$onBroadcast(List<ServerPlayer> players, Packet<?> packet, CallbackInfo ci) {
-        if (io.github.limuqy.mc.hassium.server.RuntimeServerContext.isShadowServerContext()) {
-            ci.cancel();
-            return;
-        }
         if (!(packet instanceof ClientboundLevelChunkWithLightPacket)
-                && !(packet instanceof ClientboundLightUpdatePacket)) {
-            return;
-        }
-        boolean filtered = false;
+                && !(packet instanceof ClientboundLightUpdatePacket)) return;
+        if (players.stream().noneMatch(ServerNetworkGate::shouldTakeOverChunks)) return;
         for (ServerPlayer player : players) {
-            if (PlayerCompressionTracker.isCompressionEnabled(player)) {
-                filtered = true;
-            } else {
-                player.connection.send(packet);
-            }
+            if (!ServerNetworkGate.shouldTakeOverChunks(player)) player.connection.send(packet);
         }
-        if (filtered) {
-            ci.cancel();
-        }
+        ci.cancel();
     }
 }
