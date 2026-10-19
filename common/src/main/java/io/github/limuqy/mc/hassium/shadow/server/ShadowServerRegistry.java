@@ -96,6 +96,18 @@ public final class ShadowServerRegistry {
 
     private ShadowServerRegistry() {}
 
+    private void traceLifecycle(String event) {
+        if (!Boolean.getBoolean("hassium.debug.shadowLifecycle")) return;
+        String callers = StackWalker.getInstance().walk(frames -> frames
+                .filter(frame -> frame.getClassName().startsWith("io.github.limuqy.mc.hassium"))
+                .limit(8).map(StackWalker.StackFrame::toString)
+                .collect(java.util.stream.Collectors.joining(" <- ")));
+        Constants.LOG.info("[SHADOW-LIFECYCLE] {} registry={} instance={} bound={} wanted={} creating={} failed={} previousDone={} thread={} callers={}",
+                event, System.identityHashCode(this), server == null ? 0 : System.identityHashCode(server),
+                boundServerId, client().getServerId(), creating, failed, previousShutdownComplete,
+                Thread.currentThread().getName(), callers);
+    }
+
     public static ShadowServerRegistry getInstance() {
         return INSTANCE;
     }
@@ -179,8 +191,10 @@ public final class ShadowServerRegistry {
                     seed, client().isHassiumHandshakeDone());
             try {
                 creating = true;
+                traceLifecycle("create begin");
                 ShadowSeedServer created = createShadowServerWithLockRetry(seed);
                 server = created;
+                traceLifecycle("create published");
                 assembledSeed = seed;
                 parked = false;
                 boundServerId = client().getServerId();
@@ -197,6 +211,7 @@ public final class ShadowServerRegistry {
                     return created;
                 }
             } catch (Exception e) {
+                traceLifecycle("create failed");
                 creating = false;
                 failShadowServer();
                 Constants.LOG.error("Hassium: Shadow server creation failed; "
@@ -388,7 +403,7 @@ public final class ShadowServerRegistry {
                 return; // 创建中超时放弃 / 已被其他线程重建
             }
             Constants.LOG.info("Hassium: Shadow rebuild for {}", reason);
-            shutdown();
+            shutdown(true);
             getOrCreate();
         };
         var executor = io.github.limuqy.mc.hassium.concurrent.HassiumTaskExecutor.getClient();
@@ -508,14 +523,22 @@ public final class ShadowServerRegistry {
      * 提交后台守护线程执行——登出/断连不卡主线程。
      */
     public void shutdown() {
+        shutdown(false);
+    }
+
+    /** 同连接内重建须保留登录许可，否则旧的投机取消标记会把新实例再次关停。 */
+    void shutdown(boolean preserveLoginPermit) {
         final ShadowSeedServer s;
         final java.util.concurrent.CompletableFuture<Void> previous;
         synchronized (lock) {
+            traceLifecycle("shutdown detach");
             s = server;
             server = null;
             boundServerId = null;
             parked = false;
-            unparkPermitted = false;
+            if (!preserveLoginPermit) {
+                unparkPermitted = false;
+            }
             failed = false;
             previous = previousShutdownFuture;
             if (s == null) {
@@ -544,6 +567,7 @@ public final class ShadowServerRegistry {
                     }
                 }
                 SeedGenLevelCompat.shutdown(s, !saveAllowed);
+                traceLifecycle("shutdown resources closed " + System.identityHashCode(s));
                 ShadowSeedServer current = server;
                 if (current != null) {
                     try {
@@ -643,6 +667,10 @@ public final class ShadowServerRegistry {
             try {
                 return SeedGenLevelCompat.createShadowServer(seed);
             } catch (Exception e) {
+                if (Boolean.getBoolean("hassium.debug.shadowLifecycle")) {
+                    Constants.LOG.info("[SHADOW-LIFECYCLE] create exception attempt={} lockBusy={} type={} message={}",
+                            attempt + 1, isLockBusy(e), e.getClass().getName(), e.getMessage());
+                }
                 if (++attempt < maxAttempts && isLockBusy(e)) {
                     try {
                         Thread.sleep(200L);
@@ -657,12 +685,19 @@ public final class ShadowServerRegistry {
         }
     }
 
-    private static boolean isLockBusy(Throwable t) {
+    static boolean isLockBusy(Throwable t) {
         for (Throwable c = t; c != null; c = c.getCause()) {
             if (c instanceof java.nio.channels.OverlappingFileLockException) {
                 return true;
             }
             if (c instanceof java.io.IOException) {
+                // Windows writes session.lock's marker before tryLock and can throw a
+                // localized native IOException. Its acquisition frame survives mapping;
+                // English message matching alone misses this bounded-retry case.
+                String lockClass = net.minecraft.util.DirectoryLock.class.getName();
+                for (StackTraceElement frame : c.getStackTrace()) {
+                    if (frame.getClassName().equals(lockClass)) return true;
+                }
                 String m = c.getMessage();
                 if (m != null) {
                     String lm = m.toLowerCase(java.util.Locale.ROOT);
