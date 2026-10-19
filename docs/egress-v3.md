@@ -10,7 +10,7 @@
 
 NeoForge `GenericPacketSplitter` 的大小预编码会令小包 codec 执行两次。`MixinNeoForgePacketSplitter` 缓存其实际编码结果，`MixinPacketEncoder` 只在包身份和原生协议绑定完全一致时复用；拆分包分支清除缓存，保持加载器拆分流程。该桥由 NeoForge 存在性门控，客户端上行不接管。
 
-出口 FIFO 保存原始 promise、聚合批次、直发项及 flush。压缩在共享后台池执行，但每连接同时最多一个作业；写出返回 EventLoop。聚合载体写出成功才完成其所有原始 promise，失败向原始 promise 传播并断开。控制/回调/Bundle delimiter/终结包形成屏障；未知写入不越过先前作业。原版每包 flush 可在等待窗内合并，tick 尾、屏障、批次上限和 watchdog 负责封批。队列计入载荷与每项固定管理成本，6 MiB 停止新聚合，8 MiB 硬断开。
+出口 FIFO 保存原始 promise、聚合批次、直发项及 flush。压缩在共享后台池执行，但每连接同时最多一个作业；写出返回 EventLoop。聚合载体写出成功才完成其所有原始 promise，失败向原始 promise 传播并断开。控制/回调/Bundle delimiter/终结包形成屏障；未知写入不越过先前作业。原版每包 flush 可在等待窗内合并，tick 尾、屏障、批次上限和 watchdog 负责封批。队列计入载荷与每项固定管理成本，6 MiB 停止新聚合，8 MiB 硬断开。无前序等待任务的原样直发包不进入聚合等待队列，继续遵守原生 codec/传输大小限制；原生传输未完成的 promise 不因此成为聚合 backlog。接收端同理允许可立即交付的原版大包，等待解压或协议切换的字节仍受 8 MiB 上限约束。
 
 客户端 `EgressInboundHandler` 在当前原版 decoder 前维护包含普通包、聚合载体和 read-complete 的 FIFO。识别载体时使用实际绑定 codec 得到 custom-payload 的数值 ID；解压结果逐个作为完整 native ByteBuf 回灌同一 decoder 和 bundler。常规直发包等待先前解压，不重新调用 Mod encoder。CRC/模板/长度全部验证通过才交付；native decoder 失败也立即断开。
 

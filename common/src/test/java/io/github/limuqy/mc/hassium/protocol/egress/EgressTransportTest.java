@@ -159,9 +159,66 @@ class EgressTransportTest {
         Worker worker = new Worker(); AtomicBoolean enabled = new AtomicBoolean(true);
         EmbeddedChannel channel = new EmbeddedChannel(output(worker, enabled));
         try {
+            channel.pipeline().write(raw(1));
+            channel.pipeline().writeAndFlush(raw(7)); // Earlier compression must remain ahead of native bytes.
             ByteBuf bytes = Unpooled.buffer(EgressOutboundHandler.HARD_LIMIT + 1).writeZero(EgressOutboundHandler.HARD_LIMIT + 1);
             ChannelPromise promise = channel.newPromise(); channel.pipeline().write(bytes, promise);
             assertTrue(promise.isDone()); assertFalse(promise.isSuccess()); assertFalse(channel.isActive()); assertEquals(0, bytes.refCnt());
+        } finally { channel.finishAndReleaseAll(); worker.cleanup(); }
+    }
+    @Test void largeNativeSyncBypassesWithoutChangingNativeLimitsBeforeAndAfterActivation() {
+        for (boolean active : new boolean[]{false, true}) {
+            Worker worker = new Worker();
+            EmbeddedChannel channel = new EmbeddedChannel(output(worker, new AtomicBoolean(active)));
+            try {
+                ByteBuf bytes = Unpooled.buffer(EgressOutboundHandler.HARD_LIMIT + 1).writeZero(EgressOutboundHandler.HARD_LIMIT + 1);
+                ChannelPromise promise = channel.newPromise();
+                channel.pipeline().writeAndFlush(bytes, promise);
+                assertTrue(channel.isActive());
+                assertTrue(promise.isSuccess());
+                assertSame(bytes, channel.readOutbound());
+                assertEquals(1, bytes.refCnt());
+                bytes.release();
+                assertTrue(worker.jobs.isEmpty(), "native oversized sync must not enter aggregation codec");
+            } finally { channel.finishAndReleaseAll(); worker.cleanup(); }
+        }
+    }
+    @Test void nativeTransportPendingPromisesAreNotAnAggregationBacklog() {
+        Worker worker = new Worker();
+        List<ChannelPromise> nativePromises = new ArrayList<>();
+        EmbeddedChannel channel = new EmbeddedChannel(new ChannelOutboundHandlerAdapter() {
+            @Override public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) {
+                nativePromises.add(promise);
+                ctx.write(msg, ctx.voidPromise());
+            }
+        }, output(worker, new AtomicBoolean(false)));
+        try {
+            for (int i = 0; i < 12; i++) {
+                ByteBuf bytes = Unpooled.buffer(1024 * 1024).writeZero(1024 * 1024);
+                channel.pipeline().writeAndFlush(bytes);
+            }
+            assertTrue(channel.isActive());
+            assertEquals(12, nativePromises.size());
+            assertTrue(nativePromises.stream().noneMatch(ChannelPromise::isDone));
+            nativePromises.forEach(ChannelPromise::trySuccess);
+        } finally { channel.finishAndReleaseAll(); worker.cleanup(); }
+    }
+    @Test void largeNativeReceivePassesImmediatelyButCannotOvertakeAnInflightFrame() {
+        Worker worker = new Worker();
+        EmbeddedChannel channel = new EmbeddedChannel(new EgressInboundHandler(new Connection(PacketFlow.CLIENTBOUND),
+                EgressTransportTest::extract, worker, (ctx, cause) -> ctx.close()));
+        try (var encoder = new EgressFrameCodec(3)) {
+            ByteBuf nativeSync = Unpooled.buffer(EgressOutboundHandler.HARD_LIMIT + 1).writeZero(EgressOutboundHandler.HARD_LIMIT + 1);
+            channel.writeInbound(nativeSync);
+            assertSame(nativeSync, channel.readInbound());
+            nativeSync.release();
+            byte[] frame = encoder.encode(List.of(new EgressFrameCodec.PacketBytes("fixture:event", new byte[]{1})), 1, null).bytes();
+            channel.writeInbound(wrap(frame));
+            ByteBuf waiting = Unpooled.buffer(EgressOutboundHandler.HARD_LIMIT + 1).writeZero(EgressOutboundHandler.HARD_LIMIT + 1);
+            channel.writeInbound(waiting);
+            assertFalse(channel.isActive());
+            assertEquals(0, waiting.refCnt());
+            assertNull(channel.readInbound(), "queued native bytes must not leapfrog the aggregation worker");
         } finally { channel.finishAndReleaseAll(); worker.cleanup(); }
     }
     @Test void softLimitDrainsExistingAggregatesThenBypassesWithoutDroppingOrReordering() {
