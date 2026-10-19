@@ -17,7 +17,11 @@ public class NeoForgePlatformHelper implements IPlatformHelper {
     @Override
     public java.util.List<net.minecraft.resources.ResourceKey<? extends net.minecraft.core.Registry<?>>> cacheDataPackRegistryKeys() {
         var keys = new java.util.ArrayList<net.minecraft.resources.ResourceKey<? extends net.minecraft.core.Registry<?>>>();
+#if MC_VER >= MC_26_3
+        net.neoforged.neoforge.registries.DataPackRegistriesHooks.getWorldRegistries().forEach(data -> keys.add(data.key()));
+#else
         net.neoforged.neoforge.registries.DataPackRegistriesHooks.getDataPackRegistries().forEach(data -> keys.add(data.key()));
+#endif
         return java.util.List.copyOf(keys);
     }
 

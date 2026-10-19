@@ -48,10 +48,10 @@ Vanilla clients can join by default (`compat.requireClientMod = false`); install
 | Minecraft | Fabric | NeoForge |
 | --- | --- | --- |
 | 26.1.2 | ✅ | ✅ |
-| 26.2 | ✅ | — |
-| 26.3 | ✅ | — |
+| 26.2 | ✅ | ✅ |
+| 26.3 | ✅ | ✅ |
 
-**NeoForge support for test versions is dropped** (2026-09-30): on non-release versions NeoForge shows a startup warning dialog that blocks unattended joins, so 26.2/26.3 ship Fabric builds only. The 1.20.1–1.21.11 line (incl. Forge) is frozen on the `legacy-1.21` branch and existing releases. Full anchor matrix: [`docs/version-segments.md`](docs/version-segments.md).
+**All three 26.x anchors build Fabric / NeoForge**, as configured by `builds_for` in `versionProperties/*`. The `master` branch produces **3.x / MC 26.x** releases. Old Minecraft fixes and **2.x** releases are maintained on the `2.0.0` branch; `legacy-1.21` retains the 1.21.11 baseline. Select the corresponding branch when running the manual release workflow. Full anchor matrix: [`docs/version-segments.md`](docs/version-segments.md).
 
 ---
 

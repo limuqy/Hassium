@@ -48,10 +48,10 @@
 | Minecraft | Fabric | NeoForge |
 | --- | --- | --- |
 | 26.1.2 | ✅ | ✅ |
-| 26.2 | ✅ | — |
-| 26.3 | ✅ | — |
+| 26.2 | ✅ | ✅ |
+| 26.3 | ✅ | ✅ |
 
-**NeoForge 测试版本支持已取消**（2026-09-30）：非正式版本下 NeoForge 启动会弹窗警告、挡住自动进服，26.2/26.3 仅发布 Fabric 构建。master 发布 **3.x / MC 26.x**；旧版本 BUG 修复与 **2.x** 发布从 `2.0.0` 分支打包，`legacy-1.21` 保留 1.21.11 基线。GitHub Actions 手动发布时在 Branch 选择对应分支，`versions` 仅筛选该分支的 Minecraft 版本。完整三段锚点与编译矩阵见 [`docs/version-segments.md`](docs/version-segments.md)。
+**26.x 三个锚点均构建 Fabric / NeoForge**，以 `versionProperties/*` 的 `builds_for` 为准。master 发布 **3.x / MC 26.x**；旧版本 BUG 修复与 **2.x** 发布从 `2.0.0` 分支打包，`legacy-1.21` 保留 1.21.11 基线。GitHub Actions 手动发布时在 Branch 选择对应分支，`versions` 仅筛选该分支的 Minecraft 版本。完整三段锚点与编译矩阵见 [`docs/version-segments.md`](docs/version-segments.md)。
 
 ---
 

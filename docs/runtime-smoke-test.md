@@ -692,3 +692,20 @@ python scripts/smoke/create-cache-dimension-fixture.py --level-dat fabric/run/se
 脚本会修改开发运行目录配置，运行前应备份 `config/hassium/` 下的实际 TOML、options、加载器配置、
 server.properties 及 ops/eula。测试 Mod 仅放开发运行目录，原整合包和 JAR 不修改。
 本轮矩阵与配置恢复范围见移植交接 §8；不能用旧整合包结果替代 26.x 验收。
+
+## 移动屋檐 / 洞口目视验收
+
+`lightacceptance` 场景以创造模式、正午晴天构造跨区块屋檐（Y=302、Z=0–192）与
+洞道（Z=256–512，内部两处 glowstone），使用原版前进/疾跑/飞行按键连续穿行，
+再断线重连，从缓存回读后反向穿行。Y=297 的浅色地板便于观察暗缝。
+场景最后分别停在屋檐内和洞口内，方便保存截图。测试设施仅写入冒烟隔离世界。
+
+运行 `runtime-smoke-test.ps1 -Scenario lightacceptance -CleanWorld`，并给
+`-ClientTimeoutSec 600 -JoinTimeoutMs 240000`。3.x 可选 `-Ver 26.3 -Loader neoforge`；
+2.x 可选 `-Ver 1.20.1 -Loader forge`。不得与其他冒烟共用同一个 run 目录。
+
+必须观察前进、回程与重连后的实际画面，检查屋檐边缘的天光过渡、洞口明暗过渡、
+洞内光源及区块边界是否出现整柱黑块、亮缝或持续闪烁。可用 F3 保留坐标及亮度，
+用 F2 或只读窗口采集保存运动中与停留点截图。将场次 ID、观察位置、截图与结论记录到验收记录。
+自动统计 PASS、`clientDarkRegressionChunks=0` 和区块驻留只能作为补充证据，
+不能代替上述目视结论。场景及配置档为开发资源，不随正式 JAR 发布。

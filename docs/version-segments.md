@@ -22,8 +22,8 @@
 | 分界常量 | common 变因 | fabric 特有 | neoforge 特有 |
 |----------|-------------|-------------|---------------|
 | `MC_26_1_2` | 段 J 起点（段内继承 26.1/26.1.1）。相对 1.21.11：`ChunkPos` record 化（`x()/z()/pack/unpack`）、`ClientboundLevelChunkPacketData.forEachBlockEntityTag`、`WorldStem` 携 `LevelDataAndDimensions.WorldDataAndGenSettings`（`PrimaryLevelData` 去 `WorldOptions`）、`LevelSettings` record、`saveDataTag(WorldData)` 单参、`replaceWithPacketData`、authlib `yggdrasil.ServicesKeySet`、`MinecraftServer` ctor `Optional<GameRules>+propagatesCrashes`、`DataLoadContext.datapackWorldgen`、`Entity.moveOrInterpolateTo(Vec3…)`、`InterpolationHandler.setInterpolationLength`、`Minecraft.screen/setScreen`、`Gui.getChat()` | fabric-api 0.155.3 起 networking 6.x / command 3.x（`clientboundPlay/packetListener/ClientCommands`） | NeoForge 26.1.2.112（FML 11：`ModConfig.Type.COMMON`） |
-| `MC_26_2` | 屏幕状态迁入 `Gui`（`gui.screen()/setScreen`）；聊天迁入 `gui.hud.getChat()`；`MinecraftServer` 尾参 `NotificationManager`；`getChat/CommandSpamThresholdSeconds` 抽象方法出现 | — | NeoForge 26.2.0.88（FML 11：仍 `COMMON`）——**构建已取消**（仅代码兼容） |
-| `MC_26_3` | 三包 record 化（`ClientboundLevelChunkWithLightPacket`/`ClientboundLightUpdatePacketData`/`ClientboundLightUpdatePacket` 访问器与直构）；`replaceWithPacketData(chunkX,chunkZ,chunkData)`；`GameProtocols.Context` 增 `canUseCommandBlocks`；`DataLoadContext.datapackWorldRegistries`；authlib `services.ServicesKeySet`；`Entity.moveOrInterpolateTo(PositionPath…)`（插值窗口改服务端 `PositionPath.Stepped` 编码） | — | NeoForge 26.3.0.37-beta（**FML 12：`COMMON→LOCAL`**）——**构建已取消**（仅代码兼容） |
+| `MC_26_2` | 屏幕状态迁入 `Gui`（`gui.screen()/setScreen`）；聊天迁入 `gui.hud.getChat()`；`MinecraftServer` 尾参 `NotificationManager`；`getChat/CommandSpamThresholdSeconds` 抽象方法出现 | — | NeoForge 26.2.0.90（FML 11：仍 `COMMON`） |
+| `MC_26_3` | 三包 record 化（`ClientboundLevelChunkWithLightPacket`/`ClientboundLightUpdatePacketData`/`ClientboundLightUpdatePacket` 访问器与直构）；`replaceWithPacketData(chunkX,chunkZ,chunkData)`；`GameProtocols.Context` 增 `canUseCommandBlocks`；`DataLoadContext.datapackWorldRegistries`；authlib `services.ServicesKeySet`；`Entity.moveOrInterpolateTo(PositionPath…)`（插值窗口改服务端 `PositionPath.Stepped` 编码） | — | NeoForge 26.3.0.76（**FML 12：`COMMON→LOCAL`**）；datapack schema 枚举改用 `DataPackRegistriesHooks.getWorldRegistries()` |
 
 跨版本访问一律经 compat 门面：`ChunkLightPacketCompat`（三包访问器/空光工厂）、`ChunkPacketDataCompat.applyToChunk`、`ClientHudCompat`（屏幕/聊天）、`EntityInterpCompat`、`ShadowServerCompat.datapackWorldGen`。
 
@@ -52,14 +52,12 @@ MC_26_3
 | 锚点 | 加载器 |
 |------|--------|
 | 26.1.2 | fabric, neoforge |
-| 26.2 | **fabric**（NeoForge 已取消） |
-| 26.3 | **fabric**（NeoForge 已取消） |
+| 26.2 | fabric, neoforge |
+| 26.3 | fabric, neoforge |
 
-> **2026-09-30 用户决策：取消 NeoForge 测试版本支持。** 非正式版本下 NeoForge 启动即弹窗警告、
-> 挡住自动进服（冒烟客户端停在弹窗、`ConnectScreen` 从不出现、JOIN_WAIT 120s 超时——26.2/26.3
-> neoforge 六连 FAIL 实证；26.1.2 neoforge 正常）。26.2/26.3 的 `builds_for` 收为 `fabric`；
-> NeoForge 相关 `#if MC_VER >= MC_26_2/3` 代码与编译保留（`neoforge:compileJava` 仍绿），但不发布、
-> 不进冒烟矩阵。若上游 NeoForge 正式版解除弹窗，恢复 `builds_for=fabric,neoforge` 并补跑 L2 即可。
+> **当前矩阵为六组合。** 2026-09-30 曾因 NeoForge 测试版本警告页取消 26.2/26.3；
+> 2026-10-13 已重开入口并修复警告页等冒烟阻塞，2026-10-19 用户要求按六组合准备 3.0.2。
+> 历史失败与复验保留在 `mc26-upgrade-plan.md` §8/§9；发布以当前 `builds_for` 为准。
 
 本地 / CI：
 

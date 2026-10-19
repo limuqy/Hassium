@@ -226,3 +226,44 @@ world_gen_settings.dat，使用两个自定义维ID复用原版维度类型，�
 - 原始9份 options/server.properties/eula/ops/NeoForge设置已按哈希恢复；其余配置采用100份
   post-classic快照回收临时测试状态，恢复清单为 `build/cache-port/config-restore.json`。两版Underworld测试副本均已移除。
 - 不推送、不发布，不提交用户原有 `logo-16x10.png` 或 `video/`。
+
+## 9. 3.0.2 发布准备（2026-10-19）
+
+用户要求补齐 NeoForge 26.2/26.3 与移动屋檐/洞口验收，升版 2.1.2 / 3.0.2，
+最终打包检查通过后分别提交，先不发布。当前配置和实际发布任务矩阵为六组合，
+本轮同步 README、AGENTS 与 version-segments，历史 D7 取消决定由新 D9 更新。
+
+首次全矩阵构建发现 NeoForge 26.3 已将 `DataPackRegistriesHooks.getDataPackRegistries()`
+改为 `getWorldRegistries()`。平台实现按 `MC_26_3` 分界调用对应 API，原有两锚点
+保持直接调用；未增加异常吞掉或功能降级。修复后三锚点完整 build / 边界扫描通过，
+common:test 共 1386 项，失败、错误、跳过均为 0。
+
+六份 3.0.2 JAR 已核对版本、依赖、ServiceLoader、Mixin 类、缓存装配工厂、
+Java 25 class major、内嵌 ZSTD 与开发资源剥离；Modrinth 版本、加载器及实际上传
+目标均匹配，未调用上传任务。证据位于 `build/release-prep/` 的
+`build-results.json`、`test-summary.json`、`metadata_<mc>.log`、`artifact-manifest.json`。
+
+NeoForge 补验六场全部 PASS：`release302_26_2_neo_classic`、
+`release302_26_2_neo_flyroundtrip`、`release302_26_2_neo_dimension`，以及相应
+`release302_26_3_neo_*` 三场。客户端退出码、analyzer 均为 0；日志审计、
+探针门禁及看门狗转储均无失败。两场 flight 的锚点均实际卸载并回载；
+dimension 均以创造模式完成主世界→下界→末地→主世界及退出后磁盘检查。
+汇总：`build/release-prep/neo-smoke-summary.json`。
+
+3.x 光照专项 `release302_light_visual` 与补采帧场 `release302_light_frames`
+均自动 PASS。后者使用原版输入连续飞行两段，每段 32 秒，实际位移分别为
+Z=-48→637、Z=640→-46；中间真实断线重连。Computer Use 只读采集并观察
+15 张前进、18 张回程运动采样帧（约 2 秒间隔），屋檐边缘天光过渡、洞口过渡、
+洞内 glowstone 及缓存回程表现正常；观察帧未见整柱黑块或区块边界亮缝。
+用户另行确认「我看着屋檐正常」。未用自动 PASS 替代目视。
+
+证据：`build/release-prep/visual302/continuous/phase{1,2}_*.png` 及
+`visual302/captures.json`；原始日志和探针在 `build/smoke-test/`。
+采帧场 R2 驻留 1218、本地生成 0、cacheOnly=true、BE 快照恢复 84、
+`clientDarkRegressionChunks=0`，齐套门 promote 计数 1396；未改变光照策略或绕过齐套门。
+
+本轮 123 份原运行配置已恢复并逐项核对 SHA-256。最终全矩阵重打包后重新核对
+六份成品及发布配置，全部通过；文件清单见 `build/release-prep/artifact-manifest.json`。
+2.x 对应轮次也完成 12 版本 / 33 组合打包与原生 R3 光照验收，用户确认移动洞口、
+洞内光源及重连回程正常；其范围与开发启动失败记录见 2.x `docs/mod-compat.md`。
+本轮仅本地提交，不推送、打标签或发布。
