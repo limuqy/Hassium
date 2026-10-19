@@ -899,3 +899,26 @@ Java 17 对照的几次启动受构建依赖或资源准备阻塞，亦未算通
 `gradle.properties` 的准确 `mod_version`，不会误选旧 2.1.1；实际 setup 已核验
 选中 2.1.2 及上述 SHA-256。57 份原运行配置已逐项恢复并核对 SHA-256，
 原 HMCL 实例和成功参考清单未修改。未推送、打标签或发布。
+
+### Forge 47.4.21 开发环境同条件复跑（2026-10-19）
+
+按用户要求，在 `7751df7b` 上重跑原 Forge 47.4.21 / Oracle GraalVM Java 21.0.5
+开发环境，未修改业务代码、加载器版本或 Java 版本。沿用 `lightacceptance`、
+`-CleanWorld`、VD20→10、客户端 RD20、登录超时 240000ms、客户端超时 600s，
+场次 `forge47421_repro_20261019` 最终 **PASS**，客户端退出 0、analyzer 通过，
+日志审计、探针门禁和挂起检查均无失败。
+
+首次登录与场景主动断开后的重连都完成 FML 注册表同步和 `Handshake complete!`；
+Hassium `login hello answered` / `play init` 均各两次，两轮实际进入世界，
+区块内容抽样均为 9/9 非空，本地生成和黑块回归计数均为 0。
+本次用于确认登录复现性，不新增人工光照目视结论。
+
+启动准备曾停在 Loom `downloadAssets`；按官方资源索引 SHA-1 和大小逐项校验后，
+从现有 HMCL 资源只读补齐 2332 个缺失对象到开发资源缓存，原 HMCL 实例未修改。
+此项只补齐游戏资源，不作为原登录失败根因的结论。
+
+结论：**原登录断开本轮未复现，原始失败根因仍未确认**，不记作已修复。
+原失败日志继续保留；本轮双端 debug 日志、启动配置、证据哈希与汇总见
+`build/forge-login-repro/audit.json`，原始结果见
+`build/smoke-test/results/result_forge47421_repro_20261019.json`。
+57 份运行配置已按本轮独立备份恢复并核对 SHA-256；未改成品 JAR 或发布状态。
