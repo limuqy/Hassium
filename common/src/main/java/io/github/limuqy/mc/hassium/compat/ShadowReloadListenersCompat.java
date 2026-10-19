@@ -9,6 +9,7 @@ import net.minecraft.world.item.crafting.RecipeManager;
 #endif
 import io.github.limuqy.mc.hassium.platform.Services;
 import java.util.List;
+import java.util.function.Predicate;
 import net.minecraft.server.packs.resources.PreparableReloadListener;
 
 /**
@@ -42,13 +43,13 @@ public final class ShadowReloadListenersCompat {
         }
         return List.copyOf(kept);
 #elif MC_VER < MC_1_21_2
-        // 1.21.1–1.21.8：fabric-resource-loader ≥1.x 的 ResourceManagerHelperImpl.sort
+        // 1.21.1：fabric-resource-loader ≥1.x 的 ResourceManagerHelperImpl.sort
         // （Mixin 进 SimpleReloadInstance.create）要求 listeners 里存在 RecipeManager，
         // 以其 registries 构建 wrapper HolderLookup.Provider，缺失即抛
         // IllegalStateException("No RecipeManager found in listeners!")。因此除 TagManager
         // 外额外保留 RecipeManager（reload 会真实执行，影子端不消费配方，仅少量耗时）；
-        // 非 fabric 加载器无此要求，维持仅 TagManager 剪枝，行为不变。
-        boolean keepRecipes = Services.PLATFORM.isModLoaded("fabric-resource-loader-v0");
+        // Forgified Fabric API 同样要求此 listener，但 NeoForge ModList 使用下划线 ID。
+        boolean keepRecipes = hasFabricResourceLoader(Services.PLATFORM::isModLoaded);
         List<PreparableReloadListener> kept = new ArrayList<>(2);
         for (PreparableReloadListener listener : original) {
             if (listener instanceof TagManager || (keepRecipes && listener instanceof RecipeManager)) {
@@ -60,5 +61,11 @@ public final class ShadowReloadListenersCompat {
         // ≥1.21.2：listeners() 只含 recipes/functions/advancements，无 tag 可剪
         return List.copyOf(original);
 #endif
+    }
+
+    /** Fabric and its Forge/NeoForge port register the same module under different IDs. */
+    static boolean hasFabricResourceLoader(Predicate<String> isModLoaded) {
+        return isModLoaded.test("fabric-resource-loader-v0")
+                || isModLoaded.test("fabric_resource_loader_v0");
     }
 }

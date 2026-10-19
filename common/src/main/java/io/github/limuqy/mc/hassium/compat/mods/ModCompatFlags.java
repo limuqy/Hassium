@@ -38,6 +38,16 @@ public final class ModCompatFlags {
     private static volatile boolean announced;
     private static final boolean NEOFORGE = present("net.neoforged.fml.loading.FMLLoader");
     public static boolean neoForge() { return NEOFORGE; }
+    private static final boolean ESSENTIAL = present("gg.essential.mixins.ext.server.integrated.IntegratedServerExt");
+    public static boolean essential() { return ESSENTIAL; }
+    private static final boolean PIXELMON = present("com.pixelmonmod.pixelmon.Pixelmon");
+    public static boolean pixelmon() { return PIXELMON; }
+    private static final boolean MINECOLONIES = present("com.minecolonies.api.colony.IColony");
+    public static boolean mineColonies() { return MINECOLONIES; }
+    private static final boolean DEEP_VOID = present("net.mcreator.thedeepvoid.TheDeepVoidMod");
+    public static boolean deepVoid() { return DEEP_VOID; }
+    private static final boolean LIBX = present("org.moddingx.libx.impl.libxcore.CoreInteract");
+    public static boolean libX() { return LIBX; }
 
     private ModCompatFlags() {
     }

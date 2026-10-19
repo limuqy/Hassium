@@ -224,6 +224,19 @@ sequenceDiagram
 
 **生成安全**：无真实 seed 或 SeedGen 关闭时不生成；不得把本地猜测推到客户端。
 
+**缓存装配边界（2026-10-19）**：`chunk.seedGenEnabled=false` 时，`ShadowCacheBootstrap`
+复用真实连接同步的注册表、标签与维度类型，跳过本地 WorldLoader、数据包重载及自定义
+生成器解析；只保留原版区块、存储、票据和光照所需的世界壳。自定义维度按实际进入时
+收到的类型补装配，Compare+Pull 等消费等待 Play 激活。实例固定记录纯缓存模式，需重连
+才能改为本地生成。SeedGen 开启时沿用完整装配路径。此边界不隔离所有第三方世界事件
+或 BlockEntity 行为，也不增加自动降级、自动禁用 Mod；兼容限制及实跑证据见
+[`mod-compat.md`](mod-compat.md) §12。
+
+**权威 BlockEntity 缓存边界（2026-10-19）**：网络注入柱保留收到的 BE NBT 快照，空 tag
+也保留实体类型和位置；保存时使用这些客户端投影数据，不调用未完整初始化对象的服务端
+`saveAdditional`。标记后的快照随原版 `block_entities` 落盘、读盘恢复，并跟随整柱替换、
+增量全量 BE 表和单体更新维护。实际服务端及本地生成柱没有快照，保持完整原版保存路径。
+
 **世界保存**：影子 `saveAll()` 写 `hassium_cache/<serverId>/world` type 126；热度淘汰 `ShadowCacheEviction`。
 
 ## 7. 存储格式

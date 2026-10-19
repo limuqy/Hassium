@@ -325,6 +325,7 @@ public final class ClientLifecycleHelper {
         disconnectCleanupArmed.set(true);
         connectInFlight = false;
         JoinWorldFocus.clear();
+        io.github.limuqy.mc.hassium.compat.ShadowCacheBootstrap.reset();
         ClientMainThreadBudget.clearJoinBoost();
         io.github.limuqy.mc.hassium.protocol.handshake.ClientLoginNegotiation.clear();
         io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.resetRequestDedupForReconnect();

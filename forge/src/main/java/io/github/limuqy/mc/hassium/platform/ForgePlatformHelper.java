@@ -10,6 +10,18 @@ import java.nio.file.Path;
 public class ForgePlatformHelper implements IPlatformHelper {
 
     @Override
+    public java.util.List<net.minecraft.resources.ResourceKey<? extends net.minecraft.core.Registry<?>>> cacheDataPackRegistryKeys() {
+#if MC_VER < MC_1_21_1
+        var keys = new java.util.ArrayList<net.minecraft.resources.ResourceKey<? extends net.minecraft.core.Registry<?>>>();
+        net.minecraftforge.registries.DataPackRegistriesHooks.getDataPackRegistries().forEach(data -> keys.add(data.key()));
+        return java.util.List.copyOf(keys);
+#else
+        // Forge 52+ grabWorldgenRegistries already contributes mod schemas to this vanilla list.
+        return IPlatformHelper.super.cacheDataPackRegistryKeys();
+#endif
+    }
+
+    @Override
     public String getPlatformName() {
 
         return "Forge";

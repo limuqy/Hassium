@@ -1409,6 +1409,10 @@ public final class ShadowLightCompute {
             if (mc != null && mc.getSingleplayerServer() != null) {
                 return;
             }
+            if (!io.github.limuqy.mc.hassium.compat.ShadowStartupCompat.mayStart(mc)) {
+                io.github.limuqy.mc.hassium.Constants.LOG.info("Hassium: shadow assembly deferred until native login completes (registry synchronization)");
+                return;
+            }
         } catch (Throwable ignored) {
         }
         HassiumTaskExecutor executor = HassiumTaskExecutor.getClient();

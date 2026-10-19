@@ -50,6 +50,13 @@ public interface IPlatformHelper {
      */
     Path getConfigDirectory();
 
+    /** Declared registry schemas only; cache assembly never decodes their worldgen datapack values. */
+    default java.util.List<net.minecraft.resources.ResourceKey<? extends net.minecraft.core.Registry<?>>> cacheDataPackRegistryKeys() {
+        var keys = new java.util.ArrayList<net.minecraft.resources.ResourceKey<? extends net.minecraft.core.Registry<?>>>();
+        net.minecraft.resources.RegistryDataLoader.WORLDGEN_REGISTRIES.forEach(data -> keys.add(data.key()));
+        return java.util.List.copyOf(keys);
+    }
+
     /**
      * 把加载器 mod 数据包挂进影子端 {@code PackRepository}（SERVER_DATA）。
      * <p>

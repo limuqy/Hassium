@@ -500,3 +500,359 @@ java.lang.IllegalStateException: Should always be able to create a chunk!
 | 第三方 ERROR | Debugify / CITResewn / Controlify 等与 Hassium 无关 |
 
 本地联测目录：`fabric/run/client/mods`（勿把第三方 jar 提交进 git）。
+
+## 11. HMCL 完整整合包联测（2026-10-19 开始）
+
+`2.0.0` 工作区（当前产品版本 `2.1.1`）已接入用户本机 HMCL 中的 11 个完整包，
+排除 Hassium Community Reconstruction R3 和四个仅启用少量 Mod 的单测实例。
+1.20.1：Fabulously Optimized、XPlus、BMC4、All the Mods 9、VerityCraft；
+1.21.1：Pixelmon、All of Create、ATM 3.0.2、BMC5、Tensura、All the Mods 10。
+
+入口为 `scripts/runtime-modpack-compat-test.ps1`（PowerShell 7）。首次需先有项目冒烟生成的
+同版本/加载器 `parity_*` 存档；夹具只取项目测试存档的 `level.dat`，重新生成区块。
+所有 Mod 和包配置复制到 `build/modpack-compat/<包ID>/client`，原 HMCL 实例只读，
+不复制个人存档，不自动启用 `.disabled` 文件；已有 Hassium 替换为当前工作区成品 JAR。
+`setup.json` 记录包内 JAR 哈希、Hassium 哈希、源码提交及替换项。
+
+```powershell
+.\scripts\runtime-modpack-compat-test.ps1 -Action setup
+.\scripts\runtime-modpack-compat-test.ps1 -SkipBuild -Packs fo1201,pixelmon,bmc4
+.\scripts\runtime-modpack-compat-test.ps1 -Action status
+```
+
+本轮首阶段为完整客户端启动 → 单人测试世界 → 等待 15 秒 → 实测区块驻留及非空气地形 → 请求退出。
+`PASS_INTEGRATED` 要求退出码 0、原有冒烟 PASS marker、JSON 探针、驻留区块 >64、
+周围非空气区块 >0；**不代表多人握手、影子端缓存、重连、移动光照通过**。
+诊断 javaagent 仅移除既有冒烟入口的开发环境限制，保留显式 JVM 属性开关；
+测试 JAR 只新增场景文本，所有游戏逻辑 class 与工作区成品逐字节一致。
+Pixelmon 隔离副本设 `starter-on-join=false` 延后初始选择界面，避免该界面暂停内置服；
+覆盖项记录在 `setup.json`。每次运行创建新的测试世界，保存/退出兜底强退信息另记结果 JSON。
+大包 harness 设置 `hassium.smokeTest.gracefulStopGraceMs=60000`，等待正常保存和退出；
+原有默认仍为 10 秒，可配置上限 120 秒，退出码 0 门禁保持不变。
+
+2026-10-19 首轮 11 包均完成上述阶段。ATM10 初场已驻留 453 柱、9 个采样柱有非空气地形，
+但保存期间被 10 秒退出兜底打断，进程返回 `0xC0000409`，该场保留 FAIL。
+仅增加冒烟退出宽限的构建在 60 秒设置下复测：保存约 22 秒，正常退出码 0、未触发强退，
+结果为 PASS_INTEGRATED。两份 NeoForge 成品逐 class 比对，只有 `ScenarioEngine.class` 改变。
+该复测位于 `build/modpack-compat-exitwait/atm10`，主报告通过 `setupFile` 指向其准确构建。
+VerityCraft 另修复测试中止留下的 GML 映射 ZIP 截断后通过；未更改第三方 Mod。
+
+原始日志与每次运行结果在 `build/modpack-compat/<包ID>/runs/<时间>/`；
+实时汇总为 `build/modpack-compat/report.md` 和 `summary.json`。
+创建 `build/modpack-compat/STOP` 可请求当前测试及队列停止；harness 仅清理自己启动的 JVM。
+重新执行 `setup` 复用已有副本，**不会**自动更新已记录的 Hassium；换构建应选新的 `--root`。
+
+
+### 客户端连接专用服阶段
+
+用户要求的联测拓扑为完整包客户端 ↔ 同包专用服，使用 `-Stage dedicated`：
+
+```powershell
+.\scripts\runtime-modpack-compat-test.ps1 -Stage dedicated -Action setup
+.\scripts\runtime-modpack-compat-test.ps1 -Stage dedicated -SkipBuild -Packs fo1201,pixelmon
+.\scripts\runtime-modpack-compat-test.ps1 -Stage dedicated -Action status
+```
+
+独立目录为 `build/modpack-dedicated/<包ID>/{client,server}`。客户端保留全部原包启用的 JAR，
+服务端仅排除清单声明不支持服务端、客户端元数据、显示/输入/渲染及 LAN 共享组件；
+`dedicated-setup.json` 逐项记录文件、Mod ID 和排除理由。原实例和个人存档只读。
+服务端离线模式仅绑定 `127.0.0.1`，端口默认 25579；使用与原包相同的加载器版本。
+Forge/NeoForge 服务端由对应官方安装器生成运行库，Fabric 使用原始专用服 JAR。
+
+双端安装同一工作区成品，测试 JAR 只附加场景文本。诊断 agent 在两端启用显式冒烟属性。
+SeedGen 和存档压缩关闭，服务端初始 VD=12、客户端 RD=16；首轮驻留 90 秒后断连，
+服务端切至 VD=8 并注入原有冒烟石墙，重连后驻留 60 秒。
+门禁要求两轮均为非内嵌服、非内存连接、影子端运行；驻留区块 >64、非空气采样 >0；
+两次能力激活，配置启用聚合时有两次聚合激活，R2 缓存命中 >0，双端正常退出。
+包原配置或兼容策略关闭聚合时明确记录，不强制覆盖已有兼容设置。
+这轮没有检验移动中洞口/屋檐光照，不能作为该项验收证据。
+
+原有重连工具曾通过 Mojmap 字符串反射 Minecraft 类，在 Fabric 成品环境报
+`ClassNotFoundException: ServerAddress`。现改为 `SmokeConnectCompat` 的编译期类型调用，
+由构建工具重映射，版本签名差异收口到 compat；实际游戏连接流程保持原版。
+
+每场原始日志、两轮探针和结果在 `dedicated-runs/<时间>/`，汇总为 `dedicated-report.md`
+和 `dedicated-summary.json`。旧失败和中止场保留；创建根目录 `STOP` 文件可终止队列。
+
+
+诊断对照使用独立根目录，明确标记 `PASS_CONTROL`，不并入完整功能通过数：
+
+```powershell
+python scripts/modpack-dedicated.py run --control --packs pixelmon --port 25580
+```
+
+对照保持完整客户端及同样的专用服 Mod 清单，仅将客户端区块核心关闭；场景验证两轮
+原版 TCP 连接、地形驻留与正常退出。关闭区块核心时部分加载器不会发送 `play_init`，
+故握手/聚合和缓存命中不属于此对照的通过条件。
+服务端准备的额外绕过项（Verity 的 GML、ATM 3.0.2 的 Palladium）单独记录在排除清单，
+不得误称为原始服务端全部 Mod 同时通过。内容 Mod 保留；不能通过移除内容 Mod 获得 PASS。
+
+
+### 故障优先与 Forgified Fabric API 回归
+
+专用服 harness 默认在第一个失败后退出队列。先修复故障，在新 `--root` 中以一个已失败包
+完成目标回归，再扩展到其他包；仅显式传 `--continue-on-failure` 才连续盘点失败。
+每个根目录固定其成品哈希，禁止把旧副本直接当作新构建复测。
+
+1.21.1 的原有 RecipeManager 保留策略只检测 Fabric ID `fabric-resource-loader-v0`；
+Forgified Fabric API 在 NeoForge `ModList` 中注册的是 `fabric_resource_loader_v0`。
+因此 All of Create、ATM 3.0.2、BMC5 的影子端把 RecipeManager 误剪掉，触发
+`No RecipeManager found in listeners!`。修复仅补齐该模块 ID 的识别，保持既有加载器策略：
+检测到对应资源加载器才保留 RecipeManager。回归新增两个真实 ID 及无此模块的单测。
+`common:test` 1.21.1 共 441 项通过；1.20.1、1.21.11 编译及版本边界检查通过。
+目标运行根目录为 `build/modpack-dedicated-recipe-fix`；新旧 NeoForge 成品只有
+`ShadowReloadListenersCompat.class` 的字节发生变化。
+
+All of Create 首个目标回归已通过：两次能力/聚合激活，R1 驻留 721 柱、非空气采样 9 柱，R2 缓存命中 290，双端退出码 0、未兜底强退。旧失败场与新构建场分别保留。
+
+
+ATM 3.0.2 在 RecipeManager 修复后继续暴露 Mekanism `Current server is null`：
+世界加载事件早于原有 `adoptCurrentServer`。将仅空槽登记移到 `initServer` 前，保留
+不覆盖真实集成服/专用服的 CAS 保护；初始化异常路径同时释放本实例，避免留下死服务端引用。
+目标回归根目录 `build/modpack-dedicated-lifecycle-fix`，先验证 ATM 3.0.2 后才继续其他包。
+
+
+ATM 3.0.2 和 BMC5 已在 currentServer 提前登记构建下完成两轮 PASS，R2 缓存命中分别 246/282。
+Pixelmon 另修 Essential 1.4.1.1 对 GameRules.Value 回调中服务器的错误集成服强转：
+可选兼容 mixin 在 Essential 回调合并后，仅给该回调添加 ShadowSeedServer 保护，
+不取消原版 gamerule 通知；ASM 回归测试实际加载变换后的类，验证非影子及其他回调保持执行。
+
+Pixelmon 的共享玩法表重载是另一根因。其 `PixelmonLoaders.addReloadListeners` 会注册
+清空/重建招式、物种、掉落、配置等全局表的任务。影子 WorldLoader 触发同一批任务，
+与登录期物种解码、JEI 配方注册并发，分别复现 HashMap/ArrayList 的 ConcurrentModificationException。
+仅在显式 ShadowAssemblyScope 中跳过 Pixelmon 的该注册回调；正常客户端同步、
+集成服/专用服 datapack 重载和原版 tag 流程保持正常。单测验证作用域退出后不泄漏。
+目标回归根目录 `build/modpack-dedicated-pixelmon-isolation`。
+
+Pixelmon 目标回归已完成 PASS_DEDICATED（20261019_145246）：两轮真实 TCP 连接，
+R2 缓存命中 301，双端正常退出；完整日志未再出现上述强转或并发修改异常。
+原包 JEI rock_smash 分类缺失在区块核心关闭对照中也出现，独立保留为包自身问题。
+
+ATM9 的 MineColonies `CrafterRecipeListener.apply` 同样会重置全局殖民地配方表；
+影子端不消费该表，且客户端不一定具备专用服 KubeJS 添加的物品，重载会因空 ItemLike 失败。
+可选兼容钩子仅在显式影子装配作用域取消该 apply；真实世界重载及原版 tag 保持执行。
+回归单测同时覆盖包装 executor 中的作用域传播及退出后的真实重载。
+
+ATM9 下一场在登录时被出口 v3 的 8 MiB 限额断开：聚合尚未 ACK，原生同步字节也被
+当成等待聚合的 backlog。无前序任务的原样直发现在直接交给 Netty，保留原生包的大小限制；
+有前序压缩/解压或协议切换时仍排队并受 8 MiB 硬限约束。单测覆盖激活前后大包直发、
+未完成原生 promise 不占聚合预算、接收端旁路以及不得越过在途帧。1.20.1 共 454 项通过。
+双端日志均纳入立即停止门禁，出口 v3 错误也会停止本场与队列。
+
+`build/mp-f6/atm9` 出口修复回归完成两轮 PASS_DEDICATED：R2 缓存命中 251，
+双端退出码 0，无 ConcurrentModificationException、影子创建失败或出口 v3 错误。
+Forge 1.20.1 握手的 `GameData.injectSnapshot` 会替换共享注册表，连接界面投机装配
+可能与该过程并发（曾出现连原版 diamond 工具都暂时解析不到的日志）。因此补充
+`ShadowStartupCompat`：该加载器等到原生 handleLogin 建立 ClientLevel 后才装配；
+其他版本/加载器的投机启动不变。最终候选回归根目录 `build/mp-f7`，同包关闭核心
+对照根目录 `build/mp-c7`；二者使用不同本机端口，不测试其他包。
+
+上述两场并行运行在重连 JEI 索引阶段被用户报告卡死，均中止并保留 STOPPED。
+现场可用物理内存仅约 1.8 GiB；两个客户端工作集各约 12 GiB，两个服务端各约 10 GiB。
+两份主线程转储均为 RUNNABLE，分别位于 JEI 提示索引/Silent Gear、MineColonies 配方枚举，
+未报告 Java 死锁；不能把这两场计为最终候选通过。
+修复测试调度：单人/专用服入口共享工作区运行互斥锁，对照也必须串行；独立进程验证了
+锁占用时拒绝第二场、释放后可重新获取。专用服 harness 记录最低可用内存，低于 4 GiB
+立即抓转储并停止。后续只同时运行一个客户端和其专用服。
+中止对照已在关闭区块核心时复现属性修饰器重复、Utilitix/Generator Galore JEI 分类缺失；
+这些包自身问题与核心运行门禁分开记录，对照本身没有完成双轮，不标 PASS_CONTROL。
+
+ATM9 最终候选串行复测 `build/mp-f7/atm9/dedicated-runs/20261019_152523` 已完成
+PASS_DEDICATED：两次能力/聚合激活，R2 缓存命中 246，双端退出码 0；
+最低可用物理内存 28,843,573,248 bytes（约 26.9 GiB）。重连 JEI 索引阶段曾短暂无响应，
+随后恢复并于 15:32:17 再次进入世界；15:32:22 转储主线程已在实体渲染，保持响应并完成
+60 秒驻留。没有把加载阶段暂时的主线程阻塞误判为 Java 死锁，也没有删除 JEI 来通过测试。
+
+BMC4 在同一最终 Forge 成品下完成 PASS_DEDICATED（`build/mp-f7/bmc4`），
+两次能力/聚合激活，R2 缓存命中 352，双端正常退出。服务端排除客户端 Particle Effects 后
+解决原有启动阻断，完整客户端仍保留该 Mod。
+
+Verity 的无 Hassium 服务端对照也曾在 Undergarden 自动订阅时因 PoseStack 失败。
+新增显式诊断属性仅记录 Forge 正在检查的订阅类及 Entity 的接口形状，未改变事件行为。
+实测落点为 Dweller，但真正来源是 Perception 0.1.4 的通用 EntityMixin：Entity 实现
+ITrailConfigProvider → OctoLib TrailProvider → RenderProvider，最后者公开 render(PoseStack, …)。
+Forge getMethods 检查 Dweller 的继承方法时解析客户端类型而失败。Perception 元数据说明为
+视觉特效，因此只从专用服副本排除并记录精确原因，客户端及 Undergarden 内容保留。
+目标新夹具根目录 `build/mp-f8/verity`；旧失败保留，不改写为通过。
+
+Verity 开服修复后在首连暴露 Deep Void 1.99.2.1 的 CultTemplePlacementProcedure：
+LevelEvent.Load 调用其私有 execute(Event, LevelAccessor)，会在新世界主动放置神庙并写入
+全局变量；影子端关闭地形生成时无法为该放置创建区块，导致整个装配失败。
+可选客户端钩子只对归属 ShadowSeedServer 的 LevelAccessor 取消该过程，保留真实服生成，
+缓存仅接收权威区块。回归直接执行实际注入处理器，分别传真实专用服、影子端和客户端
+世界代理，并禁止处理器访问其他世界数据；只有影子世界被取消。
+1.20.1 单测 457、1.21.1 单测 450 全通过，1.21.11 编译及版本边界扫描通过；
+新构建目标根目录 `build/mp-f9/verity`，日志已确认跳过影子世界的放置回调。
+
+VerityCraft 目标回归 `20261019_154901` 已完成 PASS_DEDICATED：R2 缓存命中 275，
+两次能力/聚合激活，双端退出码 0，最低可用内存约 29.2 GiB。
+Perception 保留于完整客户端，Undergarden 和 Deep Void 内容模组双端保留；
+专用服仅排除已审计的客户端组件和单列的 GML 语言提供器。
+
+Tensura Neo Otherworld 在同一最终 NeoForge 构建下完成 PASS_DEDICATED
+（`build/mp-f9/tensura`，20261019_155501），R2 缓存命中 288，双端正常退出，
+最低可用物理内存约 34.8 GiB。专用服移除错误混入的客户端通知、粒子等组件后正常开服；
+完整客户端仍保留这些组件。
+
+ATM10 在同一最终 NeoForge 构建下完成 PASS_DEDICATED（`build/mp-f9/atm10`，
+20261019_155953）：两次能力/聚合激活，R2 缓存命中 318，双端退出码 0，
+最低可用内存约 25.3 GiB，未触发退出兜底。专用服排除 Dark Mode Everywhere 等客户端组件。
+
+截至 2026-10-19 16:05，11 个目标包各自最新运行均为 PASS_DEDICATED（1.20.1 五包、
+1.21.1 六包）。跨阶段总览为 `build/modpack-dedicated/overview.md` / `overview.json`，
+`status` 会重建总览。各包按故障优先顺序在不同修复构建下完成回归，成品哈希逐场保留，
+**并非同一个最终 JAR 再次跑完全部 11 包**。历史失败、中止以及关闭核心对照均独立保留。
+
+最终只读审计 `build/modpack-dedicated/final-source-readonly-audit.json`：2761 个原始第三方
+JAR 与其最新客户端副本哈希均未变化；每场固定成品哈希匹配，双端测试 JAR 的全部游戏
+逻辑 class 与其固定成品逐字节相同。ATM 3.0.2 单列的 Palladium 是 Mr.Toad 优化组件
+（去重、着色器缓存与内存控制），不是同名的英雄玩法框架；Toadlib 为其配套依赖。
+当前单测为 1.20.1 的 457 项和 1.21.1 的 450 项全部通过，1.21.11 编译、版本边界扫描
+与差异空白检查通过。测试进程均已退出；没有验收移动中的屋檐/洞口光照或全部模组玩法。
+
+## 12. SeedGen 关闭时的缓存装配隔离（2026-10-19）
+
+保留影子端的原版区块、票据、存储与光照实现；`chunk.seedGenEnabled=false` 时使用独立的
+缓存装配入口 `ShadowCacheBootstrap`。不增加自动降级或第三方 Mod 自动禁用。
+
+- 等原生登录建立 ClientLevel 后，复用该连接同步的注册表、标签和维度类型；不再运行
+  WorldLoader、启用本地 Mod 数据包、解析 NORMAL preset 或自定义 LevelStem/生成器。
+- 未同步的生成注册表只按加载器声明的 schema 建立空查询表，不读取本地生成数据。
+  Forge/NeoForge 的额外 datapack registry 和 Fabric 动态 registry 均经平台接口提供键集；
+  真实连接已经同步的 registry 优先，保持原 Holder 和标签身份，不重绑全局静态注册表。
+  原版 Flat ChunkMap 构造仍会创建 RandomState/SurfaceSystem；仅为该构造保留原版 NoiseData
+  内建噪声常量，不读取 Mod 噪声数据包，不运行地形生成。
+- 世界壳使用无地层、无结构的 FlatLevelSource 占位，实际区块仍来自权威服务器或缓存。
+  实例固定记录 cacheOnly；在重连前热开 SeedGen 也不能让该占位生成器参与生成。
+- 自定义维度按玩家实际进入时收到的 DimensionType 装配，维度 ID 不被假定等于类型 ID。
+  首次进入未装配维度或类型改变时，同连接重建影子端并保留登录许可；后续已知类型随同
+  连接保留，断连清理。纯缓存模式不因服务端公布整份维度清单而装配本地所有生成器。
+- 空资源对象仍需原版构造过程。构造器直接调用的第三方 Mixin void CallbackInfo 回调，
+  仅在显式 cache-only 装配作用域中跳过；原版字段初始化、Hassium 回调、非构造回调和
+  作用域外的真实世界/SeedGen 回调照常执行。执行变换后的类的回归覆盖该边界和异常恢复。
+
+ServerLevel/ChunkMap 等仍为原版对象，世界构造事件与第三方对底层类的 Mixin 仍可能运行；
+已有 Essential、MineColonies、Pixelmon、Deep Void、C2ME 等兼容保护保留。上述改造不改变
+3×3 算光门、交付域、POI 主循环串行化或缓存格式。SeedGen 开启时保留原有装配路径。
+
+定向运行选择 ATM9、Pixelmon、VerityCraft，并新增 R3；每场固定成品和独立测试根目录，
+原 HMCL 实例只读。`--expect-cache-bootstrap` 另验两轮均走连接注册表装配、未进入本地
+数据包装配、本地生成数为零、影子端与客户端维度类型一致。`--dimension <id>` 可验证
+首次进入自定义维度及在该维度重连。历史失败照实保留，最终结果补记于本节。
+
+缓存装配加速后，VerityCraft 的 Undergarden 重连暴露了原有激活时序缺口：影子 tracking
+在 `play_init` 前物化缓存并登记 compare 等待，但请求尚不能正常进入活动会话，激活后
+中心柱被等待闸持续挡住，仅外围 OVD 可见。缓存 NBT 与真服对应柱的非空气数量一致，
+并非落盘丢块。tracking 主循环、原版物化回调和权威 acquire 入口现统一等待引擎激活；
+保留待同步状态和已注入内容，激活后再校验，未发送请求不得占用在途槽。回归直接调用
+真实 tracking 消费方法，验证激活前状态保留、请求不登记以及激活后正常绑定。
+
+最终静态验证见 `build/cache-bootstrap-final-verification/`：七锚点共 3,227 项单测
+（1.20.1 为 467，其余每锚点 460），零失败、错误和跳过；18 个加载器编译组合及
+`scanVersionBoundaries` 全部通过。
+
+维度 TP 回归使用创造模式：整合包隔离服设 `gamemode=creative` 和 `force-gamemode=true`，
+通用 `dimension` 冒烟原语也先按连接顺序发送 `gamemode creative`，再发送 TP。
+每轮探针增加 `isolation.creativeMode`，整合包门禁要求其为真，避免传入岩石后的窒息、
+死亡和重生影响缓存结论。旧 Verity 场次 `cache-bootstrap-verity-activation` 中已记录
+`suffocated in a wall`，保留其失败结果，另起创造模式场次复核。
+
+截至下班暂停前，运行证据应分开解读：
+
+- ATM9：`build/cache-bootstrap-p5/atm9` 为 PASS_DEDICATED，R2 缓存命中 241；该构建
+  已含缓存装配隔离，早于后续激活门与创造模式冒烟调整，不能当作最后成品重跑结果。
+- Pixelmon：`build/cache-bootstrap-pixelmon-creative/pixelmon` 的 `20261019_175803`
+  为 PASS_DEDICATED（18:01:40 完成）。两轮均为创造模式、721 柱驻留、中心 3×3 全有
+  非空气内容；R2 缓存命中 280，两次能力与聚合激活。两轮均走连接注册表缓存装配，
+  未走本地数据包装配、本地生成数为零、维度类型一致；双端退出码 0，无强退。
+  固定 NeoForge 成品 SHA-256：`831f9e1715ab2a39335c541a011c40d3c238ab0606842036e27bc414a877e73b`。
+- VerityCraft：已验证首次进入 Undergarden 时维度类型一致、客户端有实际地形且本地
+  生成计数为零；R2 中心缺柱尚未验收。生存场次有窒息死亡，不能据此确认激活门修复效果。
+  创造模式场次 `build/cache-bootstrap-verity-creative/verity` 的 `20261019_174729`
+  在 ClientLevel 建立前连接关闭，取证后中止；同一固定构建重试 `20261019_175313`
+  原生 Forge 登录超时且未创建影子端，结果 FAIL。Forge debug 日志记录服务器分发
+  76 条登录消息，客户端没有后续 login wrapper 接收记录，需继续定位，不能算缓存通过。
+- R3：原始启用的 230 个第三方 JAR 已完整准备于 `build/cache-bootstrap-r3-creative/r3`，
+  尚未开始运行；Opticores 的非法大写 modId 仅为元数据预检发现，尚无本轮运行结论。
+
+用户要求完成当前 Pixelmon 双轮后暂停，不再启动其余场景。恢复工作时先读
+`build/cache-bootstrap-work-state.json`；待验还包括 VerityCraft 创造模式下的自定义维度
+重连，以及 Fabric 1.21.11 纯缓存和 SeedGen 开启场景。本轮不追加 11 包全量回归。
+
+18:01 已按用户要求暂停，测试进程全部退出。最终原始包/客户端副本审计见
+`build/cache-bootstrap-final-verification/artifacts.json`：1,045 对第三方 JAR 哈希均未变化，
+诊断 JAR 的游戏逻辑类与对应固定成品一致。源码改动及测试根目录均保留，尚未提交。
+
+2026-10-19 18:49 用户恢复工作后的补充结果：
+
+| 目标 | 实跑结果 | 关键证据 |
+|------|----------|----------|
+| VerityCraft / Undergarden | PASS_DEDICATED | `build/cache-bootstrap-verity-resume/verity`，`20261019_190027`；两轮创造模式、721 柱驻留、中心 3×3 全有地形，R2 缓存命中 314，本地生成 0、维度类型一致，双端退出 0 |
+| Fabric 1.21.11 / 纯缓存 | PASS | `cache_bootstrap_fabric_12111_cache`；两轮 cacheOnly=true，R1/R2 驻留 1573/1089，本地生成 0，R2 缓存命中 285 |
+| Fabric 1.21.11 / SeedGen 开启 | PASS | `cache_bootstrap_fabric_12111_seedgen`；冷场 cacheOnly=false，实际本地生成 1478 柱、驻留 1558，空基线权威请求 0，客户端正常退出 |
+
+Verity 创造模式有效场次确认自定义维度首次装配与重连中心回填正常。此前两次原生 Forge
+登录超时仍保留为历史失败，本轮成功不等于已确定其根因。冒烟菜单连接增加资源覆盖层
+消失后 1.5 秒稳定等待和当前 Screen 类诊断；`--trace-login` 仅由隔离测试 Agent 记录
+包类型、解码字节数及断连原因，不改变载荷或生产逻辑。每场另固定 Agent JAR 和源码。
+
+R3 原始启用列表已实际运行：`build/cache-bootstrap-r3-creative/r3` 的 `20261019_185039`
+双端均报 Opticores 非法大写 modId，未加载 Hassium 冒烟入口，取证后中止，见
+`source-diagnosis.json`。去掉 Opticores 的诊断副本继续发现原包
+`kaleidoscope_compat-2.6.5-forge+mc1.20.1-Patch.jar` 的 MillstoneBlockEntityMixin 参数
+不匹配（期望 LivingEntity、补丁为 Mob）。五个客户端组件 FastLaunch、FastLoading、
+SimpleSorterR、WeatherRefind、IMBlocker 仅从专用服副本排除，完整客户端保留。
+
+另建 `build/cache-bootstrap-r3-two-exclusions/r3`，通过显式 `--diagnostic-exclude` 在
+双端测试副本排除上述 Opticores 和 Kaleidoscope 兼容补丁，原实例及 JAR 内容均未改。
+该场 `20261019_185614` 的基础区块/缓存门禁为 PASS_WITH_EXCLUSIONS：两轮创造模式、
+721 柱驻留、中心 3×3 全有地形，R2 命中 352，本地生成 0，双端退出 0。
+**这不是 R3 整包兼容通过**：仍有 6 次 Treasure2 的
+`ProximityMobSetSpawnerBlockEntity.getMobSizeRange()==null` 影子保存异常，以及一次
+Mixin 局部变量分析栈大小异常。见该 run 的 `compatibility-audit.json`，最终兼容判断为
+NOT_PASSED。未屏蔽错误、丢弃该 Mod 来凑通过，也未引入生产自动降级或自动禁用。
+后续门禁已增加影子 BlockEntity 保存和 Mixin 局部变量分析错误检查；诊断排除场次只能
+标 PASS_WITH_EXCLUSIONS，非法 modId 会在启动阶段直接失败，避免把空 Mod 列表误判成功。
+
+生产后端的七锚点 3,227 项单测与 18 个加载器编译组合结果仍见前述验证目录；后续仅有
+冒烟辅助调整，1.20.1、1.21.1、1.21.11 单测/编译及最终版本边界扫描再次通过。
+Fabric 三份原测试配置已恢复并校验备份哈希。最终审计同时核对所选 1,045 个不同原始
+第三方 JAR、各客户端副本（含显式禁用目录）、服务端保留 JAR，以及双端 Hassium class
+与各场固定成品的一致性，无差异。未重跑全部 11 包，未验收全部模组玩法或移动屋檐/洞口。
+
+### 按 R3 复现报告限定清单后的修复（2026-10-19 晚间）
+
+本段更新上述 R3 遗留问题的当前状态，早先失败场次保留。清单依据用户指定的
+`D:/MC/HassiumDiag211/R3-复现与定位报告.txt`，并以 `r3_2x_fixed/runtime-inventory.json`
+逐 JAR 核对名称与 SHA-256：客户端 **229**、专用服 **193** 个 JAR（均含 Hassium）。
+双端仅排除报告确认的 Opticores 与 Kaleidoscope 兼容补丁；SimpleSorter 及报告中的
+客户端组件只从专用服副本移除。Punchy 恢复到服务端，未新增第三方 Mod 排除项。
+FastJEI 保留 `workerThreads=14`、`parallelTooltipScan=true`。原 HMCL 实例和报告目录只读。
+
+- **Treasure2 保存**：原报告成功日志也存在该异常。网络整柱、分段增量 BE 全表、单体
+  更新均维护权威 NBT 快照，保存时不再让仅有客户端同步数据的 BE 执行完整服务端
+  `saveAdditional`。空 tag 保留类型、位置及实体本身，不填造服务端玩法字段。快照经
+  原版 `block_entities` 持久化并在缓存加载时恢复；真实服务端及本地生成柱保留原版保存。
+- **LibX / Summoning Rituals 分析异常**：LibX `coremods/interact.js` 在 `useItemOn`
+  的 ARETURN 前压入 5 个参数，原返回值仍在栈上，实际峰值为 6，原 `maxStack=5`。
+  Summoning Rituals 的局部变量捕获早于最终 ClassWriter 修正而报错。兼容插件仅对
+  确实含 LibX CoreInteract 调用的方法，在注入前重算栈元数据，不改指令或交互逻辑。
+- 冒烟 G1 在客户端有效视距不大于服务端时不再强求 OVD 环带非空；这用于报告的
+  VD20→20 对照，区块、地形、缓存、BE 恢复及错误检查仍为独立硬门禁。
+
+最终 Forge 1.20.1 成品 SHA-256：
+`6fc98f344a79b42af6b0ad66cfac15c7d5fc606e47bef2f765737d2aea505d9c`。
+
+| 定向场次 | 结果 | 证据 |
+|---|---|---|
+| R3 同清单、VD20→20 冷启动与重连 | PASS_WITH_EXCLUSIONS | `build/cache-bootstrap-r3-reference-final/r3`，`20261019_210302`；两轮驻留 1529、中心非空 9/9、创造模式；重连命中 1435，1645 份 BE 快照从盘恢复，其中 Treasure2 刷怪器 3/3；保存与分析异常均为 0，双端退出 0 |
+| R3 自定义维度 Alfheim 切换与重连 | PASS_WITH_EXCLUSIONS | `build/cache-bootstrap-r3-reference-alfheim/r3`，`20261019_210709`；两轮均为 `mythicbotany:alfheim`、创造模式、721 柱、中心非空 9/9；重连命中 384，本地生成 0，维度类型匹配，双端退出 0 |
+| Fabric 1.21.11 缓存模式 | PASS | `r3_reference_fabric_cache`；驻留 1573→1089，重连命中 309，本地生成 0；覆盖新版 BE 保存接口及缓存恢复 |
+| Fabric 1.21.11 本地生成模式 | PASS | `r3_reference_fabric_seedgen`；cacheOnly=false，本地生成 1367 柱、驻留 1534，客户端正常退出 |
+
+新增回归测试覆盖空网络 tag 保留、NBT 深拷贝、原版 NBT 编解码后的快照恢复、普通保存
+不被转成客户端快照，以及 LibX 栈修复后分析通过且指令不变。测试仍不等于整包所有玩法验收。
+七锚点合计 3262 项测试及 18 个加载器编译组合通过；补充观察字段后的 1.20.1 / 1.21.11
+单测和构建也通过。`build/cache-bootstrap-r3-reference-verification/audit.json` 固定报告与
+清单哈希、四场 JAR 审计、原始结果及最终门禁；未重跑全部 11 包。
+本轮 Fabric 冒烟修改的 6 个原配置路径已恢复并逐项核对备份哈希。

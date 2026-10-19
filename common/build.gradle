@@ -8,6 +8,7 @@ dependencies {
     // IMixinConfigPlugin 的方法签名引用 org.objectweb.asm.tree.ClassNode；
     // ASM 由 Mixin 在运行时自带，这里只需编译期可见（compileOnly 不进产物）。
     compileOnly 'org.ow2.asm:asm-tree:9.7'
+    compileOnly 'org.ow2.asm:asm-analysis:9.7'
     // zstd-jni 零编译期依赖：运行期整 jar 嵌入（native-dep-shade.gradle）+
     // ZstdRuntimeBridge 隔离加载，mod jar 不含 zstd class（模块层 split-package 崩溃源），
     // 编译器会阻止任何直接引用回归。版本唯一源 = gradle.properties 的 zstd_jni_version。
@@ -20,6 +21,8 @@ dependencies {
 
     testImplementation 'org.junit.jupiter:junit-jupiter-api:5.10.1'
     testImplementation 'org.spongepowered:mixin:0.8.5'
+    testImplementation 'org.ow2.asm:asm-tree:9.7'
+    testImplementation 'org.ow2.asm:asm-analysis:9.7'
     testRuntimeOnly 'org.junit.jupiter:junit-jupiter-engine:5.10.1'
     testRuntimeOnly 'org.junit.platform:junit-platform-launcher:1.10.1'
     testImplementation 'org.slf4j:slf4j-api:2.0.9'

@@ -208,6 +208,7 @@ public final class ShadowTrackingSession {
             return;
         }
         ShadowServerRegistry registry = ShadowServerRegistry.getInstance();
+        registry.ensureCacheDimension(mc);
         if (registry.isFailed() || registry.get() == null) {
             diagOnce("onClientTick skip: shadowServer null={} failed={}",
                     registry.get() == null, registry.isFailed());
@@ -401,6 +402,11 @@ public final class ShadowTrackingSession {
      * 仅影子主循环线程可调。
      */
     public void consumeOnShadowLoop() {
+        // 缓存装配可早于 play_init；此时网络出口不会发送 pull。
+        // 保留 pending，激活后再物化/mark compare，避免留下永远等不到响应的 AWAITING。
+        if (!ShadowLightCompute.isEnabled()) {
+            return;
+        }
         ShadowSeedServer shadow = ShadowServerRegistry.getInstance().get();
         if (shadow != boundServer) {
             boundServer = shadow;
@@ -1204,6 +1210,10 @@ public final class ShadowTrackingSession {
                     "[SHADOW_TRACK] local worldgen materialized ({}, {}) (dimension={})",
                     pos.x, pos.z, dimension);
         }
+        // 原版读盘回调也可能早于激活：保留已注入内容，由激活后的 tracking 泵接管。
+        if (!ShadowLightCompute.isEnabled()) {
+            return;
+        }
         // 影子 ticket 可能物化原版可见形状外的角区柱 / OVD 环带。
         // OVD 窗：客户端 ClientChunkCache 重连后是空的——必须重新 publish。
         // 不得复用权威路径的「已有 networkIngress / applyEpoch 则跳过」门：
@@ -1325,7 +1335,7 @@ public final class ShadowTrackingSession {
      * @param authoritative true = 无基线/发布失败后的权威 FULL；false = 有基线 compare（FULL 优先）
      */
     private boolean requestPullEligible(String dimension, ChunkPos pos, boolean authoritative) {
-        if (pos == null || dimension == null) {
+        if (pos == null || dimension == null || !ShadowLightCompute.isEnabled()) {
             return false;
         }
         if (!isInComputeDomain(pos.x, pos.z)) {

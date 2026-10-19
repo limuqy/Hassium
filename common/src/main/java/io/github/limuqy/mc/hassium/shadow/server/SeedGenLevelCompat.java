@@ -163,6 +163,7 @@ public final class SeedGenLevelCompat {
         LevelStorageSource.LevelStorageAccess access = null;
         PackRepository repo = null;
         WorldStem stem = null;
+        ShadowSeedServer server = null;
         try {
             Path worldRoot = resolveShadowWorldRoot();
             ownership = ShadowServerOwnership.register(worldRoot.resolve("world"));
@@ -170,6 +171,14 @@ public final class SeedGenLevelCompat {
             LevelStorageSource storage = LevelStorageSource.createDefault(worldRoot);
             access = storage.validateAndCreateAccess("world");
             long tAccessNs = System.nanoTime();
+            long tRepoNs;
+            boolean cacheOnly = !io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance().isClientSeedGenEnabled();
+            if (cacheOnly) {
+                repo = new PackRepository();
+                tRepoNs = System.nanoTime();
+                stem = io.github.limuqy.mc.hassium.compat.ShadowCacheBootstrap.create(
+                        net.minecraft.client.Minecraft.getInstance());
+            } else {
 #if MC_VER < MC_1_21_1
             repo = new PackRepository(io.github.limuqy.mc.hassium.platform.Services.PLATFORM
                     .serverPackSources(new ServerPacksSource()));
@@ -187,7 +196,7 @@ public final class SeedGenLevelCompat {
                 Constants.LOG.debug("Hassium: contributeServerDataPacks skipped", t);
             }
             repo.reload();
-            long tRepoNs = System.nanoTime();
+            tRepoNs = System.nanoTime();
 
             List<String> packIds = new ArrayList<>(repo.getAvailableIds());
             Constants.LOG.info("Hassium: Shadow packs available={} selected will enable all available",
@@ -213,19 +222,19 @@ public final class SeedGenLevelCompat {
 
             WorldOptions worldOptions = new WorldOptions(seed, true, false);
             stem = loadWorldStemWithRetry(initConfig, settings, worldOptions, 2);
+            }
         long tStemNs = System.nanoTime();
-        ShadowSeedServer server = ShadowSeedServer.create(
-                Thread.currentThread(), access, repo, stem, seed, worldRoot);
+        server = ShadowSeedServer.create(
+                Thread.currentThread(), access, repo, stem, seed, worldRoot, cacheOnly);
         // C2ME OpenCL accel：其全局上下文只挂在 MinecraftServer.runServer() HEAD，
         // 影子端不走 runServer → 必须在 createLevels（ChunkMap.<init>）之前补齐，
         // 否则 C2ME 的 ChunkMap postInit 直接抛 ISE（见 C2meOpenClCompat）。
         io.github.limuqy.mc.hassium.compat.mods.C2meOpenClCompat.armFor(server);
         ownership.attach(server);
-        server.initServer();
-        // 镜像集成服：把影子实例写入加载器全局 currentServer 槽（仅空槽）。
-        // TF 等 mod 的 getOverworldSeed() 经 requireNonNull(getCurrentServer()) 取种子，
-        // 多人客户端无真服时槽为 null → 影子 worldgen NPE（见 ServerLifecycleHooksCompat）。
+        // World-load subscribers (e.g. Mekanism SavedData) need the loader's server
+        // before createLevels posts their events. Do not overwrite a real server.
         io.github.limuqy.mc.hassium.compat.ServerLifecycleHooksCompat.adoptCurrentServer(server);
+        server.initServer();
         // 装配成功的维度进缓存白名单（三主维度 + 本地 resolve 的自定义维度）
         for (net.minecraft.server.level.ServerLevel lvl : server.getAllLevels()) {
             String dim = ShadowSeedServer.dimensionId(lvl);
@@ -246,6 +255,8 @@ public final class SeedGenLevelCompat {
         return server;
 
         } catch (Throwable e) {
+            // Initialization may fail after adopting the slot; never retain that dead instance.
+            io.github.limuqy.mc.hassium.compat.ServerLifecycleHooksCompat.releaseCurrentServer(server);
             if (ownership != null) ownership.close();
             // 装配失败：复位影子标志（代际由本轮 setShadowServer(true) 递增）后回收资源
             try {

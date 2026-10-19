@@ -61,6 +61,7 @@ public final class ScenarioEngine {
     private static boolean joinAnnounced;
     private static boolean dumpWaitAnnounced;
     private static boolean dimensionCommandSent;
+    private static long resourcesReadyAtMs;
     /** join 等待诊断节流（每 5s 一行证据，见 execJoin）。 */
     private static long joinWaitLogAtMs;
     /** R2 重连有界自愈：本步骤是否已强制重连过一次。 */
@@ -207,6 +208,7 @@ public final class ScenarioEngine {
         joinAnnounced = false;
         dumpWaitAnnounced = false;
         dimensionCommandSent = false;
+        resourcesReadyAtMs = 0L;
         joinWaitLogAtMs = 0L;
         reconnectRetried = false;
     }
@@ -246,9 +248,10 @@ public final class ScenarioEngine {
             // 「TCP/登录半开」与「连接压根没建立」。日志节流，正常场次每步只留少量行。
             if (now - joinWaitLogAtMs >= 5_000L) {
                 joinWaitLogAtMs = now;
-                LOGGER.info("HassiumSmokeTest: JOIN_WAIT {} elapsedMs={} conn={} player={} level={}",
+                LOGGER.info("HassiumSmokeTest: JOIN_WAIT {} elapsedMs={} conn={} player={} level={} screen={}",
                         label, base > 0L ? now - base : 0L,
-                        mc.getConnection() != null, mc.player != null, mc.level != null);
+                        mc.getConnection() != null, mc.player != null, mc.level != null,
+                        mc.screen == null ? "none" : mc.screen.getClass().getName());
             }
             // 有界自愈（仅 R2，since=disconnect）：15s 内连 play 连接都没建立 → 清层后强制重连一次。
             // 只重试一次，避免把「服务端拒绝」放大成重连风暴。
@@ -427,6 +430,8 @@ public final class ScenarioEngine {
             LOGGER.info("HassiumSmokeTest:DIM_CHANGE to={}", target);
             // sendCommand 即命令路径（ServerboundChatCommandPacket，无需斜杠）；/execute 需 OP（level 2），
             // 服务端冒烟由 ServerSmokeTest 按 hassium.serverSmokeScenario 自动 op。
+            // 同一连接按序执行：先免疫窒息/坠落，再 TP，避免死亡重生污染维度/缓存场景。
+            conn.sendCommand("gamemode creative");
             conn.sendCommand("execute in " + target + " run tp @s ~ ~ ~");
             dimensionCommandSent = true;
             return Outcome.RUNNING;
@@ -453,6 +458,16 @@ public final class ScenarioEngine {
     }
 
     private static Outcome execReconnect(ScenarioStep step, Minecraft mc, long now) {
+        // Production-pack tests can follow a normal menu connection after the initial resource overlay.
+        if (step.boolParam("waitForResources", false)) {
+            if (mc.getOverlay() != null) {
+                resourcesReadyAtMs = 0L;
+                return Outcome.RUNNING;
+            }
+            // Let initial menu callbacks settle before opening ConnectScreen.
+            if (resourcesReadyAtMs == 0L) resourcesReadyAtMs = now;
+            if (now - resourcesReadyAtMs < 1_500L) return Outcome.RUNNING;
+        }
         long wait = step.longParam("delayMs", reconnectDelayMs);
         if (disconnectAtMs > 0L && now - disconnectAtMs < wait) {
             return Outcome.RUNNING;
@@ -529,77 +544,12 @@ public final class ScenarioEngine {
         }
     }
 
-    /** 重连服务器：通过反射调用 ConnectScreen.startConnecting（跨版本兼容）。 */
+    /** Reconnect through remapped, typed calls in the version compatibility layer. */
     private static void triggerReconnect(Minecraft mc) {
         try {
             LOGGER.info("HassiumSmokeTest: connecting to {}", host);
-
-            // ServerAddress.parseString 是跨版本的静态方法
-            Class<?> serverAddrClass = Class.forName("net.minecraft.client.multiplayer.resolver.ServerAddress");
-            java.lang.reflect.Method parseMethod = serverAddrClass.getMethod("parseString", String.class);
-            Object addr = parseMethod.invoke(null, host);
-
-            // ServerData 构造函数跨版本适配：
-            // - 1.20.1: ServerData(String name, String ip, boolean lan)
-            // - 1.20.2+: ServerData(String name, String ip, ServerData.Type type)
-            Class<?> serverDataClass = Class.forName("net.minecraft.client.multiplayer.ServerData");
-            Object serverData = null;
-
-            // 尝试 1.20.1 的 (String, String, boolean) 构造函数
-            try {
-                java.lang.reflect.Constructor<?> sdCtor1 = serverDataClass.getDeclaredConstructor(String.class, String.class, boolean.class);
-                sdCtor1.setAccessible(true);
-                serverData = sdCtor1.newInstance("HassiumTest", host, false);
-            } catch (NoSuchMethodException ignored) {
-            }
-
-            // 尝试 1.20.2+ 的 (String, String, ServerData.Type) 构造函数
-            if (serverData == null) {
-                Class<?> typeClass = Class.forName("net.minecraft.client.multiplayer.ServerData" + Character.toString(36) + "Type");
-                // 用反射获取枚举常量 OTHER（避免泛型类型转换问题）
-                Object typeEnum = null;
-                for (Object constant : typeClass.getEnumConstants()) {
-                    if ("OTHER".equals(((Enum<?>) constant).name())) {
-                        typeEnum = constant;
-                        break;
-                    }
-                }
-                if (typeEnum == null && typeClass.getEnumConstants().length > 0) {
-                    typeEnum = typeClass.getEnumConstants()[0];
-                }
-                java.lang.reflect.Constructor<?> sdCtor2 = serverDataClass.getDeclaredConstructor(String.class, String.class, typeClass);
-                sdCtor2.setAccessible(true);
-                serverData = sdCtor2.newInstance("HassiumTest", host, typeEnum);
-            }
-
-            Class<?> connectScreenClass = Class.forName("net.minecraft.client.gui.screens.ConnectScreen");
-            Class<?> screenClass = Class.forName("net.minecraft.client.gui.screens.Screen");
-
-            // 6 参数版本（1.20.5+）：startConnecting(Screen, Minecraft, ServerAddress, ServerData, boolean, TransferState)
-            // TransferState 从未改包：1.20.5+ 全版本在 net.minecraft.client.multiplayer 包（multiplayer.transfer 子包不存在）
-            try {
-                Class<?> transferStateClass = Class.forName("net.minecraft.client.multiplayer.TransferState");
-                java.lang.reflect.Method m6 = connectScreenClass.getMethod(
-                        "startConnecting", screenClass, Minecraft.class, serverAddrClass, serverDataClass, boolean.class, transferStateClass
-                );
-                m6.invoke(null, null, mc, addr, serverData, false, null);
-                LOGGER.info("HassiumSmokeTest: reconnect triggered (6-arg signature, net.minecraft.client.multiplayer.TransferState)");
-                return;
-            } catch (ClassNotFoundException | NoSuchMethodException ignored) {
-            }
-
-            // 5 参数版本（<1.20.5，如 1.20.1）：startConnecting(Screen, Minecraft, ServerAddress, ServerData, boolean)
-            try {
-                java.lang.reflect.Method m5 = connectScreenClass.getMethod(
-                        "startConnecting", screenClass, Minecraft.class, serverAddrClass, serverDataClass, boolean.class
-                );
-                m5.invoke(null, null, mc, addr, serverData, false);
-                LOGGER.info("HassiumSmokeTest: reconnect triggered (5-arg signature)");
-                return;
-            } catch (NoSuchMethodException ignored) {
-            }
-
-            LOGGER.error("HassiumSmokeTest: no compatible startConnecting method found");
+            io.github.limuqy.mc.hassium.compat.SmokeConnectCompat.connect(mc, host);
+            LOGGER.info("HassiumSmokeTest: reconnect triggered");
         } catch (Throwable t) {
             LOGGER.error("HassiumSmokeTest: reconnect failed", t);
         }
@@ -963,7 +913,11 @@ public final class ScenarioEngine {
      * **没有** `Stopping!`；走完优雅退出的场次全部 `native` 为空且有 `Stopping!`——7/7 一致。
      * 加大宽限只影响「本来就走不完优雅退出」的场次：正常场次在 sleep 期间就自行退出，不会走到强退。
      */
-    private static final long GRACEFUL_STOP_GRACE_MS = 10_000L;
+    // Full modpacks can still be saving or unloading resources after the default
+    // grace period. Let the diagnostic harness wait longer without relaxing its
+    // exit-code gate or changing the production smoke-entrypoint guard.
+    private static final long GRACEFUL_STOP_GRACE_MS = Math.max(10_000L, Math.min(120_000L,
+            Long.getLong("hassium.smokeTest.gracefulStopGraceMs", 10_000L)));
 
 
     private static void scheduleExit(int exitCode, long saveSeqBeforeDisconnect) {
@@ -1072,12 +1026,14 @@ public final class ScenarioEngine {
             } catch (Throwable ignored) {
                 ovdEnabled = true; // 配置不可读：保持旧语义（要求 OVD 有装载）
             }
-            if (ovdEnabled) {
+            int clientVD = io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession.effectiveClientVD();
+            int serverVD = io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession.serverViewDistance();
+            if (ovdEnabled && (serverVD <= 0 || clientVD > serverVD)) {
                 LOGGER.error("{} {} stats validation FAILED: G1 ovdLoaded==0 (shadow dual-window OVD)",
                         MARKER_FAIL, roundLabel);
                 return false;
             }
-            LOGGER.info("HassiumSmokeTest: {} G1 ovdLoaded==0 skipped (OVD frozen/disabled)",
+            LOGGER.info("HassiumSmokeTest: {} G1 ovdLoaded==0 skipped (OVD disabled or delivery entirely within server view)",
                     roundLabel);
         }
 

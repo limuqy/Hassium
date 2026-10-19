@@ -41,8 +41,8 @@ public final class ServerLifecycleHooksCompat {
     private ServerLifecycleHooksCompat() {}
 
     /**
-     * 影子端 {@code initServer} 成功后调用：把本实例写入可用的全局 currentServer 槽。
-     * 槽已被真服占用（单人集成服）时跳过。
+     * 影子端 {@code initServer} 前调用，供世界加载事件读取 currentServer。
+     * 槽已被真服占用时跳过；初始化失败必须调用 {@link #releaseCurrentServer}。
      */
     public static void adoptCurrentServer(MinecraftServer shadow) {
         if (!(shadow instanceof io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer)) {

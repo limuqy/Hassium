@@ -38,6 +38,8 @@ public final class SeedGenExecutor {
         if (!HassiumConfigService.getInstance().isClientSeedGenEnabled()) {
             return false;
         }
+        ShadowSeedServer shadow = ShadowServerRegistry.getInstance().get();
+        if (shadow != null && shadow.isCacheOnly()) return false;
         ShadowClientApi pipeline = client();
         return pipeline.isServerSeedGenEnabled() && pipeline.isServerSeedAvailable();
     }

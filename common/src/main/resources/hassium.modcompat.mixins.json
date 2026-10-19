@@ -6,8 +6,16 @@
     "plugin": "io.github.limuqy.mc.hassium.mixin.modcompat.HassiumModCompatMixinPlugin",
     "mixins": [
         "MixinRegionFileVersion",
+        "MixinLibXInteractionMetadata",
         "MixinRegionFileWrite",
         "MixinNeoForgePacketSplitter"
+    ],
+    "client": [
+        "MixinShadowCacheResources",
+        "MixinDeepVoidCultTemple",
+        "MixinEssentialGameRules",
+        "MixinMineColoniesCrafterRecipes",
+        "MixinPixelmonReloadListeners"
     ],
     "injectors": {
         "defaultRequire": 1
