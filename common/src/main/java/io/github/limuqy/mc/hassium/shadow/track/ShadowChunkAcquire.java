@@ -47,7 +47,7 @@ public final class ShadowChunkAcquire {
      * @return 实际发出的 pull 动作；{@code null}=未发（已在途 / 已有柱 / 窗外等）
      */
     public static SelectionAction tryAcquireForAuthority(String dimension, int x, int z) {
-        if (dimension == null) {
+        if (dimension == null || !ShadowLightCompute.isEnabled()) {
             return null;
         }
         ShadowSeedServer shadow = ShadowServerRegistry.getInstance().get();

@@ -458,9 +458,12 @@ def _check_flight_probe(probe: dict[str, Any]) -> list[dict[str, Any]]:
     return failures
 
 
-def _check_dimension_probe(probe: dict[str, Any], number: int) -> list[dict[str, Any]]:
-    expected = ("minecraft:overworld", "minecraft:the_nether", "minecraft:the_end",
-                "minecraft:overworld")[number - 1]
+def _check_dimension_probe(probe: dict[str, Any], number: int, layout: str = "vanilla") -> list[dict[str, Any]]:
+    dimensions = {
+        "vanilla": ("minecraft:overworld", "minecraft:the_nether", "minecraft:the_end", "minecraft:overworld"),
+        "custom": ("minecraft:overworld", "hassium_smoke:first", "hassium_smoke:second", "minecraft:overworld"),
+    }[layout]
+    expected = dimensions[number - 1]
     failures = []
     if probe.get("joined") is not True:
         failures.append(_failure("DIMENSION_NOT_JOINED", round=number))
@@ -476,14 +479,15 @@ def _check_dimension_probe(probe: dict[str, Any], number: int) -> list[dict[str,
     return failures
 
 
-def _check_dimension_disk(result: dict[str, Any]) -> list[dict[str, Any]]:
+def _check_dimension_disk(result: dict[str, Any], layout: str = "vanilla") -> list[dict[str, Any]]:
     # 必须消费本场退出后保存的快照；回放不得读取已被后续场次替换的运行目录。
     snapshot = _obj(result.get("PostExitDisk"))
     if snapshot.get("captured") is not True or snapshot.get("sessionId") != result.get("SessionId"):
         return [_failure("DIMENSION_DISK_SNAPSHOT_MISSING")]
     dimensions = _obj(snapshot.get("dimensions"))
     failures = []
-    for dimension in ("overworld", "nether", "end"):
+    names = {"vanilla": ("overworld", "nether", "end"), "custom": ("overworld", "first", "second")}[layout]
+    for dimension in names:
         count = _num(_obj(dimensions.get(dimension)).get("regionFileCount"))
         if count is None or count < 1:
             failures.append(_failure("DIMENSION_REGION_MISSING", dimension=dimension,
@@ -528,6 +532,10 @@ def _movement_segments(client_log: str) -> list[dict[str, Any]]:
 
 def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
     scenario = str(result.get("Scenario") or "classic")
+    dimension_layout = {"customcache": "custom"}.get(scenario, "vanilla")
+    cache_dimension = scenario in ("cachedimension", "customcache")
+    if cache_dimension:
+        scenario = "dimension"
     # 移动会话标记（由 runtime-smoke-test.ps1 透传 -MoveSeconds）。>0 ⇒ 走开后柱会合法卸载，
     # 故 trace 的「驻留」口径不适用（见 _MOBILE_TRACE_DIAGNOSTIC_CODES）。
     mobile_session = (_num(result.get("MoveSeconds")) or 0) > 0
@@ -634,7 +642,17 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
             if (_num(_obj(probe.get("contentCheck")).get("chunksWithNonAir")) or 0) <= 0:
                 failures.append(_failure("FALLBACK_CONTENT_MISSING", round=number))
         if scenario == "dimension":
-            failures.extend(_check_dimension_probe(probe, number))
+            failures.extend(_check_dimension_probe(probe, number, dimension_layout))
+            if cache_dimension:
+                isolation = _obj(probe.get("isolation"))
+                if isolation.get("shadowCacheOnly") is not True:
+                    failures.append(_failure("CACHE_DIMENSION_MODE", round=number))
+                if isolation.get("shadowDimensionTypeMatches") is not True:
+                    failures.append(_failure("CACHE_DIMENSION_TYPE", round=number))
+                if isolation.get("creativeMode") is not True:
+                    failures.append(_failure("CACHE_DIMENSION_CREATIVE", round=number))
+                if _num(_obj(probe.get("counters")).get("locallyGenerated")) != 0:
+                    failures.append(_failure("CACHE_DIMENSION_GENERATED", round=number))
         elif scenario == "flyroundtrip":
             failures.extend(_check_flight_probe(probe))
         trace_report = _trace_analysis(probe)
@@ -765,7 +783,7 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
 
 
     if scenario == "dimension":
-        disk_failures = _check_dimension_disk(result)
+        disk_failures = _check_dimension_disk(result, dimension_layout)
         failures.extend(disk_failures)
         checks["dimension_disk"] = "FAIL" if disk_failures else "PASS"
     if scenario == "classic" and not bool(result.get("ServerSwitched")):

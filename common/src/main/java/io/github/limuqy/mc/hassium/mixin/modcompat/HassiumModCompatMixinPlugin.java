@@ -30,6 +30,7 @@ public final class HassiumModCompatMixinPlugin implements IMixinConfigPlugin {
     @Override
     public boolean shouldApplyMixin(String targetClassName, String mixinClassName) {
         try {
+            if (mixinClassName.endsWith(".MixinShadowCacheResources")) return true;
             if (mixinClassName.endsWith(".MixinNeoForgePacketSplitter")) return ModCompatFlags.neoForge();
             boolean apply = ModCompatFlags.c2meChunkIoReplaced();
             if (apply) {
@@ -59,6 +60,10 @@ public final class HassiumModCompatMixinPlugin implements IMixinConfigPlugin {
 
     @Override
     public void postApply(String targetClassName, ClassNode targetClass, String mixinClassName, IMixinInfo mixinInfo) {
-        // no-op
+        if (mixinClassName.endsWith(".MixinShadowCacheResources")) {
+            int count = io.github.limuqy.mc.hassium.compat.ShadowCacheResourceCallbacks.guard(targetClass);
+            org.slf4j.LoggerFactory.getLogger("Hassium/ModCompat").info(
+                    "Hassium: scoped {} resource constructor callbacks out of cache-only assembly", count);
+        }
     }
 }

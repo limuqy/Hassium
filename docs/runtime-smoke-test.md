@@ -674,3 +674,21 @@ build/smoke-test/
 - `scripts/runtime-integrated-isolation-test.ps1 -Ver <版本> -SessionId <新名称>`：Fabric 真实内置服专项。先跑同锚点 Fabric 专用服场景提供 parity 测试世界，或以 `-SourceWorld` 指定夹具。脚本创建独立副本，保留旧进程影子标志来复现污染条件，检查 memory 连接、方块/流体 tick 入队、原版区块内容与退出后的 region 格式；临时配置在 finally 恢复。测试副本保留供检查，已存在时拒绝覆盖。
 - 关闭功能回退按关闭后重新连接/启动验证；登录期能力不会因在线修改本地开关而自动撤销。
 - 结果和逐功能隔离说明见 [双线修复验收](handoff/handoff-2026-10-18-client-server-isolation-fixes.md)。单人脚本记录 `Pass`、原版 region 槽数及压缩类型；联机脚本沿用现有结果 JSON 和 analyzer。
+
+## 2026-10-19 缓存装配专项
+
+`cachedimension` 使用关闭本地生成的配置，按主世界→下界→末地→主世界采样四轮；
+`customcache` 使用 `create-cache-dimension-fixture.py` 生成的 ZIP，路径为主世界→first→second→主世界。
+两个自定义维分别复用下界/主世界类型，覆盖维度 ID 与类型 ID 不同及两次同连接重建。
+夹具同时复制原版 `level.dat` 和 26.x 独立的世界生成设置文件，不修改源世界。两场均在 TP 前切创造模式；analyzer 除活体区块/握手外，要求四轮 cacheOnly、真实维度类型匹配、
+创造模式、localGen=0，以及本场退出后的三个目标维度 region 文件。
+
+```powershell
+.\scripts\runtime-smoke-test.ps1 -Ver 26.3 -Loader fabric -Phase I -SessionId cache_L -Scenario cachedimension -CleanWorld
+python scripts/smoke/create-cache-dimension-fixture.py --level-dat fabric/run/server/parity_fabric_26_1_2/level.dat --minecraft-jar C:/path/to/minecraft-26.1.2.jar --output build/custom-dimensions.zip
+.\scripts\runtime-smoke-test.ps1 -Ver 26.1.2 -Loader neoforge -Phase I -SessionId cache_custom -Scenario customcache -WorldZip D:/path/to/custom-dimensions.zip
+```
+
+脚本会修改开发运行目录配置，运行前应备份 `config/hassium/` 下的实际 TOML、options、加载器配置、
+server.properties 及 ops/eula。测试 Mod 仅放开发运行目录，原整合包和 JAR 不修改。
+本轮矩阵与配置恢复范围见移植交接 §8；不能用旧整合包结果替代 26.x 验收。

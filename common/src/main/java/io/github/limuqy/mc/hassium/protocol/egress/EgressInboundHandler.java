@@ -44,7 +44,9 @@ final class EgressInboundHandler extends ChannelInboundHandlerAdapter {
         if (closed) { ReferenceCountUtil.release(msg); return; }
         if (msg instanceof ByteBuf bytes) {
             queuedBytes += bytes.readableBytes() + 128;
-            if (queuedBytes > EgressOutboundHandler.HARD_LIMIT) { bytes.release(); fail(EgressBytes.invalid("Inbound FIFO exceeds 8 MiB")); return; }
+            if (queuedBytes > EgressOutboundHandler.HARD_LIMIT && (busy || !fifo.isEmpty() || !nativeReady())) {
+                bytes.release(); fail(EgressBytes.invalid("Inbound FIFO exceeds 8 MiB")); return;
+            }
         }
         fifo.add(msg); drain();
     }
@@ -58,7 +60,7 @@ final class EgressInboundHandler extends ChannelInboundHandlerAdapter {
             while (!fifo.isEmpty() && !closed) {
                 // Terminal packets unbind the native decoder. Bytes already read while a worker
                 // ran must wait too, until vanilla installs the next protocol on EventLoop.
-                if (ready == null ? EgressPipeline.inboundProtocol(context.channel()) == null : !ready.getAsBoolean()) return;
+                if (!nativeReady()) return;
                 Object msg = fifo.remove();
                 if (msg == READ_COMPLETE) { context.fireChannelReadComplete(); continue; }
                 if (!(msg instanceof ByteBuf bytes)) { context.fireChannelRead(msg); continue; }
@@ -88,6 +90,9 @@ final class EgressInboundHandler extends ChannelInboundHandlerAdapter {
                 }
             }
         } catch (Throwable e) { fail(e); }
+    }
+    private boolean nativeReady() {
+        return ready == null ? EgressPipeline.inboundProtocol(context.channel()) != null : ready.getAsBoolean();
     }
     private byte[] carrier(ByteBuf bytes) {
         ProtocolInfo<?> protocol = EgressPipeline.inboundProtocol(context.channel());

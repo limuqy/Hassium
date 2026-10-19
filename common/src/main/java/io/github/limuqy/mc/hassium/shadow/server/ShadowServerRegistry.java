@@ -144,7 +144,8 @@ public final class ShadowServerRegistry {
                 || client().getGameDir() == null
                 || io.github.limuqy.mc.hassium.server.RuntimeServerContext.isDedicatedServerContext()) return false;
         Minecraft mc = Minecraft.getInstance();
-        return mc != null && mc.getSingleplayerServer() == null;
+        return mc != null && mc.getSingleplayerServer() == null
+                && io.github.limuqy.mc.hassium.compat.ShadowStartupCompat.mayStart(mc);
     }
 
     public ShadowSeedServer getOrCreate() {
@@ -353,6 +354,7 @@ public final class ShadowServerRegistry {
      */
     public void onServerDimensionIdsArrived(java.util.List<String> dimensionIds) {
         if (!canUseShadow()) return;
+        if (!io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance().isClientSeedGenEnabled()) return;
         if (dimensionIds == null || dimensionIds.isEmpty()) {
             return;
         }
@@ -383,6 +385,31 @@ public final class ShadowServerRegistry {
             return shouldRebuildForDimensions(dimensionIds, s.storageDimensions());
         }
         return !failed;
+    }
+
+    private volatile String requestedCacheDimension;
+
+    /** Called on the real client thread before tracking a newly received dimension. */
+    public void ensureCacheDimension(Minecraft mc) {
+        if (mc == null || mc.level == null || !canUseShadow()) return;
+        ShadowSeedServer current = server;
+        if (current == null || failed || !current.isCacheOnly()) return;
+        io.github.limuqy.mc.hassium.compat.ShadowCacheBootstrap.observe(mc);
+        String dim = io.github.limuqy.mc.hassium.compat.LevelCompat.getDimensionId(mc.level);
+        var level = current.level(dim);
+        if (level != null && level.dimensionType().equals(mc.level.dimensionType())) {
+            requestedCacheDimension = null;
+            return;
+        }
+        if (dim.equals(requestedCacheDimension)) return;
+        requestedCacheDimension = dim;
+        scheduleRebuild("authoritative cache dimension " + dim, () -> {
+            Minecraft client = Minecraft.getInstance();
+            if (client.level == null || !dim.equals(io.github.limuqy.mc.hassium.compat.LevelCompat.getDimensionId(client.level))) return false;
+            ShadowSeedServer active = server;
+            var target = active == null ? null : active.level(dim);
+            return target == null || !target.dimensionType().equals(client.level.dimensionType());
+        });
     }
 
     private void scheduleRebuild(String reason, java.util.function.BooleanSupplier stillNeeded) {
@@ -535,6 +562,7 @@ public final class ShadowServerRegistry {
             s = server;
             server = null;
             boundServerId = null;
+            requestedCacheDimension = null;
             parked = false;
             if (!preserveLoginPermit) {
                 unparkPermitted = false;

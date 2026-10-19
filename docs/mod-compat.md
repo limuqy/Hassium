@@ -43,6 +43,24 @@ NeoForge `GenericPacketSplitter` 会先编码检查大小；`MixinNeoForgePacket
 
 开发专项 `egress_fixture:typed_state` 在六组合验证同通道 State/Event 具体类型、注册表 holder、变长字符串和列表、原始 codec 单次调用、顺序、一次性执行、Bundle 和重连。这证明加载器原生 codec 恢复路径；不将历史第三方 Mod 的旧版联测记录冒充当前 26.x 已验证名单。
 
+### 2.1 26.x 纯缓存装配边界（2026-10-19）
+
+默认关闭本地生成时，使用真实连接注册表和维度类型构造缓存/算光壳，不再重载本地
+worldgen、配方、战利品或第三方 reload 数据。`ShadowCacheResourceCallbacks` 仅在明确的
+cache-only 装配 scope 内跳过资源构造器中的外部 Mixin void CallbackInfo 回调；完整
+SeedGen 和真实服务器不受该 scope 影响。不自动禁用 Mod，也不新增自动降级行为。
+
+客户端收到的 BE 更新 NBT 单独保留、标记并读盘恢复，避免拿不完整的客户端字段调用
+Mod 完整服务器保存方法。null 更新仍保留类型/位置，不伪造服务器字段。原生大包直接
+交给 native codec；Hassium 聚合帧上限仅约束聚合输入/积压，不作为第三方原生包大小上限。
+
+实施范围、26.x API 分歧及本轮运行证据见
+[缓存装配移植交接](handoff/handoff-2026-10-19-cache-bootstrap-2x-main-port.md) §8。
+Underworld 26.1.2-1.3.2 共装尝试在构造阶段被其白名单主动拒绝 `hassium`，未能进入世界，
+本轮不列为兼容通过。用户后供1.4.1可加载并进服，但玩家命令受限使切维测试超时；
+用户随后取消该项。两版哈希与失败证据同见交接 §8，不影响已完成的自定义维数据包验收。
+旧 R3、LibX/Essential/Pixelmon 等旧版精确适配不自动照搬为 26.x 补丁。
+
 ## 3. 反透视
 
 反透视通常修改「即将发送的区块包」而非世界本身。

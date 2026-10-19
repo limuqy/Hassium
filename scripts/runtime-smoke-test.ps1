@@ -459,7 +459,7 @@ if ($needConfigTrackerClean) {
     }
 }
 
-if ($Scenario -in @("seedgen", "dimension", "modcompat", "modcompat_strict")) {
+if ($Scenario -in @("seedgen", "dimension", "cachedimension", "customcache", "modcompat", "modcompat_strict")) {
     if ($WarmRepeat -or $KeepServerSave) {
         # 状态只需清一次：首场已清，后续热复用不再清档（显式开关压过场景强制清档）。
         $keepReason = if ($WarmRepeat) { "-WarmRepeat" } else { "-KeepServerSave" }
@@ -746,7 +746,7 @@ Write-Host "[$SessionId] [8/9] 解析结果 (客户端退出码: $clientExit)...
 # 单轮场景没有 ROUND2；不得把未运行的轮次写成 stats=false / pass=false。
 # flyroundtrip：单轮往返飞行黑块专项（join → 飞出去 → 掉头飞回 → dump ROUND1 → assertProbe → exit rounds=1）。
 # dictionary：单轮字典热更 rollout（join → /tick rate 200 → 等训练+offer+ACK 切换 → dump ROUND1 → exit rounds=1）。
-$requiresRound2 = $Scenario -notin @("seedgen", "modcompat", "modcompat_strict", "flyroundtrip", "dictionary", "dimension")
+$requiresRound2 = $Scenario -notin @("seedgen", "modcompat", "modcompat_strict", "flyroundtrip", "dictionary", "dimension", "cachedimension", "customcache")
 $clientContent = if (Test-Path $clientLog) { Get-Content $clientLog -Raw } else { "" }
 
 # F17：Gradle 会把 fork 出的游戏 JVM 的真实退出码写进自己的失败信息（在 client 的 stderr 日志里）。挂起被系统关闭时是
@@ -792,16 +792,16 @@ function Read-SmokeRoundProbe {
     }
 }
 $probeRound1 = Read-SmokeRoundProbe -Dir $probeDir -RoundNum 1
-$probeRound2 = if ($requiresRound2 -or $Scenario -eq 'dimension') { Read-SmokeRoundProbe -Dir $probeDir -RoundNum 2 } else { $null }
-$probeRound3 = if ($Scenario -eq 'dimension') { Read-SmokeRoundProbe -Dir $probeDir -RoundNum 3 } else { $null }
-$probeRound4 = if ($Scenario -eq 'dimension') { Read-SmokeRoundProbe -Dir $probeDir -RoundNum 4 } else { $null }
+$probeRound2 = if ($requiresRound2 -or $Scenario -in @('dimension', 'cachedimension', 'customcache')) { Read-SmokeRoundProbe -Dir $probeDir -RoundNum 2 } else { $null }
+$probeRound3 = if ($Scenario -in @('dimension', 'cachedimension', 'customcache')) { Read-SmokeRoundProbe -Dir $probeDir -RoundNum 3 } else { $null }
+$probeRound4 = if ($Scenario -in @('dimension', 'cachedimension', 'customcache')) { Read-SmokeRoundProbe -Dir $probeDir -RoundNum 4 } else { $null }
 if ($probeRound1) {
     ($probeRound1 | ConvertTo-Json -Depth 5) | Out-File (Join-Path $statsDir "${SessionId}_round1_probe.json") -Encoding UTF8
 }
 if ($probeRound2) {
     ($probeRound2 | ConvertTo-Json -Depth 5) | Out-File (Join-Path $statsDir "${SessionId}_round2_probe.json") -Encoding UTF8
 }
-if ($Scenario -eq 'dimension') {
+if ($Scenario -in @('dimension', 'cachedimension', 'customcache')) {
     Write-Host "[$SessionId] PROBE JSON: round1=$($null -ne $probeRound1) round2=$($null -ne $probeRound2) round3=$($null -ne $probeRound3) round4=$($null -ne $probeRound4)"
 } else {
     Write-Host "[$SessionId] PROBE JSON: round1=$($null -ne $probeRound1) round2=$(if ($requiresRound2) { $null -ne $probeRound2 } else { 'n/a' })"
@@ -955,8 +955,8 @@ $resultObj = @{
     GatewayRequired = $gatewayRequired
     DimensionGateFailures = @()
     Probe = @{ Round1 = $probeRound1; Round2 = $probeRound2; Round3 = $probeRound3; Round4 = $probeRound4 }
-    PostExitDisk = $(if ($Scenario -eq 'dimension') {
-        Get-SmokePostExitDiskSnapshot -SessionId $SessionId -ClientRunDir $clientRunDir -ProbeDisk $probeRound1.disk
+    PostExitDisk = $(if ($Scenario -in @('dimension', 'cachedimension', 'customcache')) {
+        Get-SmokePostExitDiskSnapshot -SessionId $SessionId -ClientRunDir $clientRunDir -ProbeDisk $probeRound1.disk -Scenario $Scenario
     } else { $null })
     StatsFiles = @(
         if ($round1StatsFound) { "build/smoke-test/stats/${SessionId}_round1_VD${Vd1}.txt" }
@@ -980,7 +980,7 @@ if (Test-Path $analysisPath) {
         $resultObj.Analysis = $analysis
         $resultObj.ProbeGateFailures = @($analysis.failures | ForEach-Object { $_.code })
         $resultObj.DimensionGateFailures = @($analysis.failures | Where-Object {
-            $_.code -like 'DIMENSION_*' -or ($Scenario -eq 'dimension' -and $_.code -eq 'PROBE_MISSING')
+            $_.code -like 'DIMENSION_*' -or ($Scenario -in @('dimension', 'cachedimension', 'customcache') -and $_.code -eq 'PROBE_MISSING')
         } | ForEach-Object { $_.code })
         $resultObj.LogAuditFailures = @($analysis.failures | Where-Object { $_.code -eq "PROCESS_FATAL" } | ForEach-Object { $_.detail })
         $resultObj | ConvertTo-Json -Depth 8 | Out-File $resultPath
@@ -998,7 +998,7 @@ Write-Host "[$SessionId] Python analyzer: exit=$analysisExit"
 Write-Host "[$SessionId] Round1: stats=$round1StatsFound pass=$round1Pass"
 if ($requiresRound2) {
     Write-Host "[$SessionId] Round2: stats=$round2StatsFound pass=$round2Pass"
-} elseif ($Scenario -eq 'dimension') {
+} elseif ($Scenario -in @('dimension', 'cachedimension', 'customcache')) {
     Write-Host "[$SessionId] Dimension: four probe rounds; gate failures=$($resultObj.DimensionGateFailures -join ',')"
 } else {
     Write-Host "[$SessionId] Round2: n/a（单轮场景）"

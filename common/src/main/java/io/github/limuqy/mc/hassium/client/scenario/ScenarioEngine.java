@@ -505,6 +505,7 @@ public final class ScenarioEngine {
             LOGGER.info("HassiumSmokeTest:DIM_CHANGE to={}", target);
             // sendCommand 即命令路径（ServerboundChatCommandPacket，无需斜杠）；/execute 需 OP（level 2），
             // 服务端冒烟由 ServerSmokeTest 按 hassium.serverSmokeScenario 自动 op。
+            conn.sendCommand("gamemode creative");
             conn.sendCommand("execute in " + target + " run tp @s ~ ~ ~");
             dimensionCommandSent = true;
             return Outcome.RUNNING;
@@ -603,77 +604,11 @@ public final class ScenarioEngine {
         }
     }
 
-    /** 重连服务器：通过反射调用 ConnectScreen.startConnecting（跨版本兼容）。 */
+    /** Reconnect through remapped, typed calls supported by all 26.x anchors. */
     private static void triggerReconnect(Minecraft mc) {
         try {
             LOGGER.info("HassiumSmokeTest: connecting to {}", host);
-
-            // ServerAddress.parseString 是跨版本的静态方法
-            Class<?> serverAddrClass = Class.forName("net.minecraft.client.multiplayer.resolver.ServerAddress");
-            java.lang.reflect.Method parseMethod = serverAddrClass.getMethod("parseString", String.class);
-            Object addr = parseMethod.invoke(null, host);
-
-            // ServerData 构造函数跨版本适配：
-            // - 1.20.1: ServerData(String name, String ip, boolean lan)
-            // - 1.20.2+: ServerData(String name, String ip, ServerData.Type type)
-            Class<?> serverDataClass = Class.forName("net.minecraft.client.multiplayer.ServerData");
-            Object serverData = null;
-
-            // 尝试 1.20.1 的 (String, String, boolean) 构造函数
-            try {
-                java.lang.reflect.Constructor<?> sdCtor1 = serverDataClass.getDeclaredConstructor(String.class, String.class, boolean.class);
-                sdCtor1.setAccessible(true);
-                serverData = sdCtor1.newInstance("HassiumTest", host, false);
-            } catch (NoSuchMethodException ignored) {
-            }
-
-            // 尝试 1.20.2+ 的 (String, String, ServerData.Type) 构造函数
-            if (serverData == null) {
-                Class<?> typeClass = Class.forName("net.minecraft.client.multiplayer.ServerData" + Character.toString(36) + "Type");
-                // 用反射获取枚举常量 OTHER（避免泛型类型转换问题）
-                Object typeEnum = null;
-                for (Object constant : typeClass.getEnumConstants()) {
-                    if ("OTHER".equals(((Enum<?>) constant).name())) {
-                        typeEnum = constant;
-                        break;
-                    }
-                }
-                if (typeEnum == null && typeClass.getEnumConstants().length > 0) {
-                    typeEnum = typeClass.getEnumConstants()[0];
-                }
-                java.lang.reflect.Constructor<?> sdCtor2 = serverDataClass.getDeclaredConstructor(String.class, String.class, typeClass);
-                sdCtor2.setAccessible(true);
-                serverData = sdCtor2.newInstance("HassiumTest", host, typeEnum);
-            }
-
-            Class<?> connectScreenClass = Class.forName("net.minecraft.client.gui.screens.ConnectScreen");
-            Class<?> screenClass = Class.forName("net.minecraft.client.gui.screens.Screen");
-
-            // 6 参数版本（1.20.5+）：startConnecting(Screen, Minecraft, ServerAddress, ServerData, boolean, TransferState)
-            // TransferState 从未改包：1.20.5+ 全版本在 net.minecraft.client.multiplayer 包（multiplayer.transfer 子包不存在）
-            try {
-                Class<?> transferStateClass = Class.forName("net.minecraft.client.multiplayer.TransferState");
-                java.lang.reflect.Method m6 = connectScreenClass.getMethod(
-                        "startConnecting", screenClass, Minecraft.class, serverAddrClass, serverDataClass, boolean.class, transferStateClass
-                );
-                m6.invoke(null, null, mc, addr, serverData, false, null);
-                LOGGER.info("HassiumSmokeTest: reconnect triggered (6-arg signature, net.minecraft.client.multiplayer.TransferState)");
-                return;
-            } catch (ClassNotFoundException | NoSuchMethodException ignored) {
-            }
-
-            // 5 参数版本（<1.20.5，如 1.20.1）：startConnecting(Screen, Minecraft, ServerAddress, ServerData, boolean)
-            try {
-                java.lang.reflect.Method m5 = connectScreenClass.getMethod(
-                        "startConnecting", screenClass, Minecraft.class, serverAddrClass, serverDataClass, boolean.class
-                );
-                m5.invoke(null, null, mc, addr, serverData, false);
-                LOGGER.info("HassiumSmokeTest: reconnect triggered (5-arg signature)");
-                return;
-            } catch (NoSuchMethodException ignored) {
-            }
-
-            LOGGER.error("HassiumSmokeTest: no compatible startConnecting method found");
+            io.github.limuqy.mc.hassium.compat.SmokeConnectCompat.connect(mc, host);
         } catch (Throwable t) {
             LOGGER.error("HassiumSmokeTest: reconnect failed", t);
         }
@@ -1151,12 +1086,14 @@ public final class ScenarioEngine {
             } catch (Throwable ignored) {
                 ovdEnabled = true; // 配置不可读：保持旧语义（要求 OVD 有装载）
             }
-            if (ovdEnabled) {
+            int clientVD = io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession.effectiveClientVD();
+            int serverVD = io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession.serverViewDistance();
+            if (ovdEnabled && (serverVD <= 0 || clientVD > serverVD)) {
                 LOGGER.error("{} {} stats validation FAILED: G1 ovdLoaded==0 (shadow dual-window OVD)",
                         MARKER_FAIL, roundLabel);
                 return false;
             }
-            LOGGER.info("HassiumSmokeTest: {} G1 ovdLoaded==0 skipped (OVD frozen/disabled)",
+            LOGGER.info("HassiumSmokeTest: {} G1 ovdLoaded==0 skipped (OVD disabled or delivery entirely within server view)",
                     roundLabel);
         }
 

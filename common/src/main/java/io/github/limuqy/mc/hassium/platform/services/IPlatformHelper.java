@@ -4,6 +4,11 @@ import java.nio.file.Path;
 
 public interface IPlatformHelper {
 
+    /** Declared schema keys only: cache mode never decodes local mod datapack values. */
+    default java.util.List<net.minecraft.resources.ResourceKey<? extends net.minecraft.core.Registry<?>>> cacheDataPackRegistryKeys() {
+        return java.util.List.of();
+    }
+
     /**
      * Gets the name of the current platform
      *

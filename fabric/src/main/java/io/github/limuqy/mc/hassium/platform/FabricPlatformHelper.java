@@ -9,6 +9,17 @@ import java.nio.file.Path;
 public class FabricPlatformHelper implements IPlatformHelper {
 
     @Override
+    public java.util.List<net.minecraft.resources.ResourceKey<? extends net.minecraft.core.Registry<?>>> cacheDataPackRegistryKeys() {
+        var keys = new java.util.ArrayList<net.minecraft.resources.ResourceKey<? extends net.minecraft.core.Registry<?>>>();
+#if MC_VER >= MC_26_3
+        net.fabricmc.fabric.api.event.registry.DynamicRegistries.getWorldRegistries().forEach(data -> keys.add(data.key()));
+#else
+        net.fabricmc.fabric.api.event.registry.DynamicRegistries.getDynamicRegistries().forEach(data -> keys.add(data.key()));
+#endif
+        return java.util.List.copyOf(keys);
+    }
+
+    @Override
     public String getPlatformName() {
         return "Fabric";
     }

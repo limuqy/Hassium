@@ -176,6 +176,9 @@ public class ShadowSeedServer extends MinecraftServer {
     }
 
     private final int shadowGeneration = io.github.limuqy.mc.hassium.server.RuntimeServerContext.getShadowGeneration();
+    private final boolean cacheOnly;
+
+    public boolean isCacheOnly() { return cacheOnly; }
 
     public int shadowGeneration() {
         return shadowGeneration;
@@ -186,7 +189,7 @@ public class ShadowSeedServer extends MinecraftServer {
                              PackRepository repo,
                              WorldStem stem,
                              long seed,
-                             java.nio.file.Path worldRoot) {
+                             java.nio.file.Path worldRoot, boolean cacheOnly) {
         // 26.x：ctor 含 Optional<GameRules>（empty → 按 worldData 特性集取默认规则）与
         // propagatesCrashes=false（影子线程异常不外溢宿主 JVM）；
         // 26.2+ 尾参再加 NotificationManager（无通知服务），26.1.2 无此形参。
@@ -199,6 +202,7 @@ public class ShadowSeedServer extends MinecraftServer {
                 NO_SERVICES, SeedGenLevelCompat.chunkProgressArg(), false);
 #endif
         this.stem = stem;
+        this.cacheOnly = cacheOnly;
         this.worldSeed = seed;
         this.worldRoot = worldRoot;
     }
@@ -218,8 +222,8 @@ public class ShadowSeedServer extends MinecraftServer {
                                    PackRepository repo,
                                    WorldStem stem,
                                    long seed,
-                                   java.nio.file.Path worldRoot) {
-        return new ShadowSeedServer(thread, access, repo, stem, seed, worldRoot);
+                                   java.nio.file.Path worldRoot, boolean cacheOnly) {
+        return new ShadowSeedServer(thread, access, repo, stem, seed, worldRoot, cacheOnly);
     }
 
     @Override
@@ -313,6 +317,7 @@ public class ShadowSeedServer extends MinecraftServer {
      * 会弄坏距离图（实测 {@code LeveledPriorityQueue} NSEE）。
      */
     public LevelChunk generateChunk(String dimension, ChunkPos pos) {
+        if (cacheOnly) return null;
         ServerLevel level = level(dimension);
         if (level == null) {
             return null;
@@ -416,6 +421,10 @@ public class ShadowSeedServer extends MinecraftServer {
      */
     public void generateChunkAsync(String dimension, ChunkPos pos,
             java.util.function.BiConsumer<String, LevelChunk> onDone) {
+        if (cacheOnly) {
+            onDone.accept(dimension, null);
+            return;
+        }
         ServerLevel pinLevel = level(dimension);
         pinForcedTicket(pinLevel, pos);
         generationInFlight.incrementAndGet();
@@ -562,6 +571,7 @@ public class ShadowSeedServer extends MinecraftServer {
                 "[SHADOW_INJECT] pos=({},{}) sections={} nonAirSections={} sectionBytes={} heightmapKeys={}",
                 pos.x(), pos.z(), chunk.getSections().length, nonAirSections, sectionBytes,
                 data.getHeightmaps().size());
+        io.github.limuqy.mc.hassium.compat.ShadowBlockEntityCompat.capture(chunk, data);
         // 网络注入：packet 内容可能与磁盘表 hash 不同，必须现算并覆盖。
         // 读盘柱走 injectLoadedChunk，hash 已由 MixinRegionFile 回填，禁止在此重复现算。
         try {
@@ -945,6 +955,7 @@ public class ShadowSeedServer extends MinecraftServer {
             // replaceWithPacketData 的 consumer（IMMEDIATE 创建 + load）。不做 type 校验：
             // IMMEDIATE 创建的 BE 类型必然匹配新 block state（delta 数据自洽），
             // 且 1.21.11 Registry.get 返回 Optional，跨版本校验成本大于收益。
+            io.github.limuqy.mc.hassium.compat.ShadowBlockEntityCompat.snapshots(chunk).clear();
             for (BlockPos bp : new ArrayList<>(chunk.getBlockEntities().keySet())) {
                 chunk.removeBlockEntity(bp);
             }
@@ -954,6 +965,7 @@ public class ShadowSeedServer extends MinecraftServer {
                 if (be != null && bed.nbt() != null) {
                     BlockEntityCompat.loadFromTag(be, bed.nbt(), this.overworld().registryAccess());
                 }
+                io.github.limuqy.mc.hassium.compat.ShadowBlockEntityCompat.snapshots(chunk).put(bed.pos(), bed.type(), bed.nbt());
             }
             // 5) 重算 contentHash 写存储桥（R2 比对 / 断连落盘复用），并校验 expectedChunkHash
             try {
@@ -1088,6 +1100,8 @@ public class ShadowSeedServer extends MinecraftServer {
             return;
         }
         BlockEntityCompat.loadFromTag(be, packet.getTag(), level.registryAccess());
+        io.github.limuqy.mc.hassium.compat.ShadowBlockEntityCompat.snapshots(chunk).put(packet.getPos(),
+                net.minecraft.core.registries.BuiltInRegistries.BLOCK_ENTITY_TYPE.getKey(packet.getType()).toString(), packet.getTag());
         // Shadow world 的 BE setChanged 会触发邻居区块查询；影子端邻柱可能尚未装载。
         // 直接标记所属柱 dirty，避免 1.21.1 的 Should always be able to create a chunk!。
         ChunkDataCompat.markUnsaved(chunk);
@@ -1838,7 +1852,9 @@ public class ShadowSeedServer extends MinecraftServer {
             if (accChunk == null) {
                 return null;
             }
-            return toLevelChunk(dimension, accChunk, pos);
+            LevelChunk result = toLevelChunk(dimension, accChunk, pos);
+            if (result != null) io.github.limuqy.mc.hassium.compat.ShadowBlockEntityCompat.restore(result, tag);
+            return result;
         } catch (Throwable t) {
             LOGGER.debug("Hassium: parseNbtBytes failed for {}", pos, t);
             return null;

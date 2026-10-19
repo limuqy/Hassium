@@ -41,7 +41,7 @@ function Test-SmokeGracefulStopMarker {
 }
 
 function Get-SmokePostExitDiskSnapshot {
-    param([string]$SessionId, [string]$ClientRunDir, $ProbeDisk)
+    param([string]$SessionId, [string]$ClientRunDir, $ProbeDisk, [string]$Scenario = "dimension")
     $snapshot = @{ sessionId = $SessionId; captured = $false; worldDir = $null; dimensions = @{};
         capturedAtMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
     $worldPath = [string]$ProbeDisk.worldDir
@@ -57,8 +57,11 @@ function Get-SmokePostExitDiskSnapshot {
             return $snapshot
         }
         $snapshot.worldDir = $worldPath
-        foreach ($entry in @(@('overworld', 'overworld'), @('nether', 'the_nether'), @('end', 'the_end'))) {
-            $region = Join-Path $worldPath "dimensions/minecraft/$($entry[1])/region"
+        $entries = @(@('overworld', 'minecraft/overworld'), @('nether', 'minecraft/the_nether'))
+        if ($Scenario -eq 'customcache') { $entries = @(@('overworld', 'minecraft/overworld'), @('first', 'hassium_smoke/first'), @('second', 'hassium_smoke/second')) }
+        else { $entries += ,@('end', 'minecraft/the_end') }
+        foreach ($entry in $entries) {
+            $region = Join-Path $worldPath "dimensions/$($entry[1])/region"
             $count = if (Test-Path -LiteralPath $region -PathType Container) {
                 @(Get-ChildItem -LiteralPath $region -Filter '*.mca' -File -ErrorAction Stop).Count
             } else { -1 }

@@ -134,6 +134,7 @@ public final class SeedGenLevelCompat {
         LevelStorageSource.LevelStorageAccess access = null;
         PackRepository repo = null;
         WorldStem stem = null;
+        ShadowSeedServer server = null;
         try {
             Path worldRoot = resolveShadowWorldRoot();
             ownership = ShadowServerOwnership.register(worldRoot.resolve("world"));
@@ -141,49 +142,55 @@ public final class SeedGenLevelCompat {
             LevelStorageSource storage = LevelStorageSource.createDefault(worldRoot);
             access = storage.validateAndCreateAccess("world");
             long tAccessNs = System.nanoTime();
-            repo = new PackRepository(io.github.limuqy.mc.hassium.platform.Services.PLATFORM
-                    .serverPackSources(new ServerPacksSource(
-                            new DirectoryValidator(ignored -> false))));
-            // 挂上加载器 mod 数据包（NeoForge ResourcePackLoader 等）：自定义维度
-            // LevelStem 在 mod jar 的 data/<ns>/dimension/*.json，不挂则 LEVEL_STEM 查不到。
-            try {
-                io.github.limuqy.mc.hassium.platform.Services.PLATFORM
-                        .contributeServerDataPacks(repo);
-            } catch (Throwable t) {
-                Constants.LOG.debug("Hassium: contributeServerDataPacks skipped", t);
+            long tRepoNs;
+            boolean cacheOnly = !io.github.limuqy.mc.hassium.config.HassiumConfigService.getInstance().isClientSeedGenEnabled();
+            if (cacheOnly) {
+                repo = new PackRepository();
+                tRepoNs = System.nanoTime();
+                stem = io.github.limuqy.mc.hassium.compat.ShadowCacheBootstrap.create(net.minecraft.client.Minecraft.getInstance());
+            } else {
+                repo = new PackRepository(io.github.limuqy.mc.hassium.platform.Services.PLATFORM
+                        .serverPackSources(new ServerPacksSource(
+                                new DirectoryValidator(ignored -> false))));
+                // 挂上加载器 mod 数据包（NeoForge ResourcePackLoader 等）：自定义维度
+                // LevelStem 在 mod jar 的 data/<ns>/dimension/*.json，不挂则 LEVEL_STEM 查不到。
+                try {
+                    io.github.limuqy.mc.hassium.platform.Services.PLATFORM
+                            .contributeServerDataPacks(repo);
+                } catch (Throwable t) {
+                    Constants.LOG.debug("Hassium: contributeServerDataPacks skipped", t);
+                }
+                repo.reload();
+                tRepoNs = System.nanoTime();
+
+                List<String> packIds = new ArrayList<>(repo.getAvailableIds());
+                Constants.LOG.info("Hassium: Shadow packs available={} selected will enable all available",
+                        packIds);
+                WorldDataConfiguration dataConfig = new WorldDataConfiguration(
+                        new DataPackConfig(packIds, List.of()), FeatureFlags.REGISTRY.allFlags());
+                // 26.3：LevelSettings 变 record（name, gameType, DifficultySettings, allowCommands, dataConfig）；
+                // GameRules 从 LevelSettings 移除——影子端在 MinecraftServer ctor 传 empty 走默认规则。
+                LevelSettings settings = new LevelSettings("HassiumSeedGen", GameType.CREATIVE,
+                        new LevelSettings.DifficultySettings(Difficulty.NORMAL, false, false),
+                        true, dataConfig);
+                WorldLoader.PackConfig packConfig = new WorldLoader.PackConfig(repo, dataConfig, false, true);
+                WorldLoader.InitConfig initConfig = new WorldLoader.InitConfig(
+                        packConfig, Commands.CommandSelection.DEDICATED, LevelBasedPermissionSet.OWNER);
+
+                WorldOptions worldOptions = new WorldOptions(seed, true, false);
+                stem = loadWorldStemWithRetry(initConfig, settings, worldOptions, 2);
             }
-            repo.reload();
-            long tRepoNs = System.nanoTime();
-
-            List<String> packIds = new ArrayList<>(repo.getAvailableIds());
-            Constants.LOG.info("Hassium: Shadow packs available={} selected will enable all available",
-                    packIds);
-            WorldDataConfiguration dataConfig = new WorldDataConfiguration(
-                    new DataPackConfig(packIds, List.of()), FeatureFlags.REGISTRY.allFlags());
-            // 26.3：LevelSettings 变 record（name, gameType, DifficultySettings, allowCommands, dataConfig）；
-            // GameRules 从 LevelSettings 移除——影子端在 MinecraftServer ctor 传 empty 走默认规则。
-            LevelSettings settings = new LevelSettings("HassiumSeedGen", GameType.CREATIVE,
-                    new LevelSettings.DifficultySettings(Difficulty.NORMAL, false, false),
-                    true, dataConfig);
-            WorldLoader.PackConfig packConfig = new WorldLoader.PackConfig(repo, dataConfig, false, true);
-            WorldLoader.InitConfig initConfig = new WorldLoader.InitConfig(
-                    packConfig, Commands.CommandSelection.DEDICATED, LevelBasedPermissionSet.OWNER);
-
-            WorldOptions worldOptions = new WorldOptions(seed, true, false);
-            stem = loadWorldStemWithRetry(initConfig, settings, worldOptions, 2);
         long tStemNs = System.nanoTime();
-        ShadowSeedServer server = ShadowSeedServer.create(
-                Thread.currentThread(), access, repo, stem, seed, worldRoot);
+        server = ShadowSeedServer.create(
+                Thread.currentThread(), access, repo, stem, seed, worldRoot, cacheOnly);
         // C2ME OpenCL accel：其全局上下文只挂在 MinecraftServer.runServer() HEAD，
         // 影子端不走 runServer → 必须在 createLevels（ChunkMap.<init>）之前补齐，
         // 否则 C2ME 的 ChunkMap postInit 直接抛 ISE（见 C2meOpenClCompat）。
         io.github.limuqy.mc.hassium.compat.mods.C2meOpenClCompat.armFor(server);
         ownership.attach(server);
-        server.initServer();
-        // 镜像集成服：把影子实例写入加载器全局 currentServer 槽（仅空槽）。
-        // TF 等 mod 的 getOverworldSeed() 经 requireNonNull(getCurrentServer()) 取种子，
-        // 多人客户端无真服时槽为 null → 影子 worldgen NPE（见 ServerLifecycleHooksCompat）。
+        // World-load subscribers need the loader slot before createLevels; retain its CAS ownership guard.
         io.github.limuqy.mc.hassium.compat.ServerLifecycleHooksCompat.adoptCurrentServer(server);
+        server.initServer();
         // 装配成功的维度进缓存白名单（三主维度 + 本地 resolve 的自定义维度）
         for (net.minecraft.server.level.ServerLevel lvl : server.getAllLevels()) {
             String dim = ShadowSeedServer.dimensionId(lvl);
@@ -204,6 +211,7 @@ public final class SeedGenLevelCompat {
         return server;
 
         } catch (Throwable e) {
+            io.github.limuqy.mc.hassium.compat.ServerLifecycleHooksCompat.releaseCurrentServer(server);
             if (ownership != null) ownership.close();
             // 装配失败：复位影子标志（代际由本轮 setShadowServer(true) 递增）后回收资源
             try {

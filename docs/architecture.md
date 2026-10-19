@@ -226,6 +226,28 @@ sequenceDiagram
 
 **世界保存**：影子 `saveAll()` 写 `hassium_cache/<serverId>/world` type 126；热度淘汰 `ShadowCacheEviction`。
 
+### 6.7 缓存装配与本地生成装配（26.x）
+
+`chunk.seedGenEnabled=false` 时，影子端仍承担缓存、原版算光和存储，但通过
+`ShadowCacheBootstrap` 使用当前真实连接的同步注册表及已观察到的维度类型装配空地形壳。
+不运行本地数据包重载或 Mod 世界生成器；未同步的注册表只补空 schema，原版 NoiseData
+常量满足 ChunkMap 的 RandomState 初始化。静态注册表不复制，同步 registry/holder 保持原对象。
+WORLD/WORLDGEN、DIMENSIONS、RELOADABLE 分层，构造资源时不提交待应用标签或组件。
+
+缓存模式是 `ShadowSeedServer` 的 final 实例属性，调度门和直接生成入口均拒绝生成；
+改变配置不能让现有空壳开始生成。真实 ClientLevel 就绪前不启动缓存装配，Play 激活前保留
+pending 状态、不发比较请求。首次进入未装配或类型不符的维度时，以真实
+`dimensionTypeRegistration()` 重建，同连接观察记录及登录许可保留；真正断连清空观察记录。
+维度 ID 不作为维度类型 ID 使用。
+
+`chunk.seedGenEnabled=true` 仍走完整 WorldLoader/数据包装配和生成比较链。
+构造资源上的第三方 reload 回调只在显式 cache-only scope 内跳过；真实服务器、集成服和
+完整生成装配保留原行为。已有兼容错误继续可见，不新增自动禁用 Mod 或自动降级策略。
+
+权威 FULL/DELTA/单体 BE 更新保留收到的 NBT（包括 null），保存时不调用缺少服务端状态的
+Mod 完整保存逻辑。带 `hassium:client_nbt` 标记的条目读盘后恢复；普通服务器和本地生成柱
+无此快照时继续原版保存。区块节仍按既有复制后发布规则替换，算光邻域门和交付域不变。
+
 ## 7. 存储格式
 
 外层保持原版 Anvil（`.mca`，32×32，2-sector header）：

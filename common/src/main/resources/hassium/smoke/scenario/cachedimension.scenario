@@ -1,0 +1,31 @@
+# Cache-only: overworld -> nether -> end -> overworld.
+# Creative TP; four live chunk probes plus post-exit region evidence.
+join label=WAIT_JOIN_1 since=start timeoutMs=${joinTimeoutMs}
+wait ms=${round1WaitMs}
+dump label=ROUND1 round=1
+assertProbe label=R1_JOINED key=joined op=eq value=true
+assertProbe label=R1_DIM key=dimension op=eq value=minecraft:overworld
+assertProbe label=R1_CHUNKS key=clientCache.loadedChunks op=gt value=64
+assertProbe label=R1_APPLIED key=chunkTrace.clientApplied op=gt value=64
+dimension to=nether
+wait ms=${dimWaitMs}
+dump label=NETHER round=2 gate=false
+assertProbe label=NETHER_JOINED key=joined op=eq value=true
+assertProbe label=NETHER_DIM key=dimension op=eq value=minecraft:the_nether
+assertProbe label=NETHER_CHUNKS key=clientCache.loadedChunks op=gt value=64
+assertProbe label=NETHER_APPLIED key=chunkTrace.clientApplied op=gt value=64
+dimension to=end
+wait ms=${endWaitMs}
+dump label=END round=3 gate=false
+assertProbe label=END_JOINED key=joined op=eq value=true
+assertProbe label=END_DIM key=dimension op=eq value=minecraft:the_end
+assertProbe label=END_CHUNKS key=clientCache.loadedChunks op=gt value=64
+assertProbe label=END_APPLIED key=chunkTrace.clientApplied op=gt value=64
+dimension to=overworld
+wait ms=${dimWaitMs}
+dump label=BACK round=4 gate=false
+assertProbe label=BACK_JOINED key=joined op=eq value=true
+assertProbe label=BACK_DIM key=dimension op=eq value=minecraft:overworld
+assertProbe label=BACK_CHUNKS key=clientCache.loadedChunks op=gt value=64
+assertProbe label=BACK_APPLIED key=chunkTrace.clientApplied op=gt value=64
+exit rounds=1

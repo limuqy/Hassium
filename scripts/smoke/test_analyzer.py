@@ -682,6 +682,43 @@ class RuntimeEvidenceTest(unittest.TestCase):
             del probes["Round3"]
             self.assertIn("PROBE_MISSING", {f["code"] for f in analyze_result(result, root)["failures"]})
 
+    def test_cache_dimension_requires_mode_type_creative_and_zero_generation(self):
+        from scripts.smoke.analyzer import analyze_result
+        from pathlib import Path
+        import tempfile
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "logs").mkdir()
+            (root / "logs" / "s.log").write_text(
+                "HassiumSmokeTest:PASS\nHassium: play init (caps=1)\n"
+                "Hassium: Aggregation enabled for player\n")
+            dims = ["minecraft:overworld", "minecraft:the_nether", "minecraft:the_end", "minecraft:overworld"]
+            probes = {f"Round{n}": {"joined": True, "dimension": dim,
+                "clientCache": {"loadedChunks": 100}, "counters": {"locallyGenerated": 0},
+                "isolation": {"shadowCacheOnly": True, "shadowDimensionTypeMatches": True, "creativeMode": True},
+                "chunkTrace": {"clientApplied": {"count": 100, "positions": []}}}
+                for n, dim in enumerate(dims, 1)}
+            result = {"SessionId": "s", "Scenario": "cachedimension", "Probe": probes,
+                "PostExitDisk": {"captured": True, "sessionId": "s", "dimensions": {
+                    d: {"regionFileCount": 1} for d in ("overworld", "nether", "end")}}}
+            self.assertTrue(analyze_result(result, root)["pass"])
+            for field, code in (("shadowCacheOnly", "CACHE_DIMENSION_MODE"),
+                                ("shadowDimensionTypeMatches", "CACHE_DIMENSION_TYPE"),
+                                ("creativeMode", "CACHE_DIMENSION_CREATIVE")):
+                probes["Round3"]["isolation"][field] = False
+                self.assertIn(code, {f["code"] for f in analyze_result(result, root)["failures"]})
+                probes["Round3"]["isolation"][field] = True
+            probes["Round4"]["counters"]["locallyGenerated"] = 1
+            self.assertIn("CACHE_DIMENSION_GENERATED", {f["code"] for f in analyze_result(result, root)["failures"]})
+            probes["Round4"]["counters"]["locallyGenerated"] = 0
+            result["Scenario"] = "customcache"
+            probes["Round2"]["dimension"] = "hassium_smoke:first"
+            probes["Round3"]["dimension"] = "hassium_smoke:second"
+            result["PostExitDisk"]["dimensions"].update({"first": {"regionFileCount": 1}, "second": {"regionFileCount": 1}})
+            self.assertTrue(analyze_result(result, root)["pass"])
+            result["PostExitDisk"]["dimensions"]["first"]["regionFileCount"] = 0
+            self.assertIn("DIMENSION_REGION_MISSING", {f["code"] for f in analyze_result(result, root)["failures"]})
+
 
 
 class FallbackIsolationTest(unittest.TestCase):

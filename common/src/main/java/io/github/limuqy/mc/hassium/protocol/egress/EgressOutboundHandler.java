@@ -99,21 +99,29 @@ final class EgressOutboundHandler extends ChannelDuplexHandler {
         if (play) {
             EgressPipeline.METRICS.originalBytes.add(size); EgressPipeline.METRICS.packets.increment();
         }
-        if (queuedBytes + size + 128 > HARD_LIMIT) {
-            bytes.release(); if (!promise.isVoid()) promise.tryFailure(EgressBytes.invalid("Outbound queue exceeds 8 MiB"));
-            fail(EgressBytes.invalid("Outbound queue exceeds 8 MiB")); return;
-        }
-        queuedBytes += size + 128;
         boolean enabled = meta != null && meta.protocol().id() == ConnectionProtocol.PLAY
                 && enabledGate.getAsBoolean();
         if (enabled != active || enabled && protocol != meta.protocol()) {
             seal(); active = enabled;
             if (enabled) { epoch++; protocol = meta.protocol(); }
         }
-        if (queuedBytes >= SOFT_LIMIT) { paused = true; seal(); }
         int maxBatch = Math.max(1024, Math.min(EgressFrameCodec.MAX_FRAME_BYTES - 64,
                 HassiumConfigService.getInstance().getAggregationMaxSize()));
         Write write = new Write(bytes, promise, meta, System.nanoTime(), play);
+        // Native login/recipe sync may exceed our aggregation backlog limit. When no
+        // earlier work is retained here, hand it straight to Netty's ordered transport;
+        // it is not a queued aggregation item and must keep the native packet limits.
+        if ((!enabled || paused || meta.barrier() || size + 6 > maxBatch)
+                && pending.isEmpty() && fifo.isEmpty() && !busy) {
+            writeDirect(write, false);
+            return;
+        }
+        if (queuedBytes + size + 128 > HARD_LIMIT) {
+            bytes.release(); if (!promise.isVoid()) promise.tryFailure(EgressBytes.invalid("Outbound queue exceeds 8 MiB"));
+            fail(EgressBytes.invalid("Outbound queue exceeds 8 MiB")); return;
+        }
+        queuedBytes += size + 128;
+        if (queuedBytes >= SOFT_LIMIT) { paused = true; seal(); }
         if (!enabled || paused || meta.barrier() || size + 6 > maxBatch) {
             seal(); fifo.add(write); drain(); return;
         }
@@ -144,7 +152,7 @@ final class EgressOutboundHandler extends ChannelDuplexHandler {
         while (!fifo.isEmpty() && !closed) {
             Object item = fifo.remove();
             if (item == FLUSH) context.flush();
-            else if (item instanceof Write write) writeDirect(write);
+            else if (item instanceof Write write) writeDirect(write, true);
             else if (item instanceof Other other) {
                 ChannelPromise result = context.newPromise();
                 result.addListener(f -> {
@@ -158,11 +166,11 @@ final class EgressOutboundHandler extends ChannelDuplexHandler {
         }
         if (queuedBytes == 0) paused = false;
     }
-    private void writeDirect(Write write) {
+    private void writeDirect(Write write, boolean accounted) {
         int size = write.bytes.readableBytes();
         ChannelPromise result = context.newPromise();
         result.addListener(f -> {
-            if (!closed) queuedBytes -= size + 128;
+            if (accounted && !closed) queuedBytes -= size + 128;
             if (f.isSuccess()) { if (write.play) EgressPipeline.METRICS.bypassBytes.add(size); complete(write, null); }
             else { complete(write, f.cause()); fail(f.cause()); }
             if (queuedBytes == 0) paused = false;

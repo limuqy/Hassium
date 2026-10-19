@@ -35,7 +35,9 @@
   "client.LightUpdatePacketAccessor",
   "client.LevelChunkWithLightPacketAccessor",
   "server.MixinReloadableServerResources",
-  "server.EntityAccessor"
+  "server.EntityAccessor",
+  "shadow.MixinShadowBlockEntitySnapshots",
+  "shadow.ReloadableServerResourcesFactory"
  ],
  "client": [
   "client.MixinMinecraft",

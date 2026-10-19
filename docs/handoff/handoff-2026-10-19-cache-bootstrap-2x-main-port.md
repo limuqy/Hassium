@@ -149,7 +149,7 @@ WorldOptions；WorldStem 第四项是 `LevelDataAndDimensions.WorldDataAndGenSet
 - 重跑真实专用服、单人/LAN 隔离检查：不因存在影子实例改写真实世界、回调或存档格式。
 
 无需全量重跑旧 11 包。涉及交付/算光行为的修改仍受算光红线约束，冒烟不能替代
-移动屋檐/洞口验收。本轮只做分析，没有运行上述“移植后”验证。
+移动屋檐/洞口验收。以上为实施前的验收计划；实际实施与运行证据见 §8。
 
 ## 7. 本机分析证据
 
@@ -158,3 +158,71 @@ WorldOptions；WorldStem 第四项是 `LevelDataAndDimensions.WorldDataAndGenSet
 Minecraft 源码经 minecraft-dev 核对的重点类为 ReloadableServerResources（J/K/L）、
 ReloadableServerRegistries、RegistryDataLoader、WorldStem、PrimaryLevelData、LevelSettings
 和 LevelChunk。本文保留关键签名，后续实施应按所用 loader patched API 再编译验证。
+
+## 8. 主分支实施与验收（2026-10-19）
+
+用户批准后在 `master@a1b117cd` 逐项移植，未合并整条 2.x 分支。A/B/C 已落地：原生大包
+与 Play 激活门、FULL/DELTA/单体 BE 原始快照、实际连接注册表的缓存 bootstrap。保留
+主分支复制后发布区块节、ShadowClientApi/Bridge、既有重建登录许可修复、POI 主循环调度
+和全部算光/交付红线。没有新增自动禁用 Mod 或自动降级。
+
+26.x 原版差异收口：J/K 使用 WORLDGEN 与 NormalNoise.NoiseParameters/LootDataType；
+L 使用 WORLD、NormalNoise、BootstrapContextAccess 新方法与独立 RELOADABLE schema。
+资源构造按 J/K 的 layers+lookup 与 L 的 LoadResult 分支；标签/组件待应用列表为空，
+不执行静态全局重新绑定。Fabric 动态注册表清单的 L 新 API 已按实际依赖源码适配。
+缓存实例 final 模式同时约束调度和直接生成入口，维度观察按实例模式判断。
+
+D 沿用 26.x dev 冒烟入口，重连改用类型化 ConnectScreen 调用；新增 cachedimension /
+customcache 场景及严格四轮门禁，切维先切创造模式。旧 Java21/ASM9.7.1 生产 Agent
+和旧版特定 Mod 钩子未搬入。增加只读世界夹具生成器，复制26.x的 level.dat 与独立
+world_gen_settings.dat，使用两个自定义维ID复用原版维度类型，验证同连接连续重建。
+
+额外共装 Underworld 26.1.2-1.3.2（SHA256
+`d955651afb228ad5cbc85c9cc57b808133721dc539dd40ec8265b9050ac11dcd`）试验在模组构造阶段
+被它的 ModWhitelistChecker 主动拒绝 `[ hassium ]`；尚未创建世界，不能作为影子端兼容
+通过。`port_JN_underworld` 失败证据与 REA 只读清单保存在 build/cache-port 与对应日志中。
+未修改第三方 JAR；测试副本已回收。自定义维度功能随后以隔离数据包验证。
+首版 `port_JN_custom` 夹具因遗漏独立 world_gen_settings.dat 启动失败，修正夹具后另起场次，
+原失败证据保留。
+用户随后提供 Underworld 1.4.1（SHA256
+`3a954e1377cc079ce3f0296cf0db847f43481606a7107503604ecc8d6def7f7e`）：
+`port_JN_underworld141` 已加载、进服和完成首轮缓存统计，但玩家 gamemode/execute 命令
+被拒绝，切维超时。用户明确取消后停止该项，回收测试 JAR；不列入兼容通过。
+后续若单独重启这项，应先解决测试命令权限策略，不据本次结果推断影子切维失败。
+
+### 构建与测试
+
+- 26.1.2 / 26.2 / 26.3：各 462 项 common:test，合计 1,386，失败/错误/跳过均为 0。
+- 正式四组合 build 通过；抽查 Java25 major69、factory/snapshot 类和 Mixin 登记均入包。
+- 三锚点 scanVersionBoundaries 通过，48 项 Python analyzer 测试与 PowerShell runtime-gates 通过。
+- 构建日志与产物 SHA256：`build/cache-port/final_build_*.log`、`artifacts.json`。
+
+### 运行证据
+
+| session | 组合 / 场景 | 结果 | 关键证据 |
+|---|---|---|---|
+| port_JF_cache | 26.1.2 Fabric 冷启动/重连 | PASS | localGen=0；重连 BE 恢复73，OVD616 |
+| port_JN_cache | 26.1.2 NeoForge 冷启动/重连 | PASS | localGen=0；重连 BE 恢复66，OVD583 |
+| port_K_cache | 26.2 Fabric 冷启动/重连 | PASS | localGen=0；重连 BE 恢复73，OVD616 |
+| port_L_cache | 26.3 Fabric 冷启动/重连 | PASS | localGen=0；重连 BE 恢复86，OVD616 |
+| port_L_cachedim | 26.3 Fabric 纯缓存四轮切维 | PASS | 四轮各1573驻留柱；类型一致、创造模式、localGen=0；三维region落盘 |
+| port_L_seedgen | 26.3 Fabric 完整生成 | PASS | 本地生成1455柱，cacheOnly=false |
+| port_JN_seedgen | 26.1.2 NeoForge 完整生成 | PASS | 本地生成1440柱，cacheOnly=false |
+| port_JF_integrated | 26.1.2 Fabric 真实单人隔离 | PASS | 4813条region记录均为type2，无影子实例；定时方块/流体tick均正常 |
+| port_L_integrated | 26.3 Fabric 真实单人隔离 | PASS | 4874条region记录均为type2，无影子实例；定时方块/流体tick均正常 |
+| port_JN_custom2 | 26.1.2 NeoForge 自定义维夹具 | PASS | 两次同连接重建；四轮各473驻留柱；维度ID与类型ID不同，类型/创造模式/落盘门均通过 |
+
+运行日志、探针与结果按 session 保存在 `build/smoke-test/{logs,probe,results}`；本地简表为
+`build/cache-port/runtime-summary.json`。上述10个完成场次退出码均为0、严重日志审计失败为空。自定义夹具 ZIP 的 SHA256 为
+`151d8e797fe5c61a18d0214422fbb059d4952a1563dfbfea80d3c73a776d982b`，源世界只读。
+
+### 收尾与覆盖边界
+
+- 旧 R3 / 11 包的通过不计入 26.x 实跑。四组合基线为 dev 环境，不能据此宣称所有第三方
+  26.x 模组都兼容。移动屋檐/洞口目视验收状态沿用主分支记录，本轮未修改算光策略。
+- 最初配置备份误漏 `config/hassium/` 子目录，无法证明运行前 TOML 被逐字恢复。
+  原 options/server.properties/eula/ops 及 NeoForge 警告设置有原始备份；TOML 后续采用完整
+  post-classic 快照回收测试状态，保留明确标注的冒烟配置，不声称是运行前原样。
+- 原始9份 options/server.properties/eula/ops/NeoForge设置已按哈希恢复；其余配置采用100份
+  post-classic快照回收临时测试状态，恢复清单为 `build/cache-port/config-restore.json`。两版Underworld测试副本均已移除。
+- 不推送、不发布，不提交用户原有 `logo-16x10.png` 或 `video/`。

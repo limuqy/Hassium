@@ -207,12 +207,18 @@ public final class ChunkPacketDataCompat {
                                     chunk.getLevel().registryAccess(), tag));
                         }
                     };
-#if MC_VER >= MC_26_3
-            data.forEachBlockEntityTag(chunkX, chunkZ, beApplier);
-#else
-            data.getBlockEntitiesTagsConsumer(chunkX, chunkZ).accept(beApplier);
-#endif
+            forEachBlockEntityTag(data, chunkX, chunkZ, beApplier);
         }
+    }
+
+    public static void forEachBlockEntityTag(
+            net.minecraft.network.protocol.game.ClientboundLevelChunkPacketData data, int chunkX, int chunkZ,
+            net.minecraft.network.protocol.game.ClientboundLevelChunkPacketData.BlockEntityTagOutput output) {
+#if MC_VER >= MC_26_3
+        data.forEachBlockEntityTag(chunkX, chunkZ, output);
+#else
+        data.getBlockEntitiesTagsConsumer(chunkX, chunkZ).accept(output);
+#endif
     }
 
     /**

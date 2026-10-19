@@ -42,8 +42,29 @@ public final class IsolationSmokeProbe {
     }
 
     public static void appendJson(StringBuilder out, Minecraft mc) {
+        var shadow = ShadowServerRegistry.getInstance().get();
+        long[] beSnapshots = shadow == null ? new long[2] :
+                io.github.limuqy.mc.hassium.compat.ShadowPoiGate.callExclusive(shadow, () -> {
+                    long[] counts = new long[2];
+                    for (var entry : shadow.injectedChunkEntries()) {
+                        io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.withChunkLock(entry.getValue().getPos(), () -> {
+                            var snapshots = io.github.limuqy.mc.hassium.compat.ShadowBlockEntityCompat.snapshots(entry.getValue());
+                            counts[0] += snapshots.size();
+                            counts[1] += snapshots.restoredCount();
+                            return null;
+                        });
+                    }
+                    return counts;
+                });
+        var level = shadow == null || mc.level == null ? null
+                : shadow.level(io.github.limuqy.mc.hassium.compat.LevelCompat.getDimensionId(mc.level));
         out.append("  \"isolation\": {\"integrated\": ").append(mc.getSingleplayerServer() != null)
-                .append(", \"shadowRunning\": ").append(ShadowServerRegistry.getInstance().get() != null)
+                .append(", \"creativeMode\": ").append(mc.player != null && mc.player.isCreative())
+                .append(", \"shadowRunning\": ").append(shadow != null)
+                .append(", \"shadowCacheOnly\": ").append(shadow != null && shadow.isCacheOnly())
+                .append(", \"shadowBeSnapshots\": ").append(beSnapshots[0])
+                .append(", \"shadowBeSnapshotsRestored\": ").append(beSnapshots[1])
+                .append(", \"shadowDimensionTypeMatches\": ").append(level != null && level.dimensionType().equals(mc.level.dimensionType()))
                 .append(", \"processShadowFlag\": ").append(RuntimeServerContext.isShadowServerContext())
                 .append(", \"scheduledChecks\": ").append(scheduledChecks).append("},\n");
     }
