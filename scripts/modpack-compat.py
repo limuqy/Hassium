@@ -141,8 +141,11 @@ def setup(args, key):
     loader = next(name for name in ("fabric", "forge", "neoforge") if name in patches)
     if version not in ("1.20.1", "1.21.1"):
         raise RuntimeError(f"Unexpected Minecraft version: {version}")
+    release = re.search(r"(?m)^mod_version\s*=\s*(\S+)", (REPO / "gradle.properties").read_text(encoding="utf-8-sig"))
+    if release is None:
+        raise RuntimeError("Missing mod_version in gradle.properties")
     artifacts = list((REPO / loader / "build" / version.replace(".", "_") / "libs").glob(
-        f"hassium-{loader}-*-{version}.jar"))
+        f"hassium-{loader}-{release.group(1)}-{version}.jar"))
     if len(artifacts) != 1:
         raise RuntimeError(f"Build the exact production JAR first: {artifacts}")
     artifact = artifacts[0]

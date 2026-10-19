@@ -667,3 +667,20 @@ build/smoke-test/
 - `scripts/runtime-integrated-isolation-test.ps1 -Ver <版本> -SessionId <新名称>`：Fabric 真实内置服专项。先跑同锚点 Fabric 专用服场景提供 parity 测试世界，或以 `-SourceWorld` 指定夹具。脚本创建独立副本，保留旧进程影子标志来复现污染条件，检查 memory 连接、方块/流体 tick 入队、原版区块内容与退出后的 region 格式；临时配置在 finally 恢复。测试副本保留供检查，已存在时拒绝覆盖。
 - 关闭功能回退按关闭后重新连接/启动验证；登录期能力不会因在线修改本地开关而自动撤销。
 - 结果和逐功能隔离说明见 [双线修复验收](handoff/handoff-2026-10-18-client-server-isolation-fixes.md)。单人脚本记录 `Pass`、原版 region 槽数及压缩类型；联机脚本沿用现有结果 JSON 和 analyzer。
+
+## 移动屋檐 / 洞口目视验收
+
+`lightacceptance` 场景以创造模式、正午晴天构造跨区块屋檐（Y=302、Z=0–192）与
+洞道（Z=256–512，内部两处 glowstone），使用原版前进/疾跑/飞行按键连续穿行，
+再断线重连，从缓存回读后反向穿行。Y=297 的浅色地板便于观察暗缝。
+场景最后分别停在屋檐内和洞口内，方便保存截图。测试设施仅写入冒烟隔离世界。
+
+运行 `runtime-smoke-test.ps1 -Scenario lightacceptance -CleanWorld`，并给
+`-ClientTimeoutSec 600 -JoinTimeoutMs 240000`。3.x 可选 `-Ver 26.3 -Loader neoforge`；
+2.x 可选 `-Ver 1.20.1 -Loader forge`。不得与其他冒烟共用同一个 run 目录。
+
+必须观察前进、回程与重连后的实际画面，检查屋檐边缘的天光过渡、洞口明暗过渡、
+洞内光源及区块边界是否出现整柱黑块、亮缝或持续闪烁。可用 F3 保留坐标及亮度，
+用 F2 或只读窗口采集保存运动中与停留点截图。将场次 ID、观察位置、截图与结论记录到验收记录。
+自动统计 PASS、`clientDarkRegressionChunks=0` 和区块驻留只能作为补充证据，
+不能代替上述目视结论。场景及配置档为开发资源，不随正式 JAR 发布。

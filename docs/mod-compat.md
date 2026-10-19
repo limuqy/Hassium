@@ -856,3 +856,46 @@ FastJEI 保留 `workerThreads=14`、`parallelTooltipScan=true`。原 HMCL 实例
 单测和构建也通过。`build/cache-bootstrap-r3-reference-verification/audit.json` 固定报告与
 清单哈希、四场 JAR 审计、原始结果及最终门禁；未重跑全部 11 包。
 本轮 Fabric 冒烟修改的 6 个原配置路径已恢复并逐项核对备份哈希。
+
+### 2.1.2 发布准备（2026-10-19）
+
+用户要求所有 2.x 版本至少编译通过，本轮实际完成 **12 个 Minecraft 版本 ×
+`builds_for` 共 33 个加载器组合的完整 build**，不只使用七个锚点替代段内版本。
+全版本 common:test 合计 **5587 项**，失败、错误、跳过均为 0；各版本
+`scanVersionBoundaries` 均通过。版本号已由 2.1.1 升为 2.1.2。
+
+33 份最终 JAR 已逐项核对版本、Minecraft 依赖、ServiceLoader 实现、Mixin 类、
+缓存装配工厂、Java class major、内嵌 ZSTD 与开发资源剥离；Modrinth 的版本标识、
+加载器和实际上传任务目标均核对通过。1.20.1 Forge 成品按原有发布策略同时标记
+Forge / NeoForge，其余组合各标记本加载器。检查没有调用上传任务。
+
+完整证据位于 `build/release-prep/`：`build-results.json`、`build_<mc>.log`、
+`test-summary.json`、`metadata_<mc>.log`、`artifact-manifest.json`。
+移动屋檐/洞口专项使用新增 `lightacceptance` 场景，最终验收见下文。
+本轮不扩大第三方整合包回归范围；上述 R3 等场次仍按其实际版本和排除清单解释。
+
+最终 2.1.2 成品在 **R3 原生 Forge 47.4.23** 上完成光照专项，保留用户报告对应的
+229 个客户端 / 193 个服务端 JAR，仅维持上述两项必要排除。场次为
+`build/release-prep/r3-light/r3/dedicated-runs/20261019_232420`，结果
+**PASS_WITH_EXCLUSIONS**，客户端与服务端均正常退出 0，全部 32 项门禁通过。
+两段各 32 秒实际飞行分别 Z=-48→639、Z=640→-46，中间真实重连；两轮驻留
+1529 / 1697，本地生成均为 0，重连命中 3544，R2 BE 快照从盘恢复 1351，
+Treasure2 刷怪器快照保留 3/3、从盘恢复 3/3，黑块回归计数均为 0。
+
+目视证据：用户明确确认 R3 移动洞口、洞内光源及缓存重连回程「正常」；
+Agent 另观察并保存回程屋檐的 8 张运动采样截图，阴影边缘过渡正常，
+未见区块边界亮缝或整柱黑块。截图与时间清单在 `build/release-prep/visual212/`。
+本轮未拆除/旁路齐套门，未关闭区块核心或聚合来取得通过。
+最终成品 SHA-256 为 `1b26583a257e740487de0bab1dff6c97528ca934201e414079c369b0cee09fa7`，
+两端测试副本与原成品全部 `.class` 字节一致，仅注入开发场景资源及诊断 Agent。
+
+验证范围与失败记录：`release212_light_visual` 的 Forge 47.4.21 Loom 开发启动
+在 FML 登录阶段断开，未产生区块探针；未将该场算作通过，也未确认其根因。
+Java 17 对照的几次启动受构建依赖或资源准备阻塞，亦未算通过。
+本轮 Forge 成品运行结论来自上述原生 R3 / Forge 47.4.23，不声称开发启动故障已修复。
+日志、失败结果及首场 debug 日志保留在 `build/release-prep/` 与 `build/smoke-test/`。
+
+升版后旧、新 JAR 共存触发了整包工具的通配符歧义，本轮将候选包选择改为读取
+`gradle.properties` 的准确 `mod_version`，不会误选旧 2.1.1；实际 setup 已核验
+选中 2.1.2 及上述 SHA-256。57 份原运行配置已逐项恢复并核对 SHA-256，
+原 HMCL 实例和成功参考清单未修改。未推送、打标签或发布。
