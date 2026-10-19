@@ -2,15 +2,8 @@ plugins {
     id 'loom-fabric'
 }
 
-// 26.x：cloth-config 暂无对应构建，cloth-ui（硬 import cloth API）暂不编入；
-// HassiumModMenuIntegration 的 cloth 分支已降级返回 null。cloth 26.x 构建就绪后恢复此 srcDir。
-// sourceSets {
-//     main {
-//         java {
-//             srcDir rootProject.file('cloth-ui/src/main/java')
-//         }
-//     }
-// }
+// 配置屏与加载器源码一起编译；Cloth Config 为玩家可选依赖，不嵌入产物。
+sourceSets.main.java.srcDir rootProject.file('cloth-ui/src/main/java')
 
 
 dependencies {
@@ -27,22 +20,23 @@ dependencies {
     include "com.electronwill.night-config:toml:3.6.7"
 
 
-    // Mod Menu：仅编译期；玩家可选安装。26.x 暂用 1.21.11 代 API 编译（ModMenuApi#getModConfigScreenFactory
-    // 接口稳定）；26.3 专用 modmenu 构建发布后切换坐标。
-    // 源用 Modrinth Maven（CDN，快且稳）：坐标 maven.modrinth:modmenu:<ver>。
+    // Mod Menu：玩家可选安装；开发客户端带入对应 MC 版本的构建以验证入口。
     if (gradle.ext.has('modmenu_version')) {
         compileOnly "maven.modrinth:modmenu:${gradle.ext.modmenu_version}"
+        runtimeOnly "maven.modrinth:modmenu:${gradle.ext.modmenu_version}"
     }
 
-    // Cloth Config：编译期需要（HassiumClothConfigScreen）；可选依赖，不 jiJ
-    // if (gradle.ext.has('cloth_config_version')) {
-    //     modCompileOnly("me.shedaniel.cloth:cloth-config-fabric:${gradle.ext.cloth_config_version}")
-    //     modLocalRuntime("me.shedaniel.cloth:cloth-config-fabric:${gradle.ext.cloth_config_version}")
-    // }
+    // 26.x 无需重映射，使用标准 Java 依赖配置；运行依赖仅供开发，不 jiJ。
+    compileOnly("me.shedaniel.cloth:cloth-config-fabric:${gradle.ext.cloth_config_version}") {
+        transitive = false
+    }
+    runtimeOnly("me.shedaniel.cloth:cloth-config-fabric:${gradle.ext.cloth_config_version}") {
+        transitive = false
+    }
 
-    // IMBlocker：仅开发环境 runClient 体验（26.3 暂无构建，PoC 期注释）
+    // IMBlocker 开发运行接入保持关闭，与可选配置屏依赖无关。
     // if (gradle.ext.has('imblocker_version')) {
-    //     modLocalRuntime("maven.modrinth:WMDesFsZ:${gradle.ext.imblocker_version}-fabric")
+    //     runtimeOnly("maven.modrinth:WMDesFsZ:${gradle.ext.imblocker_version}-fabric")
     // }
 }
 

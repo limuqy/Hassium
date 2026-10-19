@@ -4,7 +4,7 @@
 
 > 2.0.0 直连拓扑：客户端↔服务端**唯一 vanilla TCP**，全部自定义 payload 走 vanilla 通道；网络核心（进程内网关）、UDP 数据面、ViaFabric 兼容桥已裁剪。
 >
-> **26.x（2026-09-30 起）**：本文实测记录多为 1.20.1–1.21.11 时代（钩子存活性已核，见 [`mc26-upgrade-plan.md`](mc26-upgrade-plan.md) §2.2）。26.x 注意：cloth-config / IMBlocker 无 26.x 构建——cloth-ui 暂不编入（配置屏反射拦截，NeoForge 侧配置按钮本走反射不受影响）；Mod Menu 用 26.x 专属构建（26.1.2=18 / 26.2=20 / 26.3=21）。三方 mod（Starlight / C2ME / TF 等）在 26.x 的兼容实测待逐锚点复测。
+> **26.x（2026-09-30 起）**：本文第三方 Mod 实测记录多来自 Minecraft 1.20.1–1.21.11（钩子存活性已核，见 [`mc26-upgrade-plan.md`](mc26-upgrade-plan.md) §2.2），不能作为 26.x 已通过联测的依据。Fabric / NeoForge 均编入共享 Cloth 配置屏；对应三锚点的 Cloth Config 为 26.1.154 / 26.2.155 / 26.3.159，Fabric 的 Mod Menu 为 18.0.2 / 20.0.3 / 21.0.0，均由 `versionProperties` 指定。配置屏安装与回退边界见 §9；IMBlocker 开发运行接入仍关闭。Starlight / C2ME / TF 等在 26.x 的兼容性需分别验证。
 
 ## 1. 兼容边界
 
@@ -377,12 +377,12 @@ ServerLevel**；投递点 `ShadowLightCompute.applyReadyChunk` 直接
 
 | 模组 | 关系 |
 |------|------|
-| **Mod Menu**（Fabric） | 软兼容：单独安装即可打开 Cloth 配置屏 |
-| **Cloth Config** | Fabric / Forge / NeoForge 均 **jiJ**；配置屏主路径 |
-| **Configured** | Forge/NeoForge 可选；Fabric 不依赖 |
+| **Mod Menu**（Fabric） | 可选；与对应版本的 Cloth Config 一起安装后，从模组菜单打开配置屏 |
+| **Cloth Config** | Fabric / NeoForge 的可选依赖，**不内嵌**；NeoForge 从模组列表打开配置屏 |
+| **Configured** | 不需要；客户端配置屏统一使用 Cloth Config |
 | **Forge Config API Port** | Fabric **不使用**（Night Config 自管 toml）；FCAP Forge 桥已随 Forge 1.20.6 退役；NeoForge 原生 Spec |
 
-配置文件（双文件模型）：物理客户端读 `config/hassium/hassium-client.toml`；专用服读 `config/hassium/hassium-server.toml`（旧三文件 `common.toml` 模型已废弃）。
+配置文件（双文件模型）：物理客户端合并读取 `config/hassium/hassium-client.toml` 与 `config/hassium/hassium-server.toml`；专用服只读服务端文件。GUI 仅编辑客户端字段，保存时保留服务端设置。未安装 Cloth Config 时，Fabric 的 Mod Menu 入口返回无配置屏，NeoForge 不注册配置按钮；均可手改 TOML，模组核心功能不依赖配置屏。
 
 | 配置 | 作用 |
 |------|------|

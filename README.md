@@ -59,7 +59,7 @@
 
 1. 从 [Releases](https://github.com/limuqy/Hassium/releases) 下载对应加载器的 JAR。
 2. 放入客户端或服务端 `mods/`。
-3. 启动后生成 `config/hassium/hassium-client.toml` 与 `config/hassium/hassium-server.toml`（可手改 toml；GUI 配置屏视 Cloth 构建可用性，见 [`docs/mod-compat.md`](docs/mod-compat.md)）。
+3. 启动后生成 `config/hassium/hassium-client.toml` 与 `config/hassium/hassium-server.toml`。可直接编辑 TOML，或安装对应版本的 **Cloth Config** 使用客户端配置屏：Fabric 另需 **Mod Menu**；NeoForge 从模组列表进入。两者均为可选依赖，不随 Hassium 内嵌，详见 [`docs/mod-compat.md`](docs/mod-compat.md)。
 
 **依赖：** Fabric 需 Fabric API；NeoForge 无额外前置。建议双端均安装以启用协商压缩与缓存。
 
@@ -80,7 +80,7 @@
 
 ## 配置摘要
 
-文件：`config/hassium/hassium-client.toml`、`config/hassium/hassium-server.toml`（Fabric 按物理端二选一生效；NeoForge 双 spec 亦按物理端二选一注册）。键集真相源：`ConfigSchema`。
+文件：`config/hassium/hassium-client.toml`、`config/hassium/hassium-server.toml`。物理客户端合并读取两份配置，专用服务端只读服务端配置；GUI 仅编辑客户端字段，保留服务端设置。键集真相源：`ConfigSchema`。
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |

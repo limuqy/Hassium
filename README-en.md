@@ -59,7 +59,7 @@ Vanilla clients can join by default (`compat.requireClientMod = false`); install
 
 1. Download the JAR for your loader from [Releases](https://github.com/limuqy/Hassium/releases).
 2. Drop it into the client or server `mods/`.
-3. On first launch the mod generates `config/hassium/hassium-client.toml` and `config/hassium/hassium-server.toml` (edit the toml directly; GUI config screens depend on Cloth availability, see [`docs/mod-compat.md`](docs/mod-compat.md)).
+3. On first launch the mod generates `config/hassium/hassium-client.toml` and `config/hassium/hassium-server.toml`. Edit TOML directly, or install the matching **Cloth Config** to use the client settings screen: Fabric also needs **Mod Menu**; NeoForge opens it from the mod list. Both dependencies are optional and are not bundled with Hassium; see [`docs/mod-compat.md`](docs/mod-compat.md).
 
 **Dependencies:** Fabric API on Fabric; no extra prerequisites on NeoForge. Install on both sides for negotiated compression and caching.
 
@@ -80,7 +80,7 @@ Enabled by default:
 
 ## Configuration summary
 
-Files: `config/hassium/hassium-client.toml`, `config/hassium/hassium-server.toml` (Fabric: the file matching the physical side wins; NeoForge registers both specs but only the physical side's applies). Key-set source of truth: `ConfigSchema`.
+Files: `config/hassium/hassium-client.toml`, `config/hassium/hassium-server.toml`. Physical clients merge both files; dedicated servers read only the server settings. The GUI edits client fields and preserves server settings. Key-set source of truth: `ConfigSchema`.
 
 | Key | Default | Description |
 | --- | --- | --- |

@@ -233,5 +233,5 @@ Forge 自 1.21.x 起仍为 Forge 风格 API，与 NeoForge 不兼容；Hassium �
 
 | 加载器 | 配置后端 | GUI |
 |--------|----------|-----|
-| Fabric | Night Config toml（自管） | Mod Menu + Cloth（jiJ） |
-| NeoForge | 原生 ModConfigSpec | Cloth（jiJ，模组列表配置） |
+| Fabric | Night Config toml（自管） | Mod Menu + Cloth Config（均为可选依赖，不内嵌） |
+| NeoForge | 原生 ModConfigSpec | Cloth Config（可选、不内嵌，模组列表配置） |

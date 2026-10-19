@@ -199,7 +199,7 @@ archive/pre-baseline = 当前 HEAD 的引用（1.20.1–1.21.10 完整历史后�
 - **网络**：maven.neoforged.net 直连 TLS 不可达（重试/降级全 reset，WebFetch 亦超时）→ **本机构建需走本地代理 `127.0.0.1:7890`**（在本机 `~/.gradle/gradle.properties` 配置 `systemProp.http(s).proxyHost/Port` + `systemProp.jdk.tls.client.protocols=TLSv1.2`，tpamod 同款）；forgecdn 镜像可解 neoforge 主构件但**缺** `net.neoforged:minecraft-dependencies`。CI（GitHub Actions）默认直连，2026-10-12 已从仓库移除本地代理与 TLS 强制设置。
 - **坑**：settings 级 `dependencyResolutionManagement.PREFER_SETTINGS` 会剥掉 MDG 的内部解析仓（本机曾因此误判 minecraft-dependencies 不存在）——26.x 接线**禁止** settings 级仓库接管。
 - **已否决/备选**：Unimined（tpamod 用其构建 26.1.2 三加载器全通，可行但需全量 DSL 迁移 + smoke runConfig 重写）→ 列 B 方案。情报：**Forge 64.1.0 在 26.1.2 有 userdev 可构建**（不改变 D3 移除 Forge 决策，仅修正「Forge 已死」认知）。
-- 26.3 依赖版本实测：fabric-api `0.161.0+26.3`、modmenu/cloth 暂无 26.3 构建（fabric GUI 依赖届时处理）。
+- 26.3 依赖：fabric-api `0.161.0+26.3`、Mod Menu `21.0.0`、Cloth Config `26.3.159`；2026-10-20 已恢复 GUI 接入，不能继续沿用 M0 阶段的“尚未接入配置屏”状态，验证见 §8 与 §9 的同日记录。
 
 ### 7.2 版本段与边界
 
@@ -377,6 +377,14 @@ archive/pre-baseline = 当前 HEAD 的引用（1.20.1–1.21.10 完整历史后�
 - `release302_light_visual`、`release302_light_frames` 两场光照专项 PASS；33 张实际往返运动采样帧覆盖屋檐、洞口、洞内光源和重连缓存回程，目视通过；用户另确认屋檐正常。未拆除/旁路齐套门。完整指标与截图路径见[移植交接 §9](handoff/handoff-2026-10-19-cache-bootstrap-2x-main-port.md)。
 - 本轮主分支 123 份运行配置已完整备份并逐项恢复到原始 SHA-256；未复用上一轮缺漏的 TOML 备份。最终文件清单及哈希在 `build/release-prep/artifact-manifest.json`。
 
+### 2026-10-20 恢复 3.x Cloth 配置界面
+
+- Fabric / NeoForge 恢复共享 `cloth-ui` 源码和真实配置工厂；Cloth 为可选依赖、不内嵌，开发运行带入对应版本。三锚点依赖版本继续取自 `versionProperties`，未升版。
+- 三锚点完整 `build scanVersionBoundaries`、六组合 JAR 内容和原生库包装检查通过；1386 项 Java 测试无失败、错误或跳过。
+- 六组合均经真实 Mod Menu / NeoForge 模组列表打开、修改、保存、重新打开，客户端值落盘且服务端配置 SHA-256 均不变。使用独立运行目录，没有加载世界或重跑网络/光照场景。
+- 26.3 两加载器分别排除 Cloth 运行依赖后正常启动：Fabric 配置入口安全返回，NeoForge 不注册配置按钮；两场正常退出，加上六场 GUI 共八场退出码 0。
+- 清理停用 GUI、返回 null、Cloth 内嵌和覆盖服务端字段等过时说明；完整验证与初次资源缺失失败记录见 [GUI 交接](handoff/handoff-2026-10-20-cloth-config-gui.md)。
+
 ## 9. 进度表（滚动更新，收工必更）
 
 | 阶段 | 任务 | 状态 | 会话备注 |
@@ -409,7 +417,7 @@ archive/pre-baseline = 当前 HEAD 的引用（1.20.1–1.21.10 完整历史后�
 | NeoForge 26.2/26.3 当前工作区运行入口 | ⚠ 已重开并运行 | 当前用户工作区 `builds_for=fabric,neoforge`；加载器为 26.2.0.90 / 26.3.0.76，`runServer` / `runClient` 均启动。D7 决策记录仍见 §1；本次冒烟结论见下行 |
 | 用户请求补跑 NeoForge 26.2/26.3 × classic/flyroundtrip/dimension（首轮） | ⚠ 6 场完成，0 场整体 PASS | 2026-10-13：26.2 classic join timeout；26.3 classic 两轮与切服通过、被 Perflib 门禁挡下；两版 flight 均未移动且未卸载锚点；两版 dimension 的 4 轮探针和三维 region 门通过，26.2 退出 CNFE、26.3 仅 Perflib FAIL。结果 JSON / 日志按 session ID 保存在 `build/smoke-test/{results,logs}`：`26.2_neoforge_I_nf_20261013`、`26.3_neoforge_I_nf_20261013`、`26.2_neoforge_I_flyrt_20261013`、`26.3_neoforge_I_flyrt_20261013`、`26.2_neoforge_I_dimension_20261013`、`26.3_neoforge_I_dimension_20261013` |
 | NeoForge 26.2/26.3 冒烟失败修复与重跑 | ✅ 修复完成，最终 6/6 PASS | Perflib 格式、警告页、失焦暂停及额外发现的注册表同步竞争已修；三锚点各 383 项测试/六组合编译/边界扫描、35 项 Python 测试和 PowerShell 辅助测试通过。`fix2_20261013` 六场一次通过，14 探针已核验；日志错误/看门狗转储全 0，客户端退出码全 0；26.2 退出缺类未复现。原失败证据保留，具体 session 与指标见 §8 |
-| GUI 与适配 skill 同步 | 待完成 | cloth-ui 与工厂未恢复；hassium-manifold 仍为旧七段；不影响本次四组合构建 |
+| GUI 与适配 skill 同步 | GUI 已恢复；skill 待单独更新 | 2026-10-20：cloth-ui、两加载器工厂与可选依赖恢复，六组合构建和实际 GUI 验证通过；hassium-manifold 的历史七段口径本轮未改，当前矩阵以 version-segments 为准 |
 | 当前 master 工作区运行时冒烟与光照红线验收 | ✅ 三场景冒烟复验 / 目视仍待完成 | 本轮修复后 D7 四组合 × classic/flyroundtrip/dimension 12/12 PASS；早前适配复核未启动游戏的状态已补验。移动屋檐/洞口目视验收仍未完成，冒烟 PASS 不替代该项 |
 
 ### 2026-10-13 审查增量
@@ -476,6 +484,14 @@ archive/pre-baseline = 当前 HEAD 的引用（1.20.1–1.21.10 完整历史后�
 | 2.1.2 全版本打包 | ✅ 通过 | 12 个 Minecraft 版本、33 个加载器组合完整 build / 边界扫描；5587 项测试全过；最终 JAR 与发布配置复核通过。原生 R3 / Forge 47.4.23 光照专项 32 项门禁全过，用户确认移动洞口、洞内光源及重连回程正常；Forge 47.4.21 开发启动失败记录保留在 2.x 文档，不计通过。 |
 | 3.0.2 六组合打包与补验 | ✅ 通过 | 三锚点 / 六组合完整 build / 边界扫描、1386 项测试、最终 JAR 与发布配置通过；NeoForge 26.2/26.3 六场补验及光照专项通过，详见 §8 和移植交接 §9。 |
 | 配置恢复与交付 | ✅ 本地提交范围已复核 | 两分支 123 / 57 份配置恢复并逐项核对原始 SHA-256；仅本地提交，不推送、打标签或发布；用户原有 logo / video 不纳入提交。 |
+
+### 2026-10-20 图形配置界面恢复
+
+| 任务 | 状态 | 证据 / 覆盖边界 |
+|---|---|---|
+| Fabric / NeoForge GUI 接线与说明清理 | ✅ 完成 | 三锚点可选 Cloth Config、共享 UI 源码及真实工厂恢复；README 与兼容文档同步 |
+| 三锚点构建、测试与六组合 GUI | ✅ 通过 | 完整 build / 边界扫描、1386 测试、六 JAR 内容；六场实际打开/保存/重开且服务端哈希不变，详见 [GUI 交接](handoff/handoff-2026-10-20-cloth-config-gui.md) |
+| 可选 Cloth 缺失回退 | ✅ 通过 | 26.3 Fabric / NeoForge 无 Cloth 正常启动与退出，入口安全返回 / 不注册；共八场客户端退出码 0 |
 
 ## 10. 风险与回退
 

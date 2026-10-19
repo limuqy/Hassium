@@ -13,11 +13,11 @@ import java.util.function.Consumer;
 
 /**
  * Cloth 配置屏：绑定 {@link HassiumConfig}。
- * Fabric 保存 toml；Forge/NeoForge 写回 ConfigSpec。
+ * Fabric 保存 TOML；NeoForge 写回 ConfigSpec。
  * <p>
- * 仅显示客户端字段；服务端字段不出现 GUI 中，toConfig() 用 DEFAULT 填充。
+ * 仅显示客户端字段；保存时从当前快照保留服务端字段，避免重置集成服配置。
  * <p>
- * UI 4 类分组（REQ 决策 5）：区块缓存（10 项）/ 渲染与生成（5 项）/ 网络与连接（2 项）/ 调试（8 项）。
+ * 按区块缓存、渲染与生成、客户端调试分组。
  */
 public final class HassiumClothConfigScreen {
 
@@ -86,7 +86,7 @@ public final class HassiumClothConfigScreen {
         rendering.addEntry(bool(entries, "hassium.configuration.chunk.seedGenEnabled",
                 draft.seedGenEnabled, dCache.seedGenEnabled(), v -> draft.seedGenEnabled = v));
 
-        // === Category 3: 调试（客户端 10 项）===
+        // === Category 3: 调试（客户端 11 项）===
         ConfigCategory debugCat = builder.getOrCreateCategory(
                 Component.translatable("hassium.configuration.category.debug"));
         debugCat.addEntry(bool(entries, "hassium.configuration.debug.networkMetricsEnabled",

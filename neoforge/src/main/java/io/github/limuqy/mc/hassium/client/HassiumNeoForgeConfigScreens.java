@@ -10,8 +10,7 @@ import net.neoforged.neoforge.client.gui.IConfigScreenFactory;
 /**
  * 注册模组列表「配置」按钮，打开 Cloth 配置屏。
  * <p>
- * 未注册时按钮为灰色；Configured 可选，不再作为硬依赖。
- * Cloth Config 为可选依赖，未安装时跳过注册。
+ * Cloth Config 为可选依赖，未安装时跳过注册，仍可编辑 TOML。
  */
 public final class HassiumNeoForgeConfigScreens {
 
@@ -26,10 +25,7 @@ public final class HassiumNeoForgeConfigScreens {
             return;
         }
         ModList.get().getModContainerById(Constants.MOD_ID).ifPresentOrElse(container -> {
-            // 26.x：cloth-config 暂无构建，cloth-ui（HassiumClothConfigScreen）未编入——
-            // isClothAvailable() 已反射拦截，本工厂不会执行；cloth 就绪后恢复
-            // (a, parent) -> HassiumClothConfigScreen.create(parent)（历史见 git 与 mc26-upgrade-plan.md）。
-            IConfigScreenFactory factory = (a, parent) -> null;
+            IConfigScreenFactory factory = (a, parent) -> HassiumClothConfigScreen.create(parent);
             container.registerExtensionPoint(IConfigScreenFactory.class, factory);
             LOGGER.info("Hassium: NeoForge 配置屏已注册（Cloth）");
         }, () -> LOGGER.warn("Hassium: 未找到模组容器，跳过配置屏注册"));

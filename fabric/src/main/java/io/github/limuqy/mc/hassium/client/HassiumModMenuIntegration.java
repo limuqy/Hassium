@@ -7,7 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 /**
- * Mod Menu 入口：全版本走 Cloth（无需 Configured / FCAP）。
+ * Mod Menu 入口：通过可选的 Cloth Config 打开客户端配置屏。
  * Cloth Config 为可选依赖，未安装时尝试打开配置屏会捕获异常。
  */
 public class HassiumModMenuIntegration implements ModMenuApi {
@@ -28,8 +28,6 @@ public class HassiumModMenuIntegration implements ModMenuApi {
     }
 
     private static Screen openConfig(Screen parent) {
-        // 26.x：cloth-config 暂无对应构建，cloth-ui 未编入；cloth 构建就绪后恢复
-        // HassiumClothConfigScreen.create(parent)（历史见 git 与 docs/mc26-upgrade-plan.md）。
-        return null;
+        return HassiumClothConfigScreen.create(parent);
     }
 }
