@@ -19,6 +19,17 @@
 | [network-core-followups.md](network-core-followups.md) | 网络核心收尾核销（**已归档**：直连拓扑下仅存档参考） | 归档参考 |
 | [curseforge-description.md](curseforge-description.md) | CurseForge 发布描述草稿 | 当前 |
 
+## 后续独立调研（2026-10-20）
+
+先在 **`2.0.0`** 分支开发，最重点组合为 **1.20.1 Forge / 1.21.1 NeoForge**。以下两份计划已经建立，尚未开始功能实现，后续分别深入研讨。
+
+主目录现用于 2.X，master 保留独立工作区，后续统一迁移；目录、备份与验证见[工作区交接](handoff/handoff-2026-10-20-workspace-2x-primary.md)。
+
+| 计划 | 范围 | 状态 |
+|------|------|------|
+| [数据包优化与长期 AFK 节流](handoff/research-2026-10-20-packet-afk.md) | 高频包无损编码、每观察者同步、已知 Mod 状态同步、挂机识别/节流/恢复 | 待深入研讨 |
+| [区块增量与渐进式 LOD](handoff/research-2026-10-20-chunk-delta-lod.md) | 精确差异、附属数据增量、跨柱复用、服务端 LOD、补充数据升级精度 | 待深入研讨 |
+
 ## handoff（状态：交接/历史）
 
 | 文档 | 主题 |

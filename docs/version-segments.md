@@ -8,6 +8,8 @@
 
 ## 原则
 
+**当前开发重点（用户决定，2026-10-20）**：后续[数据包优化与 AFK](handoff/research-2026-10-20-packet-afk.md)、[区块增量与渐进式 LOD](handoff/research-2026-10-20-chunk-delta-lod.md) 先在 **`2.0.0`** 开发，**1.20.1 Forge / 1.21.1 NeoForge** 同为首轮设计与验收重点。当前仅建立调研计划，后续单独研讨；其余已支持组合仍按下方矩阵维护，不能以 26.x 结果代替这两个组合的验证。
+
 1. **一段只做一次代码适配**；段内版本默认「锚点编译通过即继承」，不单独排期。
 2. **人力只跟锚点走**；发布仍可保留全部 `versionProperties`（Manifold 便宜）。
 3. Mojang API 差异必须进 [`common/.../compat/`](../common/src/main/java/io/github/limuqy/mc/hassium/compat/)；业务 / Mixin **禁止**新增散落 `#if MC_VER`（网络适配器内的整段版本块除外，见下文）。

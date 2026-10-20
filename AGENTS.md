@@ -6,6 +6,17 @@ AI Agent 速查。多版本真相源见 [`docs/version-segments.md`](docs/versio
 
 Minecraft 1.20.1 / 1.21.1–1.21.11 多加载器模组（Fabric / Forge / NeoForge），ZSTD 优化存档与网络。Forge 支持 **1.20.1 / 1.21.1 / 1.21.3–1.21.10**（1.21.2 无 Forge userdev；**1.21.11 起 sunset**，该段用 NeoForge）。**1.20.1 不构建 neoforge**（NeoForge 用户用 forge 子项目产物）。**回归直连拓扑**：客户端↔服务端唯一 vanilla TCP（登录期能力握手 + Play 期 `play_init_s2c` 激活）；网络核心/UDP 数据面/续流迁移已裁剪，不复活。
 
+## 后续优化方向与重点版本（2026-10-20）
+
+用户确定后续优化**先在 `2.0.0` 分支开发**，项目最重点组合为 **1.20.1 Forge / 1.21.1 NeoForge**；两者均须作为首轮设计与验收目标，不以 master / 26.x 先行代替。现阶段只建立两份调研计划，后续分别深入，不据计划立即实施：
+
+- [数据包优化与长期 AFK 节流](docs/handoff/research-2026-10-20-packet-afk.md)
+- [区块增量与渐进式 LOD](docs/handoff/research-2026-10-20-chunk-delta-lod.md)
+
+两方向独立推进；其他已支持版本不因此退役，扩展回归范围按修改面与 `docs/version-segments.md` 决定。
+
+**当前工作安排（2026-10-20）**：主目录使用 `2.0.0`，暂时专注 2.X 开发；master / 26.x 保留在独立工作区，后续统一安排迁移。当前不要求每项改动同时维护两条版本线，不自动向 master 同步功能。路径、数据副本与验证见[工作区交接](docs/handoff/handoff-2026-10-20-workspace-2x-primary.md)。
+
 ## 关键构建命令
 
 `gradle.properties` 已开 daemon（8G）。**编译 / 测试 / 打包走 daemon，不要加 `--no-daemon`。** 先认当前 Shell，用对应启动器，不要跨壳套一层：
