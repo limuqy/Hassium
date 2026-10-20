@@ -1,6 +1,6 @@
 # Hassium 配置项审计
 
-> 审计日期：2026-09-16（`master.entity*` 实体网络优化键族共 **9 键**：分层更新 2 + 物品流独立档位 1 + 热点分档 3 + 帧预算压力 2 + 错峰 1；分档表统一逗号分隔；真相源 `ConfigSchema`，**52 键**）。
+> 审计日期：2026-10-20（`master.entity*` 实体网络优化键族共 **9 键**：分层更新 2 + 物品流独立档位 1 + 热点分档 3 + 帧预算压力 2 + 错峰 1；分档表统一逗号分隔；真相源 `ConfigSchema`，**54 键**）。
 > 历史审计：2026-07-21（1.1.2 旧结构）、2026-08-09（config-restructure，74 键 + 删键 4）、2026-09-04（直连拓扑裁剪标注）、2026-09-10（OVD 退役 38 键）、2026-09-12（44 键）、2026-09-14（+`master.enabledOnLan`，45 键）、2026-09-15（51→52 口径校正）——旧键集见历史提交。
 
 ## 一、配置文件结构与加载链
@@ -17,15 +17,15 @@
 
 > 历史（1.1.2 及更早）：Fabric 三文件模型（`client.toml` + `common.toml` + `server.toml`）、Forge/NeoForge 三 spec（CLIENT/COMMON/SERVER）——2.0.0 已统一为**双文件 / 双 scope** 模型。物理客户端曾只读 client.toml（服务端侧键固定默认），后改为双文件合并以支持单人/局域网调节 `master.*` / `chunk.lightStrip` 等。
 
-**Legacy key hygiene**：Fabric 加载/保存时按本 scope Schema 清除未知残留键（`purgeUnknownKeys`），不迁移、不报错。已清除键族：`net.*` 全族、`dataplane.*`、`master.controlReachableEndpoints` / `bindHost` / `authToken` / `migration*`（7 键）/ `resumeTicketTtlMs` / `globalPacketCompression` / `globalCompressionLevel` / `globalCompressionThreshold` / `magiclessZstd`、`chunk.ovdUnloadDelaySecs`（延迟卸载取消）/ `hassiumEngineEnabled` / `unloadDelaySecs` / `compressionLevel`、`storage.mode`、`chunk.seedGenThreads` / `master.serverChunkPushThreads`、`chunk.ovdLocalGeneration`。OVD 两键（`viewDistanceExtensionEnabled` / `maxRenderDistance`）已随双窗重做恢复，**仅 CLIENT scope**；误写入 server.toml 的客户端键（如冒烟脚本历史注入）亦被清除。
+**Legacy key hygiene**：Fabric 加载/保存时按本 scope Schema 清除未知残留键（`purgeUnknownKeys`），不迁移、不报错。已清除键族：`net.*` 全族、`dataplane.*`、`master.controlReachableEndpoints` / `bindHost` / `authToken` / `migration*`（7 键）/ `resumeTicketTtlMs` / `globalPacketCompression` / `globalCompressionLevel` / `globalCompressionThreshold` / `magiclessZstd`、`chunk.ovdUnloadDelaySecs`（延迟卸载取消）/ `hassiumEngineEnabled` / `unloadDelaySecs` / `compressionLevel`、`storage.mode`、`chunk.seedGenThreads` / `master.serverChunkPushThreads`、`chunk.ovdLocalGeneration`、`chunk.lightHaloRadius`。OVD 两键（`viewDistanceExtensionEnabled` / `maxRenderDistance`）已随双窗重做恢复，**仅 CLIENT scope**；误写入 server.toml 的客户端键（如冒烟脚本历史注入）亦被清除。
 
-## 二、全部配置项（ConfigSchema，52 键）
+## 二、全部配置项（ConfigSchema，54 键）
 
 键名前缀：区块核心 `chunk.*` / 服务端传输面 `master.*` / 存储 `storage.*` / 兼容 `compat.*` / 调试 `debug.*`。说明列与 `ConfigSchema` commentZh 一致（= TOML 注释中文行）。
 
-### A. CLIENT 键（client.toml / client spec，26 键）
+### A. CLIENT 键（client.toml / client spec，25 键）
 
-**A1. chunk.\*（15 键，区块核心）**
+**A1. chunk.\*（14 键，区块核心）**
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
@@ -43,10 +43,11 @@
 | `chunk.seedGenEnabled` | `false` | 是否启用 SeedGen（本地生成 pristine 区块；需双端同版本，默认关）。服务端开启时会下发世界种子 |
 | `chunk.viewDistanceExtensionEnabled` | `true` | 超视渲染 OVD（影子双窗：clientRD>serverVD 时本地源回填环带） |
 | `chunk.maxRenderDistance` | `16` | 超视渲染 effective clientRD 上限 |
-| `chunk.lightHaloRadius` | `1` | 光照光环半径（环）：计算/拉取域 = 服务端视距 + 此值，专供权威边界柱补齐 3×3 邻域（对齐原版 `ChunkStatus.LIGHT` range=1）；只算不交付。0=关（回退旧语义）。上限 1 = `ShadowPullRadii.AUTHORITY_MARGIN − 1`（客户端窗口 `contains(VD+R)` 的切比雪夫外接盒是 `cheb ≤ VD+R+1`，服务端签发是 `cheb ≤ VD+AUTHORITY_MARGIN`，对齐要求 `R+1 ≤ AUTHORITY_MARGIN`） |
 
 
-**A2. debug.\*（CLIENT 10 键；与 SERVER 同名键共用路径，scope 隔离）**
+光照光环由内部常量 `ShadowPullRadii.LIGHT_HALO_RADIUS = 1` 固定一环，计算/拉取域为权威形状的切比雪夫膨胀 `containsDilated(serverVD, 1)`，不提供配置或 GUI 项。旧 `chunk.lightHaloRadius` 值不再读取，Fabric 按 schema 清除残留键；加载器原生 Spec 不再注册该键。3×3 齐套门、光照完成判据和交付门保持不变。
+
+**A2. debug.\*（CLIENT 11 键；与 SERVER 同名键共用路径，scope 隔离）**
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
@@ -62,7 +63,7 @@
 | `debug.networkMetricsEnabled` | `false` | 是否启用客户端网络指标 |
 | `debug.networkMetricsAutoReset` | `true` | 登出服务器时自动重置网络指标 |
 
-### B. SERVER 键（server.toml / server spec，28 键；含双 scope 键 `chunk.seedGenEnabled` 的服务端侧，客户端侧见 A1）
+### B. SERVER 键（server.toml / server spec，29 键；含双 scope 键 `chunk.seedGenEnabled` 的服务端侧，客户端侧见 A1）
 
 **B1. chunk（2 键，区块核心服务端侧）**
 
@@ -132,6 +133,7 @@
 | `master.enableCompactHeader` / `master.metricsEnabled` | 2 | 紧凑包头改能力位协商；服务端指标并入 `debug.*` |
 | `chunk.ovdUnloadDelaySecs` | 1 | 超视延迟卸载取消（双窗重做不恢复） |
 | `chunk.viewDistanceExtensionEnabled` / `maxRenderDistance` | — | **已恢复**（2026-09 影子双窗 OVD），见 A1 |
+| `chunk.lightHaloRadius` | 1 | 光照光环固定一环，补邻作为内部正确性约束；旧值忽略并按 schema 清理 |
 | `chunk.ovdLocalGeneration` | 1 | OVD 窗本地生成退役删除（OVD 回填只读本地已有数据） |
 | `chunk.hassiumEngineEnabled` | 1 | 影子端与 `chunk.enabled` 合并（单一区块核心开关） |
 | `chunk.unloadDelaySecs` / `chunk.compressionLevel` | 2 | 影子端自身 unload 语义承担；客户端压缩等级并入通道压缩 |
@@ -141,14 +143,14 @@
 
 | 分类（前缀） | scope | 键数 | 默认关 / 特殊 |
 |------|--------|------|----------------|
-| `chunk.*` | CLIENT | 15 | `seedGenEnabled`=false |
-| `debug.*` | CLIENT | 10 | 全 false（`networkMetricsAutoReset`=true） |
+| `chunk.*` | CLIENT | 14 | `seedGenEnabled`=false |
+| `debug.*` | CLIENT | 11 | 全 false（`networkMetricsAutoReset`=true） |
 | `storage.*` | SERVER | 2 | `enabled`=false |
 | `master.*` | SERVER | 17 | `enabledOnLan`=false；`entity*` 键族 = 实体网络优化 **9 键**（分层更新总开关 + 两张逗号分隔档位表 + 每档热点阈值/倍率 + 倍率上限 + 帧预算压力 + 错峰，默认全开） |
 | `compat.*` | SERVER | 2 | `requireClientMod`=false |
 | `debug.*` | SERVER | 6 | 全 false |
 | `chunk.lightStrip` / `chunk.seedGenEnabled` | SERVER | 2 | `seedGenEnabled`=false |
-| **合计** | | **53** | |
+| **合计** | | **54** | |
 
 ## 五、审计方法
 

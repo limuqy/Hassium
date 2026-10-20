@@ -212,7 +212,7 @@ LightDeltaS2CPacket         // 增量光变更掩码
 
 ```text
 ∀ OVD 柱：ShadowPull 发送数 = 0
-∀ pull 柱：落在**计算域**内 = `ChunkShapeCompat.containsDilated(serverVD, chunk.lightHaloRadius)`
+∀ pull 柱：落在**计算域**内 = `ChunkShapeCompat.containsDilated(serverVD, ShadowPullRadii.LIGHT_HALO_RADIUS /* 固定 1 */)`
              // 2026-09-19 S3：计算域 = 权威形状 + 光照光环（切比雪夫膨胀）。
              // 最大 cheb = serverVD + halo + 1 ≤ serverVD + AUTHORITY_MARGIN（贴满签发上限）
 ∀ 交付柱：落在**权威形状** `contains(serverVD)` ∪ OVD 带内

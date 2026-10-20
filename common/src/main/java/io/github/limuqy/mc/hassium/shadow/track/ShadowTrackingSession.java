@@ -1,5 +1,7 @@
 package io.github.limuqy.mc.hassium.shadow.track;
 
+import static io.github.limuqy.mc.hassium.protocol.ShadowPullRadii.LIGHT_HALO_RADIUS;
+
 import io.github.limuqy.mc.hassium.platform.client.ShadowClientApi;
 import io.github.limuqy.mc.hassium.platform.client.ShadowClientBridge;
 import io.github.limuqy.mc.hassium.platform.client.TraceOrigin;
@@ -235,7 +237,7 @@ public final class ShadowTrackingSession {
 
     /**
      * **计算/拉取域**（R4 的 pull 门 + Provider 窗外丢弃 + 齐套门等待窗 + 注入表保留域）：
-     * 权威形状（{@code serverVD}）的**切比雪夫膨胀**，膨胀半径 = {@link #lightHaloRadius()}。
+     * 权威形状（{@code serverVD}）的**切比雪夫膨胀**，膨胀半径 = {@value io.github.limuqy.mc.hassium.protocol.ShadowPullRadii#LIGHT_HALO_RADIUS}。
      * <p>
      * <b>为什么是膨胀而不是 {@code contains(serverVD + R)}</b>（2026-09-19 S3 修正）：
      * 光环的**唯一职责**是让权威柱的 3×3 全部在场（原版 {@code ChunkStatus.LIGHT} range=1 的
@@ -255,40 +257,24 @@ public final class ShadowTrackingSession {
             return false;
         }
         return ChunkShapeCompat.containsDilated(center.x, center.z, serverViewDistance,
-                lightHaloRadius(), x, z);
+                LIGHT_HALO_RADIUS, x, z);
     }
 
     /** 计算/拉取域枚举用的切比雪夫外接盒半径（方形循环半径）。 */
     public int computeDomainBoxRadius() {
-        return ChunkShapeCompat.dilatedBoundingRadius(serverViewDistance, lightHaloRadius());
-    }
-
-    /**
-     * 光照光环半径（环）：配置 {@code chunk.lightHaloRadius}，钳到
-     * {@code [0, ShadowPullRadii.MAX_LIGHT_HALO_RADIUS]}（上限 = 服务端签发余量
-     * {@code AUTHORITY_MARGIN − 1}；膨胀形状的最大切比雪夫半径 = {@code serverVD + R + 1}，
-     * 超了外环会被服务端 RANGE 拒）。
-     */
-    public static int lightHaloRadius() {
-        int r;
-        try {
-            r = HassiumConfigService.getInstance().getConfig().chunk().lightHaloRadius();
-        } catch (Throwable t) {
-            return io.github.limuqy.mc.hassium.protocol.ShadowPullRadii.LIGHT_HALO_RADIUS;
-        }
-        return Math.max(0, Math.min(r, io.github.limuqy.mc.hassium.protocol.ShadowPullRadii.MAX_LIGHT_HALO_RADIUS));
+        return ChunkShapeCompat.dilatedBoundingRadius(serverViewDistance, LIGHT_HALO_RADIUS);
     }
 
     /**
      * 计算/拉取域半径的**口径说明**（不再是一个「半径」，保留名字只为诊断/日志可读）：
-     * 返回 {@code serverVD + lightHaloRadius()}。
+     * 返回 {@code serverVD + LIGHT_HALO_RADIUS}。
      * <p>
      * 注意它**不等于**任何几何谓词的半径——真正的谓词是
      * {@link #isInComputeDomain}（形状的切比雪夫膨胀），枚举盒是
      * {@link #computeDomainBoxRadius()}。这里只用于日志文案。
      */
     public int authorityRange() {
-        return serverViewDistance + lightHaloRadius();
+        return serverViewDistance + LIGHT_HALO_RADIUS;
     }
 
     /**
@@ -586,7 +572,7 @@ public final class ShadowTrackingSession {
         if (submitted > 0 || published > 0 || materialized > 0) {
             DebugLogger.info(DebugLogger.LogType.NETWORK,
                     "[SHADOW_TRACK] authority-acquire center=({},{}) vd={} halo={} submitted={} published={} material={} materializedFromDisk={} (dimension={})",
-                    center.x, center.z, serverViewDistance, lightHaloRadius(), submitted, published,
+                    center.x, center.z, serverViewDistance, LIGHT_HALO_RADIUS, submitted, published,
                     skippedMaterial, materialized, currentDimension);
         }
     }
@@ -1093,7 +1079,7 @@ public final class ShadowTrackingSession {
             ensureReclaimTimer();
             DebugLogger.info(DebugLogger.LogType.NETWORK,
                     "[SHADOW_TRACK] enqueue out-of-window reclaim count={} center=({},{}) vd={} halo={} (dimension={})",
-                    enrolled, center.x, center.z, serverViewDistance, lightHaloRadius(), currentDimension);
+                    enrolled, center.x, center.z, serverViewDistance, LIGHT_HALO_RADIUS, currentDimension);
         }
     }
 

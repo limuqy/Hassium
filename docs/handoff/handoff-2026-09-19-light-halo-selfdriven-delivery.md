@@ -5,6 +5,8 @@
 > 关联：[`../client-chunk-light-flow.md`](../client-chunk-light-flow.md) §4（齐套门）/ §7（光桥删除）、[`../mod-compat.md`](../mod-compat.md) §11。
 > 代码锚点见 §6。
 
+> **2026-10-20 更新（master / 2.0.0）**：已删除 `chunk.lightHaloRadius` 配置与 GUI 透传，光环内部固定为 `ShadowPullRadii.LIGHT_HALO_RADIUS=1`。以下参数化、0/1 钳位与配置接线描述保留为当时的历史记录；当前计算域仍用形状切比雪夫膨胀，3×3 齐套门、落盘判据、交付域与算光完成门保持不变。
+
 ## 0. 问题：三处已确认的不一致
 
 光桥删除后（2026-09-19），交付语义变成「光只随整柱包**一次**下发」（[`../client-chunk-light-flow.md`](../client-chunk-light-flow.md) §7.2）。一次性快照意味着：**已交付的暗柱没有重推路径**。于是"交付前光是否已算对"从"会影响观感"升级为"错了就一直在"。

@@ -644,7 +644,7 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
                     skipped.append(_failure(
                         code, "INFO", round=number, gap=gaps[key],
                         detail=("light halo: compute domain = authority shape + halo "
-                                "(chunk.lightHaloRadius); halo columns are pulled/injected/lit but "
+                                "(fixed one-ring dilation); halo columns are pulled/injected/lit but "
                                 "deliberately NOT delivered, so 'received' exceeds 'resident' by "
                                 "exactly that ring. Inside-authority gaps remain P0")))
                 elif mobile_session and code in _MOBILE_TRACE_DIAGNOSTIC_CODES:

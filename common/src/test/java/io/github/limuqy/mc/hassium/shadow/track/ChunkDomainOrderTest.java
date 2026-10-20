@@ -1,5 +1,7 @@
 package io.github.limuqy.mc.hassium.shadow.track;
 
+import static io.github.limuqy.mc.hassium.protocol.ShadowPullRadii.AUTHORITY_MARGIN;
+import static io.github.limuqy.mc.hassium.protocol.ShadowPullRadii.LIGHT_HALO_RADIUS;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -11,7 +13,7 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 
 /**
- * S4 波前「3×3 域分组排序」与 S3 光环半径钳位（L0：无 MC 实例）。
+ * S4 波前「3×3 域分组排序」与 S3 固定光环范围（L0：无 MC 实例）。
  * <p>
  * 分组排序是纯函数，可完整锁定语义；运行时触发（200ms 驱动 / 预算 / 移动重播种）需实机。
  */
@@ -87,21 +89,11 @@ class ChunkDomainOrderTest {
     }
 
     @Test
-    @DisplayName("S3 光环半径：默认 = ShadowPullRadii.LIGHT_HALO_RADIUS，且钳在 [0, 签发余量-1]")
-    void lightHaloRadiusIsClampedToServerIssuedRange() {
-        int halo = ShadowTrackingSession.lightHaloRadius();
-        assertTrue(halo >= 0, "光环半径不得为负：" + halo);
-        assertTrue(halo <= io.github.limuqy.mc.hassium.protocol.ShadowPullRadii.MAX_LIGHT_HALO_RADIUS,
-                "光环半径不得超服务端签发余量：" + halo);
-        assertEquals(io.github.limuqy.mc.hassium.protocol.ShadowPullRadii.LIGHT_HALO_RADIUS, halo,
-                "默认配置下应等于 ShadowPullRadii.LIGHT_HALO_RADIUS");
-        // 客户端窗口 contains(VD+R) 的外接盒是 cheb ≤ VD+R+1，服务端签发是 cheb ≤ VD+AUTHORITY_MARGIN
-        // → 对齐要求 R+1 ≤ AUTHORITY_MARGIN。默认 R=1 恰好贴满（AUTHORITY_MARGIN=2）。
-        assertEquals(io.github.limuqy.mc.hassium.protocol.ShadowPullRadii.AUTHORITY_MARGIN - 1,
-                io.github.limuqy.mc.hassium.protocol.ShadowPullRadii.MAX_LIGHT_HALO_RADIUS,
-                "上限 = 签发余量 - 1（切比雪夫外接盒比半径多 1）");
-        assertEquals(io.github.limuqy.mc.hassium.protocol.ShadowPullRadii.MAX_LIGHT_HALO_RADIUS,
-                io.github.limuqy.mc.hassium.protocol.ShadowPullRadii.LIGHT_HALO_RADIUS,
-                "默认值应恰好用满签发余量（否则默认就浪费了光环）");
+    @DisplayName("S3 光环固定一环，计算域不得超过服务端签发范围")
+    void fixedLightHaloFitsServerIssuedRange() {
+        assertEquals(1, LIGHT_HALO_RADIUS, "光环固定一环，保证权威边界柱的 3×3 邻域");
+        // 膨胀形状的外接盒为 VD+R+1；服务端签发上限为 VD+AUTHORITY_MARGIN。
+        assertTrue(LIGHT_HALO_RADIUS + 1 <= AUTHORITY_MARGIN,
+                "固定光环的计算域不得越过服务端签发上限");
     }
 }
