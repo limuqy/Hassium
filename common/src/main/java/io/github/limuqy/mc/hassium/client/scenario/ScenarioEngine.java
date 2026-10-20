@@ -326,7 +326,7 @@ public final class ScenarioEngine {
         movePhase = 1;
         cruiseSeconds = seconds;
         int startY = mc.player.blockPosition().getY();
-        moveTargetY = Math.min(LevelHeightCompat.getMaxBlockYExclusive(mc.level) - 16, Math.max(256, startY + 16));
+        moveTargetY = Math.min(LevelHeightCompat.getMaxBlockYExclusive(mc.level) - 16, (int) step.longParam("targetY", Math.max(256, startY + 16)));
         if (moveTargetY <= startY + 1) {
             fail("MOVE_TP_NO_HEADROOM startY=" + startY + " maxY=" + LevelHeightCompat.getMaxBlockYExclusive(mc.level), 3);
             return Outcome.DONE;
@@ -354,6 +354,7 @@ public final class ScenarioEngine {
             if (mc.player.getY() >= moveTargetY - 1) {
                 // 以 TP 同步后的当前位置为水平段基准，TP 本身绝不计入水平位移。
                 movePhase = 2;
+                io.github.limuqy.mc.hassium.client.SmokeProbeWriter.resetOvdMovementProbe();
                 mc.options.keyUp.setDown(true);
                 mc.options.keySprint.setDown(true);
                 moveUntilMs = now + cruiseSeconds * 1000L;
@@ -366,6 +367,7 @@ public final class ScenarioEngine {
                 fail("MOVE_TP_TIMEOUT targetY=" + moveTargetY + " actualY=" + mc.player.getY(), 3);
             }
         } else if (movePhase == 2) {
+            io.github.limuqy.mc.hassium.client.SmokeProbeWriter.sampleOvdMovement(mc);
             if (now >= moveUntilMs) {
                 LOGGER.info("HassiumSmokeTest:MOVE_INPUT flying={} forward={} yaw={} pitch={}",
                         mc.player.getAbilities().flying, mc.options.keyUp.isDown(),
@@ -739,6 +741,8 @@ public final class ScenarioEngine {
         io.github.limuqy.mc.hassium.shadow.light.SmokeChunkTrace.Snapshot trace =
                 io.github.limuqy.mc.hassium.shadow.light.SmokeChunkTrace.snapshot(dim);
         return switch (key) {
+            case "trace.ovdGenerated" -> (long) io.github.limuqy.mc.hassium.shadow.light.SmokeChunkTrace.ovdGenerated(dim).size();
+            case "trace.ovdGeneratedApplied" -> (long) io.github.limuqy.mc.hassium.shadow.light.SmokeChunkTrace.ovdGeneratedApplied(dim).size();
             case "isolation.integrated" -> mc.getSingleplayerServer() != null ? 1L : 0L;
             case "isolation.shadowRunning" -> io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry.getInstance().get() != null ? 1L : 0L;
             case "isolation.processShadowFlag" -> io.github.limuqy.mc.hassium.server.RuntimeServerContext.isShadowServerContext() ? 1L : 0L;

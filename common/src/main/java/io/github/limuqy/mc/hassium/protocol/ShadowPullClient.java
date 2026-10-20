@@ -27,8 +27,8 @@ import net.minecraft.world.level.ChunkPos;
  * <ul>
  *   <li><b>拦截模式</b>（{@link #tryInterceptForCompare}）：网络数据已在手，但本地有 baseline。
  *       拦截后暂存网络数据 apply 回调（{@link PendingCompare}），等响应分类：
- *       UNCHANGED → 缓存回放；DELTA → 增量应用；FULL / ERROR / 超时 → 用已收网络数据
- *       （不浪费，响应载荷丢弃）。</li>
+ *       UNCHANGED → 缓存回放；DELTA → 增量应用；FULL → 应用响应的最新快照；
+ *       ERROR / 超时 → 用已收网络数据兜底。</li>
  *   <li><b>请求模式</b>（{@link #requestFull} 等）：客户端主动拉取（无网络数据在手），
  *       响应 FULL 用 {@link ClientChunkHandler#applyShadowPullFull} 应用。</li>
  * </ul>
@@ -177,6 +177,12 @@ public final class ShadowPullClient {
                 : ShadowPullRequestC2SPacket.batchesByEncodedSize(dimension, entries, budget)) {
             long requestId = NEXT_REQUEST_ID.incrementAndGet();
             REQUEST_MODES.put(requestId, includeLocalBaseline);
+            for (var entry : batch) {
+                io.github.limuqy.mc.hassium.utils.DebugLogger.info(
+                        io.github.limuqy.mc.hassium.utils.DebugLogger.LogType.NETWORK,
+                        "[SHADOW_PULL] send id={} pos=({}, {}) hash={} sections={}", requestId,
+                        entry.chunkX(), entry.chunkZ(), Long.toHexString(entry.chunkHash()), entry.sectionHashes().size());
+            }
             FriendlyByteBuf buffer = new FriendlyByteBuf(Unpooled.buffer());
             new ShadowPullRequestC2SPacket(dimension, 0L, requestId, batch).encode(buffer);
             Services.NETWORK_MANAGER.sendShadowPullRequest(buffer);
@@ -491,6 +497,11 @@ public final class ShadowPullClient {
             ChunkPos pos = new ChunkPos(result.chunkX(), result.chunkZ());
             long key = io.github.limuqy.mc.hassium.utils.DimensionKey.key(response.dimension(), pos.x, pos.z);
             PendingCompare pending = PENDING_COMPARE.remove(key);
+            io.github.limuqy.mc.hassium.utils.DebugLogger.info(
+                    io.github.limuqy.mc.hassium.utils.DebugLogger.LogType.NETWORK,
+                    "[SHADOW_PULL] result id={} pos=({}, {}) kind={} hash={} intercepted={}",
+                    response.requestId(), pos.x, pos.z, result.kind(),
+                    Long.toHexString(result.chunkHash()), pending != null);
             // 任何权威裁决到达都释放 session pull 在途，避免 drain 误判 inflight 后无法补发
             io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession.getInstance()
                     .clearPullInFlight(response.dimension(), pos);
@@ -500,19 +511,17 @@ public final class ShadowPullClient {
                 CompareFullDump.write(response.dimension(), pos, serverPacket,
                         io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry
                                 .getInstance().get());
-                if (pending != null) {
+                // The response is the authoritative snapshot; a suspended native packet can be older.
+                // Preserve its hash through the pending pipeline so an existing OVD column is replaced.
+                ClientChunkPipeline.getInstance().storePendingContentHash(
+                        response.dimension(), pos.x, pos.z, result.chunkHash());
+                io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
+                        .confirm(response.dimension(), pos);
+                if (!ClientChunkHandler.applyShadowPullFull(serverPacket)) {
+                    Constants.LOG.warn("[SHADOW_PULL] Failed to apply FULL ({}, {})", result.chunkX(), result.chunkZ());
                     io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
-                            .confirm(response.dimension(), pos);
-                    pending.fallback().run();
-                } else {
-                    io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
-                            .confirm(response.dimension(), pos);
-                    if (!ClientChunkHandler.applyShadowPullFull(serverPacket)) {
-                        Constants.LOG.warn("[SHADOW_PULL] Failed to apply FULL ({}, {})", result.chunkX(), result.chunkZ());
-                        io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
-                                .mark(response.dimension(), pos);
-                        retryAuthoritativeFullOnce(response.dimension(), pos);
-                    }
+                            .mark(response.dimension(), pos);
+                    retryAuthoritativeFullOnce(response.dimension(), pos);
                 }
             } else if (result.kind() == ShadowPullResponseS2CPacket.Kind.DELTA) {
                 net.minecraft.network.FriendlyByteBuf buffer = new net.minecraft.network.FriendlyByteBuf(

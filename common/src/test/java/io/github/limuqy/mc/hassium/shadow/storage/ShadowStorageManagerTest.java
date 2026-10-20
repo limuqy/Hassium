@@ -459,6 +459,23 @@ class ShadowStorageManagerTest {
     }
 
     @Test
+    void lateVanillaWorldgenSaveCannotOverwriteInjectedAuthority() throws Exception {
+        ChunkPos pos = new ChunkPos(0, 20);
+        injected.add(ChunkPos.asLong(pos.x, pos.z));
+        nbtPayload = adoptedNbt(11);
+        ShadowStorageHashes.put(pos, 0xA1L);
+        manager.markContentDirty(pos);
+        manager.enqueueDirty();
+        assertArrayEquals(nbtPayload, manager.readChunk(pos));
+
+        assertTrue(manager.adoptEncodedColumn(pos, adoptedPayload(0xA1L, 22), 0xA1L));
+        assertArrayEquals(nbtPayload, manager.readChunk(pos),
+                "Late native saves must not pair stale blocks with the authority hash");
+        manager.enqueueDirty();
+        assertArrayEquals(nbtPayload, manager.readChunk(pos));
+    }
+
+    @Test
     @DisplayName("原版写入收进映像：adopt 柱落盘重载后各自自持（撕裂写回归）")
     void adoptedVanillaWritesSurviveWholeFileRewrite() throws Exception {
         // 影子存档单写者 = 映像：原版 RegionFile 的写入经 adoptEncodedColumn 进映像，

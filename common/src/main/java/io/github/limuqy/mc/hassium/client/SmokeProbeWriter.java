@@ -81,6 +81,7 @@ public final class SmokeProbeWriter {
             io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.appendLightProbeJson(sb);
             appendClientCache(sb, mc, dimension);
             appendContentCheck(sb, mc);
+            appendOvdLightFixture(sb, mc);
             appendCounters(sb);
             appendDisk(sb);
             appendChunkTrace(sb, dimension);
@@ -205,6 +206,123 @@ public final class SmokeProbeWriter {
         field(sb, "maxNonAir", check.maxNonAir());
         field(sb, "playerChunkNonAir", check.playerChunkNonAir());
         lastField(sb, "footBlock", check.footBlock());
+        sb.append("  },\n");
+    }
+
+    private static long movementSamples, movementFloorMissing, movementSkyLeaks, movementDarkSources;
+    private static String movementFirstMismatch;
+    private static int movementLastZ = Integer.MIN_VALUE;
+
+    public static void resetOvdMovementProbe() {
+        movementSamples = movementFloorMissing = movementSkyLeaks = movementDarkSources = 0L;
+        movementFirstMismatch = null;
+        movementLastZ = Integer.MIN_VALUE;
+    }
+
+    /** Sample during flight, so a stable final snapshot cannot hide a transient light defect. */
+    public static void sampleOvdMovement(net.minecraft.client.Minecraft mc) {
+        if (!"ovdlight".equals(System.getProperty("hassium.smokeScenario"))
+                || mc == null || mc.level == null || mc.player == null) return;
+        int z = mc.player.getBlockZ();
+        if (z < -56 || z > 696) return;
+        movementSamples++;
+        var foot = new net.minecraft.core.BlockPos(0, 297, z);
+        if (!mc.level.getBlockState(foot).is(net.minecraft.world.level.block.Blocks.QUARTZ_BLOCK)) {
+            movementFloorMissing++;
+            noteOvdMovementMismatch("floor", z, -1);
+        }
+        var eye = new net.minecraft.core.BlockPos(0, 299, z);
+        int sky = mc.level.getBrightness(net.minecraft.world.level.LightLayer.SKY, eye);
+        if (z != movementLastZ && z >= 0 && z <= 512) {
+            movementLastZ = z;
+            var shadow = io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry.getInstance().get();
+            if (shadow != null) {
+                var level = shadow.level("minecraft:overworld");
+                var column = shadow.injectedChunk("minecraft:overworld", 0, z >> 4);
+                var engine = level.getChunkSource().getLightEngine();
+                LOGGER.info("[OVD_LIGHT_SAMPLE] z={} clientSky={} shadowSky={} clientBlock={} shadowBlock={} floor={} ceiling={} shadowCeiling={} correct={}",
+                        z, sky, engine.getLayerListener(net.minecraft.world.level.LightLayer.SKY).getLightValue(eye),
+                        mc.level.getBrightness(net.minecraft.world.level.LightLayer.BLOCK, eye),
+                        engine.getLayerListener(net.minecraft.world.level.LightLayer.BLOCK).getLightValue(eye),
+                        mc.level.getBlockState(foot), mc.level.getBlockState(new net.minecraft.core.BlockPos(0, 303, z)),
+                        column == null ? null : column.getBlockState(new net.minecraft.core.BlockPos(0, 303, z)),
+                        column != null && column.isLightCorrect());
+                if ((z >= 16 && z <= 176 && sky > 6) || (z >= 280 && z <= 488 && sky != 0)) {
+                    for (int offset : new int[]{-16, 0, 16}) {
+                        int nz = z + offset;
+                        var adjacent = shadow.injectedChunk("minecraft:overworld", 0, nz >> 4);
+                        var top = new net.minecraft.core.BlockPos(0, z < 256 ? 302 : 303, nz);
+                        var at = new net.minecraft.core.BlockPos(0, 299, nz);
+                        LOGGER.info("[OVD_LIGHT_EDGE] sampleZ={} z={} roof={} sourceY={} sky={} correct={} confirmed={}",
+                                z, nz, adjacent == null ? null : adjacent.getBlockState(top),
+                                adjacent == null ? null : adjacent.getSkyLightSources().getLowestSourceY(0, nz & 15),
+                                engine.getLayerListener(net.minecraft.world.level.LightLayer.SKY).getLightValue(at),
+                                adjacent != null && adjacent.isLightCorrect(),
+                                io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate.isConfirmed(
+                                        "minecraft:overworld", new net.minecraft.world.level.ChunkPos(0, nz >> 4)));
+                    }
+                }
+            }
+        }
+        if ((z >= 16 && z <= 176 && sky > 6) || (z >= 280 && z <= 488 && sky != 0)) {
+            movementSkyLeaks++;
+            noteOvdMovementMismatch("sky", z, sky);
+        }
+        if (Math.min(Math.abs(z - 320), Math.abs(z - 448)) <= 3) {
+            int block = mc.level.getBrightness(net.minecraft.world.level.LightLayer.BLOCK, eye);
+            int expected = 10 - Math.min(Math.abs(z - 320), Math.abs(z - 448));
+            if (block < expected) {
+                movementDarkSources++;
+                noteOvdMovementMismatch("block", z, block);
+            }
+        }
+    }
+
+    private static void noteOvdMovementMismatch(String kind, int z, int light) {
+        if (movementFirstMismatch == null) movementFirstMismatch = kind + " at 0,299," + z + " light=" + light;
+    }
+
+    /** Only the ovdlight development fixture: sample known blocks inside the current authority window. */
+    private static void appendOvdLightFixture(StringBuilder sb, net.minecraft.client.Minecraft mc) {
+        if (!"ovdlight".equals(System.getProperty("hassium.smokeScenario"))) return;
+        long sampled = 0L;
+        long mismatches = 0L;
+        String firstMismatch = null;
+        if (mc != null && mc.player != null && mc.level != null) {
+            int radius = io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession.serverViewDistance() - 2;
+            int pcx = mc.player.getBlockX() >> 4;
+            int pcz = mc.player.getBlockZ() >> 4;
+            for (int z = -64; z <= 704; z += 8) {
+                for (int x : new int[]{-4, 4}) {
+                    if (radius < 0 || Math.max(Math.abs((x >> 4) - pcx), Math.abs((z >> 4) - pcz)) > radius) continue;
+                    for (int part = 0; part < 3; part++) {
+                        if (part == 1 && (z < 0 || z > 192)) continue;
+                        if (part == 2 && (z < 256 || z > 512)) continue;
+                        int bx = part == 2 ? (x < 0 ? -5 : 5) : x;
+                        int y = part == 0 ? 297 : part == 1 ? 302 : 300;
+                        var expected = part == 0 ? net.minecraft.world.level.block.Blocks.QUARTZ_BLOCK
+                                : part == 1 ? net.minecraft.world.level.block.Blocks.OAK_PLANKS
+                                : net.minecraft.world.level.block.Blocks.STONE;
+                        var pos = new net.minecraft.core.BlockPos(bx, y, z);
+                        var actual = mc.level.getBlockState(pos);
+                        sampled++;
+                        if (!actual.is(expected)) {
+                            mismatches++;
+                            if (firstMismatch == null) firstMismatch = bx + "," + y + "," + z + ": " + actual;
+                        }
+                    }
+                }
+            }
+        }
+        sb.append("  \"lightFixture\": {\n");
+        field(sb, "sampled", sampled);
+        field(sb, "mismatches", mismatches);
+        sb.append("    \"firstMismatch\": ").append(firstMismatch == null ? "null" : jsonString(firstMismatch)).append(",\n");
+        field(sb, "movementSamples", movementSamples);
+        field(sb, "movementFloorMissing", movementFloorMissing);
+        field(sb, "movementSkyLeaks", movementSkyLeaks);
+        field(sb, "movementDarkSources", movementDarkSources);
+        lastField(sb, "movementFirstMismatch", movementFirstMismatch);
         sb.append("  },\n");
     }
 
@@ -461,6 +579,12 @@ public final class SmokeProbeWriter {
         appendTraceStage(sb, "shadowReady", trace.shadowReady(), true);
         appendTraceStage(sb, "clientApplied", trace.clientApplied(), true);
         appendTraceStage(sb, "meshCompiled", trace.meshCompiled(), true);
+        appendTraceStage(sb, "ovdGenerated",
+                io.github.limuqy.mc.hassium.shadow.light.SmokeChunkTrace.ovdGenerated(dimension), true);
+        appendTraceStage(sb, "ovdGeneratedApplied",
+                io.github.limuqy.mc.hassium.shadow.light.SmokeChunkTrace.ovdGeneratedApplied(dimension), true);
+        field(sb, "serverViewDistance", io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession.serverViewDistance());
+        field(sb, "effectiveClientVD", io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession.effectiveClientVD());
         appendTraceStage(sb, "receivedNotInjected", trace.receivedNotInjected(), true);
         appendTraceStage(sb, "injectedNotReady", trace.injectedNotReady(), true);
         appendTraceStage(sb, "readyNotApplied", trace.readyNotApplied(), true);

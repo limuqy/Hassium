@@ -129,6 +129,12 @@ public class MixinChunkMap {
         }
         // S2：禁止有盘/有注入 Imposter 同步短路。始终悬置 future + Provider 异步 acquire
         //（始终 compare/FULL）。SeedGen 门控开且 worldgen 允许时不压制，走原版生成链。
+        LevelChunk retained = ((ShadowSeedServer) level.getServer()).injectedChunk(
+                hassium$shadowDimension(), pos.x, pos.z);
+        if (retained != null) {
+            cir.setReturnValue(CompletableFuture.completedFuture(Either.left(ShadowChunkMapCompat.asImposter(retained))));
+            return;
+        }
         if (ShadowChunkMapCompat.isWorldgenAllowed()
                 || io.github.limuqy.mc.hassium.shadow.server.SeedGenExecutor.getInstance()
                         .isGenerationGateOpen()) {
@@ -151,6 +157,13 @@ public class MixinChunkMap {
     private void hassium$shortCircuitInjectLoad(ChunkPos pos,
             CallbackInfoReturnable<CompletableFuture<ChunkAccess>> cir) {
         if (!(level.getServer() instanceof ShadowSeedServer) || pos == null) {
+            return;
+        }
+        // Retained authority data owns the engine layers even while worldgen is enabled.
+        LevelChunk retained = ((ShadowSeedServer) level.getServer()).injectedChunk(
+                hassium$shadowDimension(), pos.x, pos.z);
+        if (retained != null) {
+            cir.setReturnValue(ShadowChunkMapCompat.completedImposter(retained));
             return;
         }
         if (ShadowChunkMapCompat.isWorldgenAllowed()

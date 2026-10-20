@@ -183,6 +183,7 @@ public final class ShadowTrackingSession {
     private final java.util.Map<Long, Long> ovdMissRetryAt =
             new java.util.concurrent.ConcurrentHashMap<>();
     private long lastOvdSweepMs;
+    private int authorityViewDistance;
 
 
     private ShadowTrackingSession() {}
@@ -434,8 +435,8 @@ public final class ShadowTrackingSession {
                 }
             }
         }
-        sweepOvdRing(shadow, now);
         drainAuthorityAcquires(shadow, now);
+        sweepOvdRing(shadow, now);
         VanillaAlignedChunkProvider.drainPendingPulls();
     }
 
@@ -538,9 +539,9 @@ public final class ShadowTrackingSession {
                         .isAwaiting(currentDimension, pos)) {
                     continue;
                 }
-                // 本地基线尚未 compare：mark + 发请求（先清陈旧在途再发）
-                if (!ShadowLightCompute.hasClientApplyEpoch(currentDimension, pos)
-                        && isDeliverableToClient(pos.x, pos.z)) {
+                // OVD 已落客户端仍只是本地基线；进入权威窗必须 compare。
+                // applyEpoch 仅证明交付过，不能代替上面的 confirmed / networkIngress。
+                if (isDeliverableToClient(pos.x, pos.z)) {
                     io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
                             .mark(currentDimension, pos);
                     clearPullInFlight(currentDimension, pos);
@@ -554,7 +555,7 @@ public final class ShadowTrackingSession {
             if (SeedGenExecutor.getInstance().isGenerationGateOpen()
                     && !ShadowLightCompute.hasLocalPullBaseline(currentDimension, pos)) {
                 if (!SeedGenCompareGate.isAwaiting(currentDimension, pos)
-                        && submitLocalGeneration(shadow, currentDimension, pos, nowMs)) {
+                        && submitLocalGeneration(shadow, currentDimension, pos, nowMs, false)) {
                     submitted++;
                 }
                 continue;
@@ -842,18 +843,25 @@ public final class ShadowTrackingSession {
 
     /**
      * OVD 本地源（ticket2 影子驱动路径）：inject 为空时读影子 type126 盘。
-     * 无盘记 miss + 冷却；有盘 inject + renderOnly publish。禁止 pull / ovdLocalGeneration。
+     * 无盘且 SeedGen 门开时复用统一生成链；共享在途与并发额度，不另建队列。
+     * 门关或生成失败仅本地冷却重试，禁止 OVD 向真服 pull。
      */
     private void tryServeOvdLocal(ShadowSeedServer shadow, String dimension, int x, int z) {
         if (shadow == null || dimension == null) {
             return;
         }
         ChunkPos pos = new ChunkPos(x, z);
-        if (shadow.injectedChunk(dimension, x, z) != null) {
+        if (shadow.injectedChunk(dimension, x, z) != null || isPullInFlight(dimension, pos)) {
             return;
         }
         net.minecraft.world.level.chunk.LevelChunk chunk = shadow.loadFromDisk(dimension, pos);
         if (chunk == null) {
+            if (SeedGenExecutor.getInstance().isGenerationGateOpen()
+                    && !ShadowLightCompute.hasLocalPullBaseline(dimension, pos)) {
+                // 额度耗尽时留到下拍；不得抢占权威生成，也不得把排队等待记成缺盘失败。
+                submitLocalGeneration(shadow, dimension, pos, System.currentTimeMillis(), true);
+                return;
+            }
             ovdMissRetryAt.put(DimensionKey.key(dimension, x, z), System.currentTimeMillis() + 2_000L);
             ShadowChunkMapCompat.failSuspendedLoad(dimension, pos);
             if (recordOvdMissOnce(dimension, pos)) {
@@ -917,11 +925,36 @@ public final class ShadowTrackingSession {
             return;
         }
         boolean dimensionChanged = !state.dimension().equals(currentDimension);
+        ChunkPos previousCenter = trackingCenter;
+        int previousViewDistance = authorityViewDistance;
         currentDimension = state.dimension();
-        trackingCenter = new ChunkPos((int) state.x() >> 4, (int) state.z() >> 4);
+        trackingCenter = trackingPosition(state.x(), state.z());
+        authorityViewDistance = serverViewDistance;
         if (dimensionChanged) {
             onTrackingDimensionChanged(state);
+        } else if (previousCenter != null && previousViewDistance > 0
+                && (!previousCenter.equals(trackingCenter) || previousViewDistance != serverViewDistance)) {
+            refreshAuthorityEntries(previousCenter, previousViewDistance, trackingCenter, serverViewDistance);
         }
+    }
+
+    /** Keep resident OVD columns, but expire verdicts from before their current authority entry. */
+    void refreshAuthorityEntries(ChunkPos previous, int previousVD, ChunkPos next, int nextVD) {
+        int box = ChunkShapeCompat.boundingRadius(nextVD);
+        for (int x = next.x - box; x <= next.x + box; x++) {
+            for (int z = next.z - box; z <= next.z + box; z++) {
+                if (ChunkShapeCompat.contains(next.x, next.z, nextVD, x, z)
+                        && !ChunkShapeCompat.contains(previous.x, previous.z, previousVD, x, z)) {
+                    ShadowLightCompute.invalidateAuthorityEntry(currentDimension, new ChunkPos(x, z));
+                }
+            }
+        }
+        lastAuthorityAcquireMs = 0L;
+    }
+
+    /** 与原版区块坐标一致：负小数必须先 floor，不能先向零截断。 */
+    static ChunkPos trackingPosition(double x, double z) {
+        return new ChunkPos((int) Math.floor(x) >> 4, (int) Math.floor(z) >> 4);
     }
 
     /** 切维后清理旧维度的选柱、在途 pull 与探针状态。 */
@@ -931,7 +964,7 @@ public final class ShadowTrackingSession {
         ovdMissCounted.clear();
         ovdMissRetryAt.clear();
         lastOvdSweepMs = 0L;
-        homeChunk = new ChunkPos((int) state.x() >> 4, (int) state.z() >> 4);
+        homeChunk = trackingPosition(state.x(), state.z());
         lastChunkTickMs = 0L;
         SmokeChunkTrace.reset();
         client().resetMeshCompileLog();
@@ -1265,7 +1298,11 @@ public final class ShadowTrackingSession {
         // 落地的数据本身就是权威的 → compare 属于多余往返（R1 冷场实测 567 次）。
         // compare 的语义只应是「已有基线（盘缓存 / 本地生成 / 外圈进内圈）判断是否权威」。
         // 这类柱的交付由 tracking 泵的 authoritativeLocal 分支负责，此处直接返回。
-        if (ShadowLightCompute.wasNetworkIngressAccounted(dimension, pos)) {
+        if (ShadowLightCompute.wasNetworkIngressAccounted(dimension, pos)
+                || SeedGenCompareGate.isConfirmed(dimension, pos)) {
+            // Native holder completion can arrive after a DELTA/FULL verdict. Re-marking it here
+            // would block delivery while request-level dedup suppresses the supposed new compare.
+            // Entering the authority shape explicitly expires older OVD/halo confirmations.
             return;
         }
         {
@@ -1287,16 +1324,29 @@ public final class ShadowTrackingSession {
     }
 
     private boolean submitLocalGeneration(ShadowSeedServer shadow, String dimension, ChunkPos pos,
-                                          long nowMs) {
-        if (shadow.generationInFlight() >= ShadowSeedServer.generationMaxInFlight()
+                                          long nowMs, boolean ovd) {
+        // OVD 最多占共享容量的一半，权威域在两次 200ms 驱动之间仍有可用槽位。
+        int limit = ShadowSeedServer.generationMaxInFlight();
+        if (ovd) limit = Math.max(1, limit / 2);
+        if (shadow.generationInFlight() >= limit
                 || !markPullInFlight(dimension, pos, nowMs)) {
             return false;
         }
         shadow.generateChunkAsync(dimension, pos, (generatedDimension, chunk) -> {
+            // 旧实例/旧维度的回调不得清掉新会话同坐标的在途或把旧柱交付给新世界。
+            if (boundServer != shadow || !generatedDimension.equals(currentDimension)) {
+                return;
+            }
             if (chunk == null) {
                 clearPullInFlight(generatedDimension, pos);
                 SeedGenCompareGate.clear(generatedDimension, pos);
                 VanillaAlignedChunkProvider.failAcquire(generatedDimension, pos);
+                if (ovd) {
+                    ovdMissRetryAt.put(DimensionKey.key(generatedDimension, pos.x, pos.z),
+                            System.currentTimeMillis() + 2_000L);
+                    recordOvdMissOnce(generatedDimension, pos);
+                    return;
+                }
                 // 生成失败 ⇒ 权威回退属重试，先释放 compare 去重登记（否则该柱一次生成失败就永不回退）
                 ShadowPullClient.clearCompareRequested(generatedDimension, pos);
                 requestPullEligible(generatedDimension, pos, true);
@@ -1309,6 +1359,9 @@ public final class ShadowTrackingSession {
             // 置了 AWAITING（该闸无超时/无自愈）⇒ 泵的 `isAwaiting → continue` 与交付闸
             // 永久跳过本柱 = **玩家脚下中心空洞**（实测 seedGen 场 `seedGen compare requested`=0）。
             clearPullInFlight(generatedDimension, pos);
+            if (ovd) {
+                SmokeChunkTrace.recordOvdGenerated(generatedDimension, pos);
+            }
             onChunkMaterialized(generatedDimension, pos, chunk);
             VanillaAlignedChunkProvider.completeAcquire(generatedDimension, pos, chunk);
         });

@@ -58,6 +58,13 @@ public final class SeedGenCompareGate {
         return CONFIRMED.contains(DimensionKey.key(dimension, pos.x, pos.z));
     }
 
+    /** An OVD/halo verdict predates this authority entry; keep any actual request in flight. */
+    public static void forgetConfirmation(String dimension, ChunkPos pos) {
+        if (dimension != null && pos != null) {
+            CONFIRMED.remove(DimensionKey.key(dimension, pos.x, pos.z));
+        }
+    }
+
     public static boolean isAwaiting(String dimension, ChunkPos pos) {
         if (dimension == null || pos == null) {
             return false;

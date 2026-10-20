@@ -19,6 +19,9 @@ import java.util.concurrent.CompletableFuture;
 @Mixin(net.minecraft.server.level.ChunkMap.class)
 public interface ChunkMapAccessor {
 
+    @org.spongepowered.asm.mixin.gen.Accessor("level")
+    net.minecraft.server.level.ServerLevel hassium$getLevel();
+
     /** POI 管理器（影子端 region 文件刷新链用；全版本字段名一致）。 */
     @org.spongepowered.asm.mixin.gen.Accessor("poiManager")
     net.minecraft.world.entity.ai.village.poi.PoiManager hassium$getPoiManager();

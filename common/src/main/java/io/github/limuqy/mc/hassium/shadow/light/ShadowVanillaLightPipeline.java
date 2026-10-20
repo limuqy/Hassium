@@ -41,6 +41,12 @@ public final class ShadowVanillaLightPipeline {
         if (pos == null || packet == null) {
             return;
         }
+        if (origin == TraceOrigin.REMOTE_PULL) {
+            // A FULL verdict means the retained baseline differs. The light-only reuse shortcut
+            // cannot discard that content; serialize its replacement with the existing consumer.
+            ShadowLightCompute.submitVisible(dimension, pos, packet, origin);
+            return;
+        }
         ShadowSeedServer server = ShadowServerRegistry.getInstance().getOrCreate();
         if (server == null) {
             if (shouldFailShadowWhenServerUnavailable()) {

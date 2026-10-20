@@ -40,7 +40,7 @@
 | `chunk.sectionDeltaEnabled` | `true` | 是否启用分段增量（服务端规划 + 客户端应用） |
 | `chunk.maxChunksPerFrame` | `6` | 每 tick 缓存读取生产上限（影子入队 + 影子读盘；主线程消费只受时间预算） |
 | `chunk.mainThreadChunkBudgetMs` | `15` | 主线程 apply 预算（ms） |
-| `chunk.seedGenEnabled` | `false` | 是否启用 SeedGen（本地生成 pristine 区块；需双端同版本，默认关）。服务端开启时会下发世界种子 |
+| `chunk.seedGenEnabled` | `false` | 是否启用 SeedGen（本地生成区块基线及 OVD 缺盘区块；需双端同版本，默认关）。服务端开启时会下发世界种子 |
 | `chunk.viewDistanceExtensionEnabled` | `true` | 超视渲染 OVD（影子双窗：clientRD>serverVD 时本地源回填环带） |
 | `chunk.maxRenderDistance` | `16` | 超视渲染 effective clientRD 上限 |
 
@@ -134,7 +134,7 @@
 | `chunk.ovdUnloadDelaySecs` | 1 | 超视延迟卸载取消（双窗重做不恢复） |
 | `chunk.viewDistanceExtensionEnabled` / `maxRenderDistance` | — | **已恢复**（2026-09 影子双窗 OVD），见 A1 |
 | `chunk.lightHaloRadius` | 1 | 光照光环固定一环，补邻作为内部正确性约束；旧值忽略并按 schema 清理 |
-| `chunk.ovdLocalGeneration` | 1 | OVD 窗本地生成退役删除（OVD 回填只读本地已有数据） |
+| `chunk.ovdLocalGeneration` | 1 | 旧独立开关删除；OVD 缺盘生成已于 2026-10-20 复用双端 seedGenEnabled 恢复 |
 | `chunk.hassiumEngineEnabled` | 1 | 影子端与 `chunk.enabled` 合并（单一区块核心开关） |
 | `chunk.unloadDelaySecs` / `chunk.compressionLevel` | 2 | 影子端自身 unload 语义承担；客户端压缩等级并入通道压缩 |
 | `storage.mode` | 1 | 存档格式单一化（type 126） |

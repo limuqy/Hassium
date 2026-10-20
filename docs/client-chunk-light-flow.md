@@ -184,7 +184,7 @@ regression=15）。删除后若出现「客户端停在 standing 首包欠光（
 | S3 ✅ | **接上光环**：内部常量 `ShadowPullRadii.LIGHT_HALO_RADIUS=1`（2026-10-20 删除配置项，固定一环），计算域 = 权威形状的**切比雪夫膨胀**（`containsDilated`），单点 `isInComputeDomain`：acquire 枚举 / pull 门 / 注入表保留域 / **齐套门等待窗** → 修 P1 + P3 |
 | S3b ✅ | **交付域收到 `serverVD`**（删 `DELIVER_VIEW_MARGIN_CHUNKS=4`）→ 交付集 = 权威集，**光环只算不交付**；OVD 带独立放行 → 修 P2 |
 | S4 ✅ | **域分组排序**：3×3 平铺域，同域连片、组间按最近柱距离；落在 acquire 侧 + `drainPendingPulls` 真 C2S 出口。200ms + 预算 + 「每轮重扫全窗」语义不变 |
-| S5 ✅ | **缺邻不落盘**：3×3 不齐（**含窗外邻柱**）不标 `isLightCorrect`；迟到重触发判据与落盘判据同口径。形式复用原版 `isLightOn`（`ThreadedLevelLightEngine.lightChunk` 入口清假、引擎跑完才置真） |
+| S5 ✅ | **缺邻不落盘**：3×3 不齐（**含窗外邻柱**）不标 `isLightCorrect`；迟到重触发只要求窗内邻柱已 INITIALIZE；落盘要求 3×3 真齐（含窗外邻柱），两者口径刻意不同。形式复用原版 `isLightOn`（`ThreadedLevelLightEngine.lightChunk` 入口清假、引擎跑完才置真） |
 
 **关键语义**：I2 **不门控交付**。降级柱照常下发（不交付会在客户端留空洞，比偏暗更显眼），
 登记后由 S2c 重算覆盖。I2 只决定「这份光能否被标为正确并永久复用」。
@@ -202,6 +202,16 @@ regression=15）。删除后若出现「客户端停在 standing 首包欠光（
 观测：`lightProbe.pendingAuthRegistered` / `pendingAuthRelight`（`roundN.json`）；
 `stallSnapshot()` 的 `pendingAuth=N`；`[SHADOW_TRACK] authority-acquire ... halo=` /
 `enqueue out-of-window reclaim ... halo=`；`[LIGHT_GATE] Promote ... outsideWindow=`。
-**运行时行为尚未验证**（S3b/S5 只做了编译 + L0 单测）。
+2026-09-19 当时仅完成编译与 L0；2026-10-20 的 OVD 冷场、移动往返和重连数据验收见 §8.2。
 
 
+
+### 8.2 OVD 内容更正与邻柱快照（2026-10-20）
+
+OVD 缺盘复用统一生成链。进入权威窗后必须重新 compare；已存在 OVD 的 client apply epoch 不能代替权威确认，迟到的原版 holder 完成回调也不能把已回答的 compare 重新置为 AWAITING。
+
+FULL 使用响应的最新内容快照与随队列项保存的 hash；FULL/DELTA 都等同柱旧光照及实际 pack/offer 结束后再替换。DELTA 离线复制换节，保留旧光值并逐变更格 checkBlock，传播递减后重过 INITIALIZE / 3×3 齐套 / LIGHT，不能直接清层后只增加光源。原版临时 holder 卸载不清仍在 injected 表内的光，实际摘表时才释放。
+
+**clean epoch 记在 Promote，早于 LIGHT 与打包，不能证明邻柱快照已包含本次内容更正。** FULL/DELTA 更正结束后，把相邻柱的光标脏，在已有 generated 消费队列中合并一次重算与整柱重交付；即使邻柱旧工作尚忙也不能漏掉后续刷新。同柱屏障持续到影子主循环实际打包完成。降级修复事件仍采用原来的有界 epoch 规则；内容更正的单跳刷新不恢复 section 级光桥，也不增加独立生成队列。
+
+验收先数据后目视：master `26.3_neoforge_I_ovdlight19_20261020` 与 2.0.0 `1.20.1_forge_I_ovdlight20_20261020` 均完成冷缓存去程、重连回程，逐 tick 缺块/漏光/暗光源为 0；导出双端屋檐天空光全为 6，洞内全为 0，两光源中心方块光为 10。用户随后目视确认“我肉眼看也没有异常光照了”。坐标与强度导出命令和完整证据见 [OVD 恢复交接](handoff/handoff-2026-10-20-ovd-local-generation.md)。

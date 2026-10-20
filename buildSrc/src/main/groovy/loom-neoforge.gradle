@@ -76,9 +76,13 @@ loom {
             if (project.hasProperty('hassiumSmokeTest') && project.property('hassiumSmokeTest').toString() == 'true') {
                 programArguments.add('nogui')
                 def phases = project.findProperty('hassiumSmokePhases') ?: 'classic'
-                // 服务端冒烟：启动 VD=20，玩家退出后切 VD=8
+                def vd1 = project.findProperty('hassiumSmokeVd1') ?: '20'
+                def vd2 = project.findProperty('hassiumSmokeVd2') ?: '10'
+                // 服务端冒烟：透传脚本指定的两轮视距
                 jvmArguments.addAll([
                         "-Dhassium.serverSmokeTest=true",
+                        "-Dhassium.serverSmokeTest.vd1=${vd1}",
+                        "-Dhassium.serverSmokeTest.vd2=${vd2}",
                         "-Dhassium.smokePhases=${phases}"
                 ])
                 // T7/T8 场景引擎服务端侧：harness 传 -PhassiumServerSmokeScenario=<name> 时

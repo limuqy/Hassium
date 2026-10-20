@@ -1,0 +1,14 @@
+# 冷场 OVD 缺盘生成：VD4 / clientRD8；不经服务端获取外圈内容。
+# 复用 SeedGen 门控、统一生成入口与并发额度。脚本清双端世界/缓存。
+# analyzer 额外核对：光环之外的 OVD 生成坐标实际驻留，且没有网络内容来源。
+join label=WAIT_JOIN_1 since=start timeoutMs=${joinTimeoutMs}
+# 固定到负数区块边界的小数坐标，回归旧扫描中心向零截断导致漏整列。
+wait ms=1000
+command text="tp @s -32.5 100 0.5 0 0"
+wait ms=${round1WaitMs}
+dump label=ROUND1 round=1
+assertProbe key=stats.clientLandedChunkCount op=gt value=0
+assertProbe key=trace.ovdGenerated op=gt value=0
+assertProbe key=trace.ovdGeneratedApplied op=gt value=0
+assertProbe key=counters.clientDarkRegressionChunks op=eq value=0
+exit rounds=1

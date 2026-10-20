@@ -185,6 +185,9 @@ public final class ShadowServerRegistry {
                 return null;
             }
             if (!canUseShadow()) return null;
+            // 上方等待与进入 lock 之间，其他线程可能刚拆下旧实例。
+            // 关停未完成就留给下一次驱动重试，不能抢开同一个世界目录。
+            if (!previousShutdownComplete) return null;
             long seed = client().getServerSeed();
             long createStartNs = System.nanoTime();
             DebugLogger.info(DebugLogger.LogType.ASYNC,
@@ -564,6 +567,7 @@ public final class ShadowServerRegistry {
     void shutdown(boolean preserveLoginPermit) {
         final ShadowSeedServer s;
         final java.util.concurrent.CompletableFuture<Void> previous;
+        final java.util.concurrent.CompletableFuture<Void> future;
         synchronized (lock) {
             traceLifecycle("shutdown detach");
             s = server;
@@ -580,12 +584,12 @@ public final class ShadowServerRegistry {
                 return;
             }
             previousShutdownComplete = false;
+            future = new java.util.concurrent.CompletableFuture<>();
+            shutdownFuture = future;
+            previousShutdownFuture = future;
             client().setShadowServerReady(false);
         }
         DebugLogger.info(DebugLogger.LogType.ASYNC, "[SHADOW] Shutting down shadow server (async save)");
-        java.util.concurrent.CompletableFuture<Void> future = new java.util.concurrent.CompletableFuture<>();
-        shutdownFuture = future;
-        previousShutdownFuture = future;
         Thread saver = new Thread(() -> {
             boolean saveAllowed = true;
             try {
@@ -663,13 +667,11 @@ public final class ShadowServerRegistry {
     }
 
     /**
-     * 有界等待上次关停 saveAll 完成，超时继续创建。
+     * 有界等待上次关停完成；超时由下一次驱动重试创建。
      * <p>
      * 上界 {@link #PREVIOUS_SHUTDOWN_WAIT_MS}：本方法在 {@link #getOrCreate()} 的调用线程上跑，
      * 而该线程可能是渲染/主线程，故只给秒级（saver 侧等上一次关停仍是 30s 上界——那是后台线程，
-     * 不冻游戏）。超时不是致命：{@code ShadowSeedServer.canWriteStorage()} 要求
-     * {@link #isPreviousShutdownComplete()}，R2 的写盘会一直被挡到上次关停真正结束，不会并发写
-     * 同一存档目录。
+     * 不冻游戏）。进入创建临界区后仍须复判，避免等待返回后才开始的关停与新建争抢目录锁。
      */
     private static void awaitPreviousShutdownComplete() {
         final long startMs = System.currentTimeMillis();
@@ -677,8 +679,8 @@ public final class ShadowServerRegistry {
         while (!ShadowServerRegistry.getInstance().isPreviousShutdownComplete()) {
             if (System.currentTimeMillis() > deadline) {
                 // 无条件输出：这条是「重进静默卡顿」唯一的现场证据，不得受 debug 门控
-                Constants.LOG.warn("Hassium: Previous shadow shutdown not complete in {}ms; creating "
-                                + "shadow server anyway (writes stay gated until it finishes)",
+                Constants.LOG.warn("Hassium: Previous shadow shutdown not complete in {}ms; deferring "
+                                + "shadow creation until its resources are closed",
                         PREVIOUS_SHUTDOWN_WAIT_MS);
                 return;
             }
