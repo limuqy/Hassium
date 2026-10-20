@@ -8,7 +8,7 @@ public class Constants {
 	public static final String MOD_ID = "hassium";
 	public static final String MOD_NAME = "Hassium";
 	// review-fix: T8-M3: 与 gradle.properties mod_version 同步（握手线/打包版本标识）
-	public static final String MOD_VERSION = "3.0.1";
+	public static final String MOD_VERSION = "3.0.3";
 	public static final Logger LOG = LoggerFactory.getLogger(MOD_NAME);
 
 	/**

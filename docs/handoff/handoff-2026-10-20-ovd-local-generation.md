@@ -78,3 +78,9 @@ community-* 中无 Minecraft 项目；仅在 XERJ 参考目录加载 [Johni0702/
 - `1.20.1_forge_I_ovdlight20_20261020`：640/641 次连续采样，导出 471/471 个去重坐标；双端屋檐天光范围 [6,6]、洞内 [0,0]，光源中心方块光 10；全部异常数为 0，数值 PASS。
 - 两线最新 R1 探针另外复核 `_check_ovd_generation_probe`：完整 OVD 外圈已应用并驻留、无网络内容来源，均无失败项；R2 是读盘回程，不要求重新生成。
 - 用户在两线数值通过后确认目视无异常（原话：“我肉眼看也没有异常光照了”）。此确认作为最终目视验收记录；不把先前失败轮的截图或旧自动门禁冒充目视通过。
+
+## 验收后的补丁升版（2026-10-20）
+
+用户要求升一个小版本，两条维护线分别从 3.0.2 升到 **3.0.3**、2.1.2 升到 **2.1.3**。同步 `gradle.properties` 的 `mod_version` 与 `Constants.MOD_VERSION`（运行时常量此前仍为 3.0.1 / 2.1.1），加载器元数据继续由现有 Gradle `processResources` 展开。对应修复提交为 master `921efae6`、2.0.0 `1ec84336`；OVD 与光照验收证据沿用上述记录。
+
+升版验证通过：26.3 与 1.20.1 的 `common:compileJava` 成功，编译后的 Constants.class 分别包含 3.0.3 / 2.1.3；26.3 Fabric/NeoForge、1.20.1 Fabric/Forge 与 1.21.11 NeoForge 的资源展开版本逐项核对一致。日志为 `build/version-3_0_3-check.log`、旧线 `build/version-2_1_3-check.log` 及 `build/version-2_1_3-neoforge-resources.log`。
