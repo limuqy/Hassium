@@ -181,7 +181,7 @@ regression=15）。删除后若出现「客户端停在 standing 首包欠光（
 | S1 ✅ | 交付出口收敛：B 族官方包并入 `ready` 队列，唯一出口 `ready → drainReady → applyReadyChunk` |
 | S2 ✅ | **I2 判据**：`wasPromotedClean`（promote 时窗内 8 邻全过 INITIALIZE）→ `isColumnLightAuthoritative`；`ShadowSeedServer.syncLightCorrect` 为唯一收口，非权威柱**扣下 `isLightCorrect`**（不落盘 → 不复用） |
 | S2c ✅ | **迟到重触发**：非权威柱登记 `pendingAuthoritative`；任一柱 LIGHT 完成时复查其 3×3，邻域就绪（`isNeighborhoodLightReady`）→ `rearm` 重入齐套门 → 干净放行 → LIGHT → **重交付** |
-| S3 ✅ | **接上光环**：新键 `chunk.lightHaloRadius`（默认 1，钳 `[0,1]`），计算域 = 权威形状的**切比雪夫膨胀**（`containsDilated`），单点 `isInComputeDomain`：acquire 枚举 / pull 门 / 注入表保留域 / **齐套门等待窗** → 修 P1 + P3 |
+| S3 ✅ | **接上光环**：内部常量 `ShadowPullRadii.LIGHT_HALO_RADIUS=1`（2026-10-20 删除配置项，固定一环），计算域 = 权威形状的**切比雪夫膨胀**（`containsDilated`），单点 `isInComputeDomain`：acquire 枚举 / pull 门 / 注入表保留域 / **齐套门等待窗** → 修 P1 + P3 |
 | S3b ✅ | **交付域收到 `serverVD`**（删 `DELIVER_VIEW_MARGIN_CHUNKS=4`）→ 交付集 = 权威集，**光环只算不交付**；OVD 带独立放行 → 修 P2 |
 | S4 ✅ | **域分组排序**：3×3 平铺域，同域连片、组间按最近柱距离；落在 acquire 侧 + `drainPendingPulls` 真 C2S 出口。200ms + 预算 + 「每轮重扫全窗」语义不变 |
 | S5 ✅ | **缺邻不落盘**：3×3 不齐（**含窗外邻柱**）不标 `isLightCorrect`；迟到重触发判据与落盘判据同口径。形式复用原版 `isLightOn`（`ThreadedLevelLightEngine.lightChunk` 入口清假、引擎跑完才置真） |

@@ -20,14 +20,14 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * T4 config-restructure 一次性 round-trip 验证（.omp/workflows/config-restructure）。
  * <p>
  * 验证点（对照 work/key-mapping.md；网关拓扑退役波后更新）：
- * 1. defaults 生成 54 键，前缀分布 17/17/16/2/2
+ * 1. defaults 生成 54 键，前缀分布 chunk=16/master=17/debug=17/storage=2/compat=2
  * 2. client/server toml 写读 round-trip（含全部新键组）
  * 3. 新键可加载抽查（chunk.seedGenEnabled 双端 / master.* 聚合键族）
  * 4. 删键（recoveryFreeze / controlStallMs / failoverExpiryMs / storage.mode / chunk.loadThreads /
  *    网关监听/鉴权/控制面端点/L1 迁移/续流票据/dataplane.*）不再出现在写出的 toml
  * 5. 默认值语义抽查 ≥5 键对照 key-mapping.md
  * <p>
- * 复跑：sh gradlew --no-daemon common:test --tests ConfigRestructureRoundTripTest
+ * 复跑：./gradlew common:test --tests ConfigRestructureRoundTripTest
  */
 class ConfigRestructureRoundTripTest {
 
@@ -39,23 +39,23 @@ class ConfigRestructureRoundTripTest {
                     "migrationHeartbeatIntervalMs", "migrationIdleWindowMs", "migrationSilentTimeoutMs",
                     "migrationFaultTimeoutMs", "migrationPrewarmTtlMs", "resumeTicketTtlMs",
                     "bindHost", "authToken", "controlReachableEndpoints", "udpListeners",
-                    "seedGenThreads", "serverChunkPushThreads");
+                    "seedGenThreads", "serverChunkPushThreads", "lightHaloRadius");
 
-    // === 1. defaults 生成：53 键齐全 ===
+    // === 1. defaults 生成：54 键齐全 ===
 
     @Test
-    void defaultsCoverAll78NewKeys() {
+    void defaultsCoverAllSchemaKeys() {
         ConfigValues values = ConfigValues.defaults(ConfigSchema.entries());
         Map<String, ConfigEntry<?>> byPath = ConfigSchema.entries().stream()
                 .collect(Collectors.toMap(e -> e.scope() + "/" + e.path(), Function.identity()));
 
-        assertEquals(55, ConfigSchema.entries().size(), "schema 留存键数");
-        assertEquals(55, values.asMap().size(), "defaults 键数");
+        assertEquals(54, ConfigSchema.entries().size(), "schema 留存键数");
+        assertEquals(54, values.asMap().size(), "defaults 键数");
 
         Map<String, Long> prefixCounts = ConfigSchema.entries().stream()
                 .collect(Collectors.groupingBy(e -> e.path().substring(0, e.path().indexOf('.') + 1),
                         Collectors.counting()));
-        assertEquals(Map.of("chunk.", 17L, "master.", 17L, "debug.", 17L,
+        assertEquals(Map.of("chunk.", 16L, "master.", 17L, "debug.", 17L,
                 "storage.", 2L, "compat.", 2L), prefixCounts);
 
         // 双端同名键 chunk.seedGenEnabled 各一
@@ -79,7 +79,7 @@ class ConfigRestructureRoundTripTest {
     void clientTomlRoundTripsNewKeys(@TempDir Path root) throws IOException {
         HassiumConfig.ChunkCoreConfig chunk = new HassiumConfig.ChunkCoreConfig(
                 true, 8192, 0.5, 0.8, 0.2, 1200, 1024, 200,
-                true, true, 16, 2, 12, 30, true, true);
+                true, true, 16, 12, 30, true, true);
         HassiumConfig.DebugConfig debug = new HassiumConfig.DebugConfig(
                 // 末位 exportAggregatedPackets 为 SERVER 键：client.toml 不承载，保持默认 false 才能读回相等
                 true, false, true, false, true, false, true, true, true, true, false, false);
@@ -103,6 +103,24 @@ class ConfigRestructureRoundTripTest {
                 "client.toml 不应再写 master.controlReachableEndpoints:\n" + toml);
     }
 
+    @Test
+    void legacyLightHaloSettingIsIgnoredAndPurged(@TempDir Path root) throws IOException {
+        Path client = root.resolve("hassium/hassium-client.toml");
+        Files.createDirectories(client.getParent());
+        Files.writeString(client, """
+                [chunk]
+                lightHaloRadius = 0
+                enabled = false
+                maxRenderDistance = 32
+                """);
+        HassiumConfig loaded = FabricTomlConfigIO.loadClient(root);
+        assertFalse(loaded.chunk().enabled(), "旧键不得影响其他客户端设置的读取");
+        assertEquals(32, loaded.chunk().maxRenderDistance());
+        FabricTomlConfigIO.saveClient(root, loaded);
+        assertFalse(Files.readString(client).contains("lightHaloRadius"), "保存时清除旧光环配置键");
+        assertEquals(loaded, FabricTomlConfigIO.loadClient(root), "清除旧键后其他设置保持不变");
+    }
+
     // === 2+3. server toml round-trip（master./storage./compat./chunk.lightStrip）===
 
     @Test
@@ -115,7 +133,7 @@ class ConfigRestructureRoundTripTest {
         // server toml 只写 chunk.lightStrip/chunk.seedGenEnabled 两键，其余键读回默认 → 仅改这两键
         HassiumConfig.ChunkCoreConfig chunk = new HassiumConfig.ChunkCoreConfig(
                 true, 4096, 0.3, 0.7, 0.3, 6000, 0, 100,
-                true, true, 16, 1, 6, 15, false, false);
+                true, true, 16, 6, 15, false, false);
         HassiumConfig.CompatConfig compat = new HassiumConfig.CompatConfig(true, false);
         HassiumConfig.DebugConfig debug = new HassiumConfig.DebugConfig(
                 false, true, false, true, false, true, false, false, false, false, true, true);
@@ -161,7 +179,7 @@ class ConfigRestructureRoundTripTest {
         // lightStrip 为 SERVER 键：client 写读不得落盘/读回（默认 true 保持）
         HassiumConfig.ChunkCoreConfig chunk = new HassiumConfig.ChunkCoreConfig(
                 true, 4096, 0.3, 0.7, 0.3, 6000, 0, 100,
-                true, true, 16, 1, 6, 15, false, false);
+                true, true, 16, 6, 15, false, false);
         HassiumConfig original = new HassiumConfig(
                 HassiumConfig.StorageConfig.DEFAULT, chunk,
                 HassiumConfig.MasterCoreConfig.DEFAULT, HassiumConfig.CompatConfig.DEFAULT,

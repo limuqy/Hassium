@@ -385,10 +385,17 @@ archive/pre-baseline = 当前 HEAD 的引用（1.20.1–1.21.10 完整历史后�
 - 26.3 两加载器分别排除 Cloth 运行依赖后正常启动：Fabric 配置入口安全返回，NeoForge 不注册配置按钮；两场正常退出，加上六场 GUI 共八场退出码 0。
 - 清理停用 GUI、返回 null、Cloth 内嵌和覆盖服务端字段等过时说明；完整验证与初次资源缺失失败记录见 [GUI 交接](handoff/handoff-2026-10-20-cloth-config-gui.md)。
 
+### 2026-10-20 固定一环光照光环
+
+- 用户要求删除 `chunk.lightHaloRadius` 配置并同步 `2.0.0`。两线已删除 schema、快照、TOML 读写、GUI 透传与翻译，计算域直接使用内部常量 `LIGHT_HALO_RADIUS=1`；旧值不再读取，残留键由既有 schema 清理机制处理。
+- 保留形状切比雪夫膨胀、3×3 齐套门、落盘/重触发判据和客户端算光完成推送门。当前 schema 为 54 键（CLIENT 25 / SERVER 29）。
+- 三个 26.x 锚点与七个 2.x 编译锚点共 4,658 项 Java 测试、24 个 loader 编译组合、版本边界扫描及 90 项 analyzer 测试通过。未重跑游戏/GUI/移动光照冒烟；按用户要求分别本地提交到 master / 2.0.0，未推送或发布。详见 [固定光环交接](handoff/handoff-2026-10-20-fixed-light-halo.md)。
+
 ## 9. 进度表（滚动更新，收工必更）
 
 | 阶段 | 任务 | 状态 | 会话备注 |
 |------|------|------|----------|
+| 维护 | 删除光环配置并同步 2.0.0 | ✅ 修改、验证与本地提交完成 | 2026-10-20：内部固定一环，10 锚点 / 24 loader 编译 / 4,658 项 Java 测试及两线边界扫描通过；90 项 analyzer 测试通过，保留算光门控；本次未重跑游戏；两分支分别本地提交，未推送。见固定光环交接 |
 | ① | forge/ + loom-forge.gradle 删除 | ✅ 完成 | 2026-09-30；含 mods.toml/ServiceLoader/mixins 元数据 |
 | ① | settings/buildSrc/脚本/发布 map forge 条目 | ✅ 完成 | 含 SRG 预检整段删除；batch 锚点改 1.20.1 fabric |
 | ① | versionProperties builds_for 去 forge | ✅ 完成 | 1.20.1→fabric；11 文件含死键清理 |

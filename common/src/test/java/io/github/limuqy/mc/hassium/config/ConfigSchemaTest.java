@@ -43,7 +43,7 @@ class ConfigSchemaTest {
                 "master.migrationPrewarmTtlMs", "master.resumeTicketTtlMs",
                 "dataplane.enabled", "dataplane.udpListeners",
                 "chunk.seedGenThreads", "master.serverChunkPushThreads",
-                "chunk.ovdLocalGeneration"
+                "chunk.ovdLocalGeneration", "chunk.lightHaloRadius"
         };
         for (String path : retiredPaths) {
             assertTrue(ConfigSchema.entries().stream().noneMatch(e -> e.path().equals(path)),
