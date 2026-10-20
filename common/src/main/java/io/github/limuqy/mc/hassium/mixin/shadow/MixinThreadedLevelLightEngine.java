@@ -10,19 +10,24 @@ import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
-/**
- * 诊断（{@code debug.lightVerify} 门控，只打点、零行为改动）：统计每柱
- * {@code ThreadedLevelLightEngine.lightChunk(ChunkAccess, boolean)} 的调用次数与调用面。
- * <p>
- * 目的：判定注入柱是否被**双写光引擎**——原版 holder 的 {@code ChunkStatus.LIGHT} 任务
- * （经 {@code completeSuspendedLoad} 的 ImposterProtoChunk）与 Hassium 自建屏障
- * （{@code ShadowLightCompute.startLightBarrier} 在 native clone 上）是否对同一柱各跑一次。
- * 若同柱出现两次且 {@code class=} 不同，即双写实锤（两个写者交错 → 终态不确定）。
- * <p>
- * 关闭门控时第一行即返回。
- */
+/** Shadow injected columns retain their light after the temporary worldgen holder unloads. */
 @Mixin(ThreadedLevelLightEngine.class)
 public class MixinThreadedLevelLightEngine {
+    @org.spongepowered.asm.mixin.Shadow @org.spongepowered.asm.mixin.Final
+    private net.minecraft.server.level.ChunkMap chunkMap;
+
+    @Inject(method = "updateChunkStatus", at = @At("HEAD"), cancellable = true)
+    private void hassium$retainInjectedLight(ChunkPos pos,
+            org.spongepowered.asm.mixin.injection.callback.CallbackInfo ci) {
+        var level = ((ChunkMapAccessor) chunkMap).hassium$getLevel();
+        if (level.getServer() instanceof io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer shadow
+                && shadow.injectedChunk(io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer.dimensionId(level), pos.x(), pos.z()) != null) {
+            DebugLogger.info(DebugLogger.LogType.LIGHT,
+                    "[SHADOW_LIGHT] retain injected light after native holder unload ({}, {})", pos.x(), pos.z());
+            ci.cancel();
+        }
+    }
+
 
     @Inject(method = "lightChunk(Lnet/minecraft/world/level/chunk/ChunkAccess;Z)"
                     + "Ljava/util/concurrent/CompletableFuture;",

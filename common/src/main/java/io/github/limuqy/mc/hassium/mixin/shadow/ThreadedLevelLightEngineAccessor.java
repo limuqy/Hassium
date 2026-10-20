@@ -15,6 +15,9 @@ import org.spongepowered.asm.mixin.gen.Accessor;
 @Mixin(ThreadedLevelLightEngine.class)
 public interface ThreadedLevelLightEngineAccessor {
 
+    @org.spongepowered.asm.mixin.gen.Invoker("updateChunkStatus")
+    void hassium$releaseChunkLight(net.minecraft.world.level.ChunkPos pos);
+
     @Accessor("lightTasks")
     ObjectList<?> hassium$getLightTasks();
 }

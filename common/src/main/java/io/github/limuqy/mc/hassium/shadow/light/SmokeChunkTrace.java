@@ -34,6 +34,8 @@ public final class SmokeChunkTrace {
     private static final Set<Long> SHADOW_READY = newTraceSet();
     private static final Set<Long> CLIENT_APPLIED = newTraceSet();
     private static final Set<Long> MESH_COMPILED = newTraceSet();
+    /** 仅记录 OVD 缺盘后由统一生成入口成功完成的目标柱，排除权威窗生成与缓存回放。 */
+    private static final Set<Long> OVD_GENERATED = newTraceSet();
     private static final ConcurrentHashMap<Long, Long> NETWORK_RECEIVED_AT_MS = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<Long, Long> CLIENT_APPLIED_AT_MS = new ConcurrentHashMap<>();
     /** 本地 worldgen 起点（chunk 复合键 → ns）；放行原版生成时登记。 */
@@ -124,6 +126,21 @@ public final class SmokeChunkTrace {
         record(MESH_COMPILED, null, dimension, pos);
     }
 
+    public static void recordOvdGenerated(String dimension, ChunkPos pos) {
+        record(OVD_GENERATED, null, dimension, pos);
+    }
+
+    public static List<ChunkPos> ovdGenerated(String dimension) {
+        return dimension == null ? List.of() : toPositions(OVD_GENERATED, dimension);
+    }
+
+    public static List<ChunkPos> ovdGeneratedApplied(String dimension) {
+        if (dimension == null) return List.of();
+        Set<Long> applied = positionsForDimension(OVD_GENERATED, dimension);
+        applied.retainAll(positionsForDimension(CLIENT_APPLIED, dimension));
+        return toPositions(applied);
+    }
+
     /**
      * 本地 worldgen 起点登记（影子放行原版生成的那一刻）。
      * 同柱重复调用（scheduleChunkLoad 会按状态多次进入）只记第一次。
@@ -161,6 +178,7 @@ public final class SmokeChunkTrace {
         SHADOW_READY.clear();
         CLIENT_APPLIED.clear();
         MESH_COMPILED.clear();
+        OVD_GENERATED.clear();
         NETWORK_RECEIVED_AT_MS.clear();
         CLIENT_APPLIED_AT_MS.clear();
         WORLDGEN_START_AT_NS.clear();

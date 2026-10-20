@@ -13,8 +13,8 @@
 
 **卖点特性（已实现）：** 统一 ShadowPull（§3）、分段增量（§11.5）、`/hassiumc export`（§12）。本地生成（SeedGen）开启时握手下发世界种子，由影子端原版写入 `level.dat`（**泄露种子**）；导出或手工把 `hassium_cache/<id>/world` 拷到 `saves/` 即可当存档。
 
-> **超视渲染（OVD）为现行功能**（影子双窗，默认开启）：影子端 vanilla tracking 仍是权威窗区块交付的唯一 owner；OVD 窗只从本地源（注入 / 盘）回填，详见 §10。
-> **S0 专用服后接回（2026-09-18）**：票半径恢复 `resolveViewDistance` OVD 分支（AUTHORITY_MARGIN=serverVD+1；effective>authority 时扩到 clientVD）；`tryServeOvdLocal` 只读 injected/type126（**不**恢复 `ovdLocalGeneration`）；Provider 窗外走本地臂、禁止 C2S。参考 git `a23e9bc5`/`e6ee3b11`。
+> **超视渲染（OVD）为现行功能**（影子双窗，默认开启）：影子端 vanilla tracking 仍是权威窗区块交付的唯一 owner；OVD 窗从本地源（注入 / 盘 / SeedGen）回填，详见 §10。
+> **历史：S0 专用服后接回（2026-09-18）**：票半径恢复 `resolveViewDistance` OVD 分支（AUTHORITY_MARGIN=serverVD+1；effective>authority 时扩到 clientVD）；`tryServeOvdLocal` 只读 injected/type126（**不**恢复 `ovdLocalGeneration`）；Provider 窗外走本地臂、禁止 C2S。参考 git `a23e9bc5`/`e6ee3b11`。
 
 ## 1. 目标与约束
 
@@ -148,11 +148,11 @@ LightDeltaS2CPacket         // 增量光变更掩码
 
 ## 10. 超视渲染（OVD，影子双窗）
 
-> 2026-09 设计重做：废弃旧「客户端环带 admission 状态机」（`ViewDistanceExtensionService` / `OvdLocalGenerator`，已删）。现行 OVD = **影子 tracking 扩窗 + 权威/OVD 双窗分流**；客户端只抬半径并拦 Forget，不枚举环带、不 miss 重试、无延迟卸载。
+> 2026-09 设计重做：废弃旧「客户端环带 admission 状态机」（`ViewDistanceExtensionService` / `OvdLocalGenerator`，已删）。现行 OVD = **影子主循环扫描 + 权威/OVD 双窗分流**；客户端只抬半径并拦 Forget，不枚举环带、不 miss 重试、无延迟卸载。
 
 ### 10.1 目标
 
-多人服且客户端 RD 滑块 > 服务端视距时，用**影子端本地已有地形**（注入表 / 磁盘）回填环带，使曾探索区域在视距外仍可见。
+多人服且客户端 RD 滑块 > 服务端视距时，优先用影子注入表 / 磁盘回填环带；缺盘且双端 `chunk.seedGenEnabled` 开启、真实种子可用时，复用统一 `submitLocalGeneration → generateChunkAsync → onChunkMaterialized` 链补生成。未获生成许可时只回放已有地形。
 
 | 场景 | 行为 |
 |------|------|
@@ -164,16 +164,16 @@ LightDeltaS2CPacket         // 增量光变更掩码
 ### 10.2 拓扑（双窗）
 
 ```text
-影子 ChunkMap viewDistance = effectiveClientVD
-  = OVD 开 && 滑块 > serverVD ? min(滑块, maxRenderDistance) : serverVD(+1 权威边距)
+影子主循环目标窗：effectiveClientVD
+  = OVD 开 ? max(serverVD, min(滑块, maxRenderDistance)) : serverVD
 
 ┌─────────────────────────────────────┐
-│  影子 ticket 加载窗（chebyshev）     │
+│  客户端目标窗（chebyshev）     │
 │   ┌───────────────────────────┐     │
-│   │ 权威窗 = isChunkInRange(   │     │  → Compare+Pull / bootGrid / sweep
+│   │ 权威窗 = isChunkInRange(   │     │  → drainAuthorityAcquires / Compare+Pull
 │   │            serverVD)       │     │  → 真服务端数据源
 │   └───────────────────────────┘     │
-│   OVD 窗 = client 窗 − 权威窗        │  → injected → loadFromDisk
+│   OVD 窗 = client 窗 − 权威窗        │  → injected → loadFromDisk → 统一 SeedGen
 │                                     │  → 禁止 ShadowPull / 禁止真服请求
 └─────────────────────────────────────┘
 ```
@@ -183,24 +183,30 @@ LightDeltaS2CPacket         // 增量光变更掩码
 | 端 | 做 | 不做 |
 |----|----|------|
 | 客户端 | 捕获 serverVD；算 effectiveClientVD；抬 `ClientChunkCache` 半径；Forget 仍在 effective 窗内则取消 drop；几何同步给影子 | 环带枚举 / miss 退避 / 延迟卸载表 / 独立 admission |
-| 影子端 | 扩 `setChunkViewDistance(effective)`；权威窗 pull 契约不变；OVD 窗本地源分流；光管线 `renderOnly` 回传官方包 | 向真服请求 OVD 柱；OVD 柱发 `ShadowPullRequest` |
+| 影子端 | 权威域先驱动；OVD 环带扫描复用统一生成链；权威窗 pull 契约不变；OVD 窗本地源分流；光管线 `renderOnly` 回传官方包 | 向真服请求 OVD 柱；OVD 柱发 `ShadowPullRequest` |
 
 ### 10.3 数据流
 
 ```text
 真服 tracking(serverVD) ──权威包──▶ 影子注入/算光/落盘
                                       │
-影子 ticket(clientVD)                 │
+影子主循环（权威优先，共享生成在途 / 并发额度）                 │
   ├─ 权威窗柱 → 现有 scheduleLoad / pending pull / compare
-  └─ OVD 窗柱 → injected? → disk?
-                 └─ 均无：空 Proto 站位（不 pull）
+  └─ OVD 窗柱 → injected? → disk? → SeedGen 门开则统一生成
+                 └─ 门关 / 生成失败：本地冷却重试（不 pull）
                  └─ 有数据：submitPreLight(renderOnly=true)
                          → 光收敛 → drainReady
                          → 官方 ClientboundLevelChunkWithLight
                          → 客户端（半径已抬高，Storage 接收）
 ```
 
-**外圈→内圈基线**：OVD 柱物化后进 `injectedChunks`；玩家移动使该柱进入权威窗时，`drainSelections` 见 `injectedChunk != null` 跳过 pull，`onChunkMaterialized` 桥带基线走 Compare（UNCHANGED/DELTA），无需二次读盘。
+**外圈→内圈基线**：OVD 柱物化后进 `injectedChunks`；玩家移动使该柱进入权威窗时，`drainAuthorityAcquires` 使用已有基线先 Compare（UNCHANGED/DELTA/FULL），裁决落地后才按权威柱交付；无需再次生成。
+
+客户端曾交付过 OVD 柱不能代替服务端裁决。进入权威形状时作废旧 OVD / 光环确认；收到新裁决后，迟到的原版 holder 完成回调不得再次挂起同一比较。
+
+权威 FULL 使用响应中的最新快照和 hash，进入既有 pending 消费链；本地 `isLightCorrect` 不能让不同内容的 FULL 走光复用快路径。FULL / DELTA 内容替换前等待该柱原有算光工作结束，保留旧光供 `checkBlock` 传播减光，再作废旧 INITIALIZE / LIGHT 凭据并重新进入 3×3 齐套门。内容变更影响到的邻柱也通过现有齐套 / LIGHT / 整柱交付更新，避免客户端保留早先光快照；没有增加独立光桥或队列。
+
+注入驻留柱优先作为原版 scheduleChunkLoad 的基线；native 临时生成票卸载不能清掉仍驻留柱的光层，真正摘表后才释放。持久化优先序列化已注入的权威柱；原版 holder 的迟到保存不得把旧生成 NBT 与新 hash 配对覆盖缓存。
 
 ### 10.4 客户端最小边界
 
@@ -217,7 +223,9 @@ LightDeltaS2CPacket         // 增量光变更掩码
              // 最大 cheb = serverVD + halo + 1 ≤ serverVD + AUTHORITY_MARGIN（贴满签发上限）
 ∀ 交付柱：落在**权威形状** `contains(serverVD)` ∪ OVD 带内
              // 2026-09-19 S3b：光环柱只算不交付（DELIVER_VIEW_MARGIN_CHUNKS 已删）
-bootGrid / sweepVisibleShape 半径仍是 serverVD，不被 clientVD 污染
+权威 acquire / pull 计算域不被 clientVD 扩大；OVD 失败不得回退远端 FULL
+OVD 与权威生成共用 sweepInFlight / generateChunkAsync / localGenExecutor
+权威域先驱动；OVD 只用共享容量的一半，给权威生成留槽位
 服务端 ShadowPullRequestValidator 仍是安全网（误发必 RANGE 拒绝）
 OVD 回传记 ovd 指标，不进缓存命中率分母
 ```
@@ -229,7 +237,7 @@ OVD 回传记 ovd 指标，不进缓存命中率分母
 | `chunk.viewDistanceExtensionEnabled` | true | 超视渲染总开关（依赖 `chunk.enabled`；与 Bobby 互斥） |
 | `chunk.maxRenderDistance` | 16 | effective clientRD 上限（2–64） |
 
-`chunk.ovdUnloadDelaySecs` **不再恢复**（延迟卸载取消）；`chunk.ovdLocalGeneration`（OVD 窗本地生成）**已退役删除**，OVD 窗回填只读本地已有数据（注入 / 盘）。
+`chunk.ovdUnloadDelaySecs` 与旧 `chunk.ovdLocalGeneration` 键保持删除。**2026-10-20 恢复 OVD 缺盘生成**：直接复用双端 `chunk.seedGenEnabled` 门控、真实种子和统一生成链，不增加独立队列 / 执行器 / 开关。OVD 生成失败只冷却重试，绝不为此扩大真服请求范围。生成柱按现有 dirty/type126 路径落盘，光照继续经过现有复用或 3×3 齐套门。
 
 ### 10.7 不做（延续原版化边界）
 
@@ -245,6 +253,7 @@ OVD 回传记 ovd 指标，不进缓存命中率分母
 |------|------|------------------------------|
 | P0 | 影子扩窗 + 双窗分流 + 客户端半径/Forget | R2 环带可见；pull range 拒 = 0；OVD 发送 pull = 0 |
 | P1 | 指标 `ovdLoaded` 等 + miss 空置语义 | `/hassiumc stats` 超视行；G1 `ovdLoaded>0` |
+| P2 | `ovdgen` 冷场 | 权威光环之外的 OVD 目标确实生成、应用且驻留，未收到网络内容 |
 | P3 | L1 + mod-compat 超视条目 | 与 shape4/bootgrid 指标不回归 |
 
 ### 10.9 风险
@@ -321,7 +330,7 @@ Sector 2+:    [length(4)][type=126][magic 0x48][hash(8)][ZSTD 压缩数据]
 | 组件 | 职责 |
 |------|------|
 | `ShadowLightCompute` | 影子基线快照、缓存 materialize、DELTA 应用与光照收敛 |
-| `ShadowSeedServer.applySectionDelta` | FULL 整段覆盖 / BLOCKS 逐格写入；hash 校验 + 清光 |
+| `ShadowSeedServer.applySectionDelta` | FULL / BLOCKS 离线换节；hash 校验、逐格 checkBlock 减光传播后重过齐套 / LIGHT |
 | `SectionDeltaPlanner` | 柱级 75% 整块回退；段级 BLOCKS vs FULL |
 | `ShadowPullClient` | 将响应 DELTA 提交到 `submitDelta`，失败统一回退权威 FULL |
 

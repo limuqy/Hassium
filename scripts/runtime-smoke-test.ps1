@@ -79,6 +79,16 @@ param(
 )
 
 $ErrorActionPreference = "Continue"
+if ($Scenario -eq 'ovdgen') {
+    if (-not $PSBoundParameters.ContainsKey('Vd1')) { $Vd1 = 4 }
+    if (-not $PSBoundParameters.ContainsKey('Vd2')) { $Vd2 = 4 }
+    if (-not $PSBoundParameters.ContainsKey('ClientRenderDistance')) { $ClientRenderDistance = 8 }
+}
+if ($Scenario -eq 'ovdlight') {
+    if (-not $PSBoundParameters.ContainsKey('Vd1')) { $Vd1 = 8 }
+    if (-not $PSBoundParameters.ContainsKey('Vd2')) { $Vd2 = 6 }
+    if (-not $PSBoundParameters.ContainsKey('ClientRenderDistance')) { $ClientRenderDistance = 12 }
+}
 if ($Scenario -eq 'flyroundtrip' -and $MoveSeconds -le 0) {
     $MoveSeconds = 30
 }
@@ -459,7 +469,7 @@ if ($needConfigTrackerClean) {
     }
 }
 
-if ($Scenario -in @("seedgen", "dimension", "cachedimension", "customcache", "modcompat", "modcompat_strict")) {
+if ($Scenario -in @("seedgen", "ovdgen", "ovdlight", "dimension", "cachedimension", "customcache", "modcompat", "modcompat_strict")) {
     if ($WarmRepeat -or $KeepServerSave) {
         # 状态只需清一次：首场已清，后续热复用不再清档（显式开关压过场景强制清档）。
         $keepReason = if ($WarmRepeat) { "-WarmRepeat" } else { "-KeepServerSave" }
@@ -746,7 +756,7 @@ Write-Host "[$SessionId] [8/9] 解析结果 (客户端退出码: $clientExit)...
 # 单轮场景没有 ROUND2；不得把未运行的轮次写成 stats=false / pass=false。
 # flyroundtrip：单轮往返飞行黑块专项（join → 飞出去 → 掉头飞回 → dump ROUND1 → assertProbe → exit rounds=1）。
 # dictionary：单轮字典热更 rollout（join → /tick rate 200 → 等训练+offer+ACK 切换 → dump ROUND1 → exit rounds=1）。
-$requiresRound2 = $Scenario -notin @("seedgen", "modcompat", "modcompat_strict", "flyroundtrip", "dictionary", "dimension", "cachedimension", "customcache")
+$requiresRound2 = $Scenario -notin @("seedgen", "ovdgen", "modcompat", "modcompat_strict", "flyroundtrip", "dictionary", "dimension", "cachedimension", "customcache")
 $clientContent = if (Test-Path $clientLog) { Get-Content $clientLog -Raw } else { "" }
 
 # F17：Gradle 会把 fork 出的游戏 JVM 的真实退出码写进自己的失败信息（在 client 的 stderr 日志里）。挂起被系统关闭时是

@@ -57,7 +57,15 @@ public class MixinChunkMap {
     @Inject(method = "scheduleChunkLoad", at = @At("HEAD"), cancellable = true)
     private void hassium$shortCircuitInjectLoad(ChunkPos pos,
             CallbackInfoReturnable<CompletableFuture<ChunkAccess>> cir) {
-        if (!(level.getServer() instanceof ShadowSeedServer) || pos == null) {
+        if (!(level.getServer() instanceof ShadowSeedServer shadow) || pos == null) {
+            return;
+        }
+        // Worldgen dependency tickets may revisit a retained, authority-patched column.
+        // Reuse that column before the generation gate: parsing its older native save
+        // would install obsolete light layers into the same engine.
+        LevelChunk retained = shadow.injectedChunk(hassium$shadowDimension(), pos.x(), pos.z());
+        if (retained != null) {
+            cir.setReturnValue(ShadowChunkMapCompat.completedImposter(retained));
             return;
         }
         if (ShadowChunkMapCompat.isWorldgenAllowed()

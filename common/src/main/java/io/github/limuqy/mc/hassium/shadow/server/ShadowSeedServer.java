@@ -517,7 +517,8 @@ public class ShadowSeedServer extends MinecraftServer {
                     decodeInjectedPacketLocked(dimension, key, pos, level, packet));
             ShadowLightProbe.onInjected(dimension, pos, chunk);
             if (!fresh) {
-                clearChunkLight(pos, chunk);
+                notifyReplacedContent(previous, chunk);
+                ShadowLightCompute.invalidateLightAfterContentChange(key);
             }
             io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes.markContentDirty(key);
             chunk.setLightCorrect(false);
@@ -594,6 +595,31 @@ public class ShadowSeedServer extends MinecraftServer {
             }
         }
         return nonAirSections;
+    }
+
+    /** Keep the old light values until vanilla has propagated their removal to neighboring columns. */
+    private void notifyReplacedContent(LevelChunk previous, LevelChunk chunk) {
+        synchronized (ShadowLightCompute.LIGHT_ENGINE_MUTEX) {
+            ThreadedLevelLightEngine engine =
+                    (ThreadedLevelLightEngine) chunkLevel(chunk).getChunkSource().getLightEngine();
+            engine.setLightEnabled(chunk.getPos(), true);
+            for (int i = 0; i < chunk.getSectionsCount(); i++) {
+                LevelChunkSection before = previous.getSection(i);
+                LevelChunkSection after = chunk.getSection(i);
+                SectionPos section = SectionPos.of(chunk.getPos(), chunk.getSectionYFromSectionIndex(i));
+                engine.updateSectionStatus(section, after.hasOnlyAir());
+                for (int y = 0; y < 16; y++) {
+                    for (int z = 0; z < 16; z++) {
+                        for (int x = 0; x < 16; x++) {
+                            if (before.getBlockState(x, y, z) != after.getBlockState(x, y, z)) {
+                                engine.checkBlock(new BlockPos(section.minBlockX() + x,
+                                        section.minBlockY() + y, section.minBlockZ() + z));
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private void restoreInjectedChunk(long key, LevelChunk previous) {
@@ -892,7 +918,7 @@ public class ShadowSeedServer extends MinecraftServer {
 
     /** 应用指定维度服务端分段增量（consumeLoop 单线程调用）。 */
     public boolean applySectionDelta(String dimension, ChunkPos pos, SectionDeltaS2CPacket.DeltaEntry entry) {
-        // 变更 section 清光投递与光屏障互斥（同 clearChunkLight；2026-08-14 NPE 同源）。
+        // 变更 section 的引擎通知与光屏障互斥（同 clearChunkLight；2026-08-14 NPE 同源）。
         synchronized (ShadowLightCompute.LIGHT_ENGINE_MUTEX) {
             try {
             LevelChunk chunk = injectedChunks.get(DimensionKey.key(dimension, pos.x(), pos.z()));
@@ -900,18 +926,19 @@ public class ShadowSeedServer extends MinecraftServer {
                 LOGGER.debug("Hassium: Shadow applySectionDelta chunk not injected ({}, {})", pos.x(), pos.z());
                 return false;
             }
+            chunk.setLightCorrect(false);
             // 增量应用会就地覆盖 section/heightmap/BE/光，标记为需要 saveAll 重写。
             io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes.markContentDirty(dimension, pos);
             ServerLevel owner = chunkLevel(chunk);
             ThreadedLevelLightEngine lightEngine =
                     (ThreadedLevelLightEngine) owner.getChunkSource().getLightEngine();
-            boolean hasSky = owner.dimensionType().hasSkyLight();
+            java.util.List<BlockPos> lightChanges = new ArrayList<>();
             // 1) 离线改节再发布（先于 BE——BE 创建依赖新 block state）。
             // 光引擎不拿 LIGHT_ENGINE_MUTEX；原地 read 会撕裂已发布 palette/storage，
             // 即使 bits 相同也会让并发 getBlockState 抛 MissingPaletteEntryException。
             for (SectionDeltaS2CPacket.SectionData sd : entry.changedSections()) {
-                LevelChunkSection section = LevelChunkSectionCompat.copyDetached(
-                        chunk.getSection(sd.sectionIndex()));
+                LevelChunkSection previousSection = chunk.getSection(sd.sectionIndex());
+                LevelChunkSection section = LevelChunkSectionCompat.copyDetached(previousSection);
                 FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(sd.blockData()));
                 try {
                     if (sd.kind() == SectionDeltaS2CPacket.KIND_FULL) {
@@ -932,14 +959,19 @@ public class ShadowSeedServer extends MinecraftServer {
                 }
                 // 已持有旧节的读者继续读旧值，新读者只会看到完整的新节。
                 chunk.getSections()[sd.sectionIndex()] = section;
-                // 2) 变更 section 清光：delta 无光，旧光已过期 → 由随后的两阶段光屏障重算。
-                //    强制覆盖共享空层（notReady 移除对带邻域 section 永不生效，
-                //    见 clearChunkLight 注释）；不在这里 propagate（会被空层安装覆盖白算）。
+                // 保留旧光供 checkBlock 传播递减；直接清层会抹掉移除源的旧亮度，
+                // 邻柱仍可能保留本地生成时的天空 15，形成逐柱亮斑。
                 SectionPos sp = SectionPos.of(pos, chunk.getSectionYFromSectionIndex(sd.sectionIndex()));
-                if (hasSky) {
-                    lightEngine.queueSectionData(LightLayer.SKY, sp, EMPTY_LIGHT_LAYER);
+                lightEngine.updateSectionStatus(sp, section.hasOnlyAir());
+                for (int y = 0; y < 16; y++) {
+                    for (int z = 0; z < 16; z++) {
+                        for (int x = 0; x < 16; x++) {
+                            if (previousSection.getBlockState(x, y, z) != section.getBlockState(x, y, z)) {
+                                lightChanges.add(new BlockPos(sp.minBlockX() + x, sp.minBlockY() + y, sp.minBlockZ() + z));
+                            }
+                        }
+                    }
                 }
-                lightEngine.queueSectionData(LightLayer.BLOCK, sp, EMPTY_LIGHT_LAYER);
             }
             // 3) heightmaps 逐 type 覆盖
             Heightmap.Types[] types = Heightmap.Types.values();
@@ -951,6 +983,10 @@ public class ShadowSeedServer extends MinecraftServer {
             // heightmap 变化 → sky 光源表必须重算，否则 lightChunk 的播种仍按旧地形高度
             // （水面升降/填海造陆后 sky 光错位 = 暗区来源之一）。
             chunk.initializeLightSources();
+            lightEngine.setLightEnabled(pos, true);
+            for (BlockPos changed : lightChanges) {
+                lightEngine.checkBlock(changed);
+            }
             // 4) BE 全量覆盖（服务端发整 chunk BE 快照）：先清旧，再镜像官方
             // replaceWithPacketData 的 consumer（IMMEDIATE 创建 + load）。不做 type 校验：
             // IMMEDIATE 创建的 BE 类型必然匹配新 block state（delta 数据自洽），
@@ -1789,14 +1825,18 @@ public class ShadowSeedServer extends MinecraftServer {
                 ShadowLightCompute.withChunkLock(pos, () -> serializeInjectedColumnLocked(dimension, pos)));
     }
 
+    /** 已注入柱包含权威增量；原版 holder 可能仍持有最初的生成副本。 */
+    private LevelChunk columnForSerialization(String dimension, ChunkPos pos) {
+        LevelChunk injected = injectedChunks.get(DimensionKey.key(dimension, pos.x(), pos.z()));
+        return injected != null ? injected
+                : ShadowChunkMapCompat.fullLevelChunkIfPresent(level(dimension), pos);
+    }
+
     private byte[] serializeInjectedColumnLocked(String dimension, ChunkPos pos) {
         if (io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager.isEncodingPaused()) {
             return null;
         }
-        LevelChunk chunk = ShadowChunkMapCompat.fullLevelChunkIfPresent(level(dimension), pos);
-        if (chunk == null) {
-            chunk = injectedChunks.get(DimensionKey.key(dimension, pos.x(), pos.z()));
-        }
+        LevelChunk chunk = columnForSerialization(dimension, pos);
         if (chunk == null) {
             return null;
         }
@@ -1895,7 +1935,11 @@ public class ShadowSeedServer extends MinecraftServer {
             return false;
         }
         long key = DimensionKey.key(dimension, pos.x(), pos.z());
-        injectedChunks.remove(key, chunk);
+        if (injectedChunks.remove(key, chunk)) {
+            // native holder 卸载时仍在注入表的柱由本生命周期持有；摘表后才释放引擎层。
+            ((ThreadedLevelLightEngineAccessor) level(dimension).getChunkSource().getLightEngine())
+                    .hassium$releaseChunkLight(pos);
+        }
         if (unmountIdle && mgr != null) {
             mgr.unmountIdleRegions();
         }

@@ -709,3 +709,19 @@ server.properties 及 ops/eula。测试 Mod 仅放开发运行目录，原整合
 用 F2 或只读窗口采集保存运动中与停留点截图。将场次 ID、观察位置、截图与结论记录到验收记录。
 自动统计 PASS、`clientDarkRegressionChunks=0` 和区块驻留只能作为补充证据，
 不能代替上述目视结论。场景及配置档为开发资源，不随正式 JAR 发布。
+
+## OVD 缺盘本地生成回归（2026-10-20）
+
+`-Scenario ovdgen` 默认使用服务端 VD4、客户端 RD8、双端 SeedGen 开启并清世界 / 客户端缓存，进服后固定到负坐标边界 `(-32.5, 100, 0.5)`；复用统一生成链，不恢复旧 ovdLocalGeneration 键。单轮 `ROUND1` 后退出。
+
+```powershell
+.\scripts\runtime-smoke-test.ps1 -Ver 26.3 -Loader fabric -Phase I -Scenario ovdgen -SessionId "ovdgen_cold"
+```
+
+门禁核对 `chunkTrace.ovdGenerated` 中位于权威形状及一圈算光光环之外的目标，必须同时出现在客户端 applied 与实际驻留集合；并要求整片外圈目标覆盖完整，不能生成一柱就算通过。对应外圈目标不得有 networkReceived 内容来源。只有权威窗生成、缓存回放、生成完成但未落客户端、滑块未形成 OVD 双窗均不能通过。另以 Java 回归验证共享容量预留、同柱去重及 OVD 失败本地重试，Python 回归覆盖上述假阳性。两线运行证据见 `handoff/handoff-2026-10-20-ovd-local-generation.md`。
+
+`-Scenario ovdlight -ClientTimeoutSec 600 -JoinTimeoutMs 240000` 复用 lightacceptance 的设施与双轮往返路径，但开启 SeedGen / OVD，默认 VD8→6、clientRD12。飞行高度固定为 Y298，避免重连后取整落入 Y297 地板；门禁要求两段真实的 32 秒水平位移。ROUND1 另断言 OVD 缺盘生成确实发生；两轮均检查回黑计数、脚下石英以及当前权威窗内每 8 格采样的地板 / 屋檐 / 洞壁（`lightFixture`，有采样且零不匹配）。飞行每 tick 还检查沿线地板、屋檐中心天光 ≤8（开放侧面留正常散射）、距洞口超过 16 格的深洞天光 =0、光源附近方块光 ≥7；`lightFixture.movement*` 必须有采样且零异常，不能用停稳后自愈掩盖移动故障。必须同时保存并目视检查移动屋檐、洞口及洞内光源画面；自动 PASS 不能替代目视验收。
+
+### OVD 光照数值导出
+
+移动 `ovdlight` 的数值先通过，再做屋檐/洞口目视。运行后执行 `python scripts/smoke/export_ovd_light.py <SessionId>`；计划坐标、双端天空/方块光强、失败坐标和逐 tick 探针汇总写入 `build/smoke-test/light-data/<SessionId>/`。导出器同时核对客户端与影子引擎：屋檐天光至多 6、洞内为 0、两光源中心方块光至少 10（前后 3 格递减至 7），两轮覆盖不足或有任意异常均失败。

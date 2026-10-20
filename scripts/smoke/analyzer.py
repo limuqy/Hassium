@@ -205,6 +205,61 @@ def _positions(value: Any) -> set[tuple[int, int]]:
     return result
 
 
+def _check_ovd_generation_probe(probe: dict[str, Any], number: int, mc_ver: Any) -> list[dict[str, Any]]:
+    """Require fresh OVD targets beyond the authority light halo to reach the real client."""
+    trace = _obj(probe.get("chunkTrace"))
+    center = _player_chunk(probe)
+    server_vd = _num(trace.get("serverViewDistance")) or 0
+    client_vd = _num(trace.get("effectiveClientVD")) or 0
+    if center is None or server_vd <= 0 or client_vd <= server_vd:
+        return [_failure("OVD_GENERATION_WINDOW", round=number)]
+    px, pz = center
+    generated = _positions(trace.get("ovdGenerated"))
+    # Authority compute domain = the vanilla shape's Chebyshev dilation by one.
+    outer = {(x, z) for x, z in generated
+             if max(abs(x - px), abs(z - pz)) <= client_vd
+             and not any(_in_authority_shape(px, pz, int(server_vd), x + dx, z + dz, mc_ver)
+                         for dx in (-1, 0, 1) for dz in (-1, 0, 1))}
+    failures = []
+    if not outer:
+        failures.append(_failure("OVD_GENERATION_MISSING", round=number))
+    resident = _positions(_obj(probe.get("clientCache")).get("actualPresent"))
+    applied = _positions(trace.get("clientApplied"))
+    if not (outer & applied & resident):
+        failures.append(_failure("OVD_GENERATION_NOT_PRESENT", round=number))
+    expected = {(x, z) for x in range(px - int(client_vd), px + int(client_vd) + 1)
+                for z in range(pz - int(client_vd), pz + int(client_vd) + 1)
+                if not any(_in_authority_shape(px, pz, int(server_vd), x + dx, z + dz, mc_ver)
+                           for dx in (-1, 0, 1) for dz in (-1, 0, 1))}
+    missing = expected - (applied & resident)
+    if missing:
+        failures.append(_failure("OVD_GENERATION_INCOMPLETE", round=number,
+                                 missing=_position_report(missing)))
+    received = outer & _positions(trace.get("networkReceived"))
+    if received:
+        failures.append(_failure("OVD_GENERATION_REMOTE_CONTENT", round=number,
+                                 positions=[list(pos) for pos in sorted(received)]))
+    return failures
+
+
+def _check_ovd_light_probe(probe: dict[str, Any], number: int) -> list[dict[str, Any]]:
+    """The artificial Y297 floor must survive OVD-to-authority promotion in both rounds."""
+    foot = _obj(probe.get("contentCheck")).get("footBlock")
+    failures = []
+    if foot != "minecraft:quartz_block":
+        failures.append(_failure("OVD_LIGHT_FIXTURE_MISSING", round=number, footBlock=foot))
+    fixture = _obj(probe.get("lightFixture"))
+    if (_num(fixture.get("sampled")) or 0) <= 0 or _num(fixture.get("mismatches")) != 0:
+        failures.append(_failure("OVD_LIGHT_FIXTURE_CONTENT", round=number, fixture=fixture))
+    if ((_num(fixture.get("movementSamples")) or 0) <= 0
+            or any(_num(fixture.get(key)) != 0 for key in
+                   ("movementFloorMissing", "movementSkyLeaks", "movementDarkSources"))):
+        failures.append(_failure("OVD_LIGHT_MOVEMENT_FIXTURE", round=number, fixture=fixture))
+    if number == 1 and not _positions(_obj(probe.get("chunkTrace")).get("ovdGenerated")):
+        failures.append(_failure("OVD_GENERATION_MISSING", round=number))
+    return failures
+
+
 def _position_report(points: set[tuple[int, int]], limit: int = 64) -> dict[str, Any]:
     ordered = sorted(points)
     return {"count": len(ordered), "positions": [list(pos) for pos in ordered[:limit]],
@@ -538,7 +593,7 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
         scenario = "dimension"
     # 移动会话标记（由 runtime-smoke-test.ps1 透传 -MoveSeconds）。>0 ⇒ 走开后柱会合法卸载，
     # 故 trace 的「驻留」口径不适用（见 _MOBILE_TRACE_DIAGNOSTIC_CODES）。
-    mobile_session = (_num(result.get("MoveSeconds")) or 0) > 0
+    mobile_session = scenario == "ovdlight" or (_num(result.get("MoveSeconds")) or 0) > 0
     failures: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
@@ -561,8 +616,8 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
 
     if mobile_session:
         segments = _movement_segments(client_log)
-        required = 2 if scenario in ("classic", "lightdiag", "flyroundtrip") else 1
-        requested = int(_num(result.get("MoveSeconds")) or 0)
+        required = 2 if scenario in ("classic", "lightdiag", "flyroundtrip", "ovdlight") else 1
+        requested = 32 if scenario == "ovdlight" else int(_num(result.get("MoveSeconds")) or 0)
         moved = (len(segments) >= required and all(
             item["seconds"] == requested and item["reachedTarget"]
             and item["start"][1] > item["tpRequest"][1]
@@ -614,7 +669,7 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
         checks["dictionary_rollout"] = "PASS" if has_dict_flip else "FAIL"
 
     # 单轮场景（probe 只有 round1.json）：新场景必须在此登记，否则会被按两轮判定 → PROBE_MISSING。
-    single_round_scenarios = {"seedgen", "modcompat", "modcompat_strict", "flyroundtrip", "dictionary", "egressbench", "factoryegress20", "factoryegress100", "factoryegress200"}
+    single_round_scenarios = {"seedgen", "ovdgen", "modcompat", "modcompat_strict", "flyroundtrip", "dictionary", "egressbench", "factoryegress20", "factoryegress100", "factoryegress200"}
     round_numbers = ((1, 2, 3, 4) if scenario == "dimension"
                      else (1,) if scenario in single_round_scenarios else (1, 2))
     stats_ok = {n: bool(re.search(rf"CLIENT_STATS ROUND{n} begin", log_text)
@@ -655,6 +710,10 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
                     failures.append(_failure("CACHE_DIMENSION_GENERATED", round=number))
         elif scenario == "flyroundtrip":
             failures.extend(_check_flight_probe(probe))
+        elif scenario == "ovdgen":
+            failures.extend(_check_ovd_generation_probe(probe, number, result.get("Ver")))
+        elif scenario == "ovdlight":
+            failures.extend(_check_ovd_light_probe(probe, number))
         trace_report = _trace_analysis(probe)
         trace_reports[f"round{number}"] = trace_report
         spatial = _spatial_check(probe)

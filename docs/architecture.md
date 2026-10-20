@@ -329,7 +329,7 @@ Sector 2+:    [length(4)][type=126][magic 0x48][hash(8)][ZSTD 压缩数据]
 | `compat.autoDowngradeOnError` | true | 出错时是否自动降级 |
 | `debug.*` | 多为 `false` | 调试分类日志，见 §10（`debug.networkMetricsAutoReset` 默认 `true`） |
 
-网关监听/端点/鉴权（`controlReachableEndpoints` / `bindHost` / `authToken`）、L1 迁移（`master.migration*` 7 键）、续流票据（`resumeTicketTtlMs`）、UDP 数据面（`dataplane.*`）、管线级全局包压缩（`globalPacketCompression` 等 4 键）、`chunk.ovdUnloadDelaySecs`（延迟卸载取消，不再恢复）、`chunk.seedGenThreads` / `master.serverChunkPushThreads`、`net.*` 客户端网络键族、`chunk.hassiumEngineEnabled` / `chunk.unloadDelaySecs` 均已退役删除；旧 toml 中的残留键由加载器静默清除（legacy key hygiene，见 `FabricTomlConfigIO` 清理表）。OVD 两键（`viewDistanceExtensionEnabled` / `maxRenderDistance`）随双窗重做恢复；`chunk.ovdLocalGeneration` 随后退役删除（已入清理表）。
+网关监听/端点/鉴权（`controlReachableEndpoints` / `bindHost` / `authToken`）、L1 迁移（`master.migration*` 7 键）、续流票据（`resumeTicketTtlMs`）、UDP 数据面（`dataplane.*`）、管线级全局包压缩（`globalPacketCompression` 等 4 键）、`chunk.ovdUnloadDelaySecs`（延迟卸载取消，不再恢复）、`chunk.seedGenThreads` / `master.serverChunkPushThreads`、`net.*` 客户端网络键族、`chunk.hassiumEngineEnabled` / `chunk.unloadDelaySecs` 均已退役删除；旧 toml 中的残留键由加载器静默清除（legacy key hygiene，见 `FabricTomlConfigIO` 清理表）。OVD 两键（`viewDistanceExtensionEnabled` / `maxRenderDistance`）随双窗重做恢复；旧 `chunk.ovdLocalGeneration` 键保持删除（已入清理表）；2026-10-20 OVD 缺盘生成改为复用双端 `chunk.seedGenEnabled` 与统一生成链，见 `chunk-cache.md` §10。
 
 ## 10. 日志策略
 

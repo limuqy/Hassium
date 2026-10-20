@@ -336,6 +336,12 @@ public final class ShadowStorageManager implements AutoCloseable {
         if (pos == null || payloadAfterType == null || payloadAfterType.length == 0) {
             return false;
         }
+        // 原版 holder 的异步保存可能晚于权威 DELTA；当前注入柱由 serializer 统一落盘。
+        // 不把旧生成 NBT 与坐标表里的新 hash 拼成一个假命中槽。
+        if (injected.test(ChunkPos.pack(pos.x(), pos.z()))) {
+            ShadowStorageHashes.markContentDirty(dimension, pos);
+            return true;
+        }
         // 超槽位载荷（>1MiB 压缩柱）照收：本会话仍由映像服务，落盘时
         // {@link RegionCache.Image#save} 整槽跳过而不覆写邻槽（该柱退化为下次会话 cache miss）。
         // 不在此拒绝——拒绝只能回落原版写盘，反而把双写者撕裂放回来。

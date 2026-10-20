@@ -856,7 +856,13 @@ public final class ShadowLightCompute {
 
     /** 现在就能开屏障的投递。 */
     private static boolean hasStartablePendingWork() {
-        return !pending.isEmpty() || !pendingDeltas.isEmpty() || !generated.isEmpty();
+        return pending.keySet().stream().anyMatch(ShadowLightCompute::canStartQueuedLight)
+                || pendingDeltas.keySet().stream().anyMatch(ShadowLightCompute::canStartQueuedLight)
+                || generated.keySet().stream().anyMatch(ShadowLightCompute::canStartQueuedLight);
+    }
+
+    private static boolean canStartQueuedLight(long key) {
+        return !inflightLight.containsKey(key) && !LightNeighborhoodGate.isAwaiting(key);
     }
 
     /** 服务端直推注入：同一柱的 hash miss 只记一次。 */
@@ -913,6 +919,14 @@ public final class ShadowLightCompute {
             return;
         }
         accountedIngress.remove(DimensionKey.key(dimension, pos.x(), pos.z()));
+    }
+
+    /** Retained OVD data must be compared again on entering the server tracking shape. */
+    public static void invalidateAuthorityEntry(String dimension, ChunkPos pos) {
+        io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate.forgetConfirmation(dimension, pos);
+        markAuthorityHashConfirmed(dimension, pos);
+        clearRequestMiss(dimension, pos);
+        io.github.limuqy.mc.hassium.protocol.ShadowPullClient.clearCompareRequested(dimension, pos);
     }
 
     /**
@@ -1662,7 +1676,8 @@ public final class ShadowLightCompute {
         }
         long key = DimensionKey.key(dimension, pos.x(), pos.z());
         SmokeChunkTrace.recordNetworkReceived(dimension, pos);
-        pending.put(key, new PendingEntry(packet, traceOrigin(TraceOrigin.SERVER_PUSH)));
+        pending.put(key, new PendingEntry(packet, traceOrigin(TraceOrigin.SERVER_PUSH),
+                client().peekPendingContentHash(dimension, pos.x(), pos.z())));
         pump();
     }
     /** 投递可渲染柱；区块追踪与邻域由影子端原版 ChunkMap 管理。
@@ -1670,6 +1685,11 @@ public final class ShadowLightCompute {
      *  此前误用 {@link #currentDimension()} 在切维窗口会把 TF 柱按主世界键入表。 */
     public static void submitVisible(String dimension, ChunkPos pos,
                                      ClientboundLevelChunkWithLightPacket packet) {
+        submitVisible(dimension, pos, packet, TraceOrigin.SERVER_PUSH);
+    }
+
+    public static void submitVisible(String dimension, ChunkPos pos,
+                                     ClientboundLevelChunkWithLightPacket packet, TraceOrigin origin) {
         if (pos == null || packet == null || !isEnabled()) {
             return;
         }
@@ -1682,7 +1702,8 @@ public final class ShadowLightCompute {
         }
         long key = DimensionKey.key(activeDimension, pos.x(), pos.z());
         SmokeChunkTrace.recordNetworkReceived(activeDimension, pos);
-        pending.put(key, new PendingEntry(packet, traceOrigin(TraceOrigin.SERVER_PUSH)));
+        pending.put(key, new PendingEntry(packet, traceOrigin(origin),
+                client().peekPendingContentHash(activeDimension, pos.x(), pos.z())));
         pump();
     }
 
@@ -2047,6 +2068,8 @@ public final class ShadowLightCompute {
                 }
                 List<Map.Entry<Long, PendingEntry>> batch = new ArrayList<>(Math.max(4, pendingLimit));
                 client().fillDistanceFirst(pending, batch, pendingLimit);
+                batch.removeIf(e -> inflightLight.containsKey(e.getKey())
+                        || LightNeighborhoodGate.isAwaiting(e.getKey()) || generated.containsKey(e.getKey()));
                 for (Map.Entry<Long, PendingEntry> e : batch) {
                     io.github.limuqy.mc.hassium.utils.ChunkFlowTiming.recordConsume(e.getKey());
                 }
@@ -2055,6 +2078,8 @@ public final class ShadowLightCompute {
                 int remaining = limit - batch.size();
                 List<Map.Entry<Long, GenEntry>> genBatch = new ArrayList<>();
                 client().fillDistanceFirst(generated, genBatch, remaining);
+                genBatch.removeIf(e -> inflightLight.containsKey(e.getKey())
+                        || LightNeighborhoodGate.isAwaiting(e.getKey()));
                 remaining -= genBatch.size();
                 List<Map.Entry<Long, DeltaWork>> deltaBatch = new ArrayList<>();
                 for (Map.Entry<Long, DeltaWork> e : pendingDeltas.entrySet()) {
@@ -2087,7 +2112,10 @@ public final class ShadowLightCompute {
                     ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(e.getKey()),
                             DimensionKey.chunkZOf(e.getKey()));
                     PendingEntry pendingEntry = e.getValue();
-                    long remoteHash = client().peekPendingContentHash(dimension, pos.x(), pos.z());
+                    long remoteHash = pendingEntry.contentHash();
+                    if (inflightLight.containsKey(e.getKey()) || LightNeighborhoodGate.isAwaiting(e.getKey())) {
+                        continue;
+                    }
                     // 影子内存已有该柱：禁止 injectChunk REPLACE（clearChunkLight 会
                     // 清掉邻柱推进来的屋檐光）。Bloom 直推没有 remoteHash，已落地则直接丢掉。
                     boolean staleRepush = false;
@@ -2142,13 +2170,15 @@ public final class ShadowLightCompute {
                             false, false, pendingEntry.traceOrigin());
                 }
                 // 分段增量应用：本地基线 chunk 上复制换节，再覆盖 heightmaps + BE，
-                // 变更 section 清光（applySectionDelta 内）→ 与注入共享下方光屏障。
+                // 变更 section 逐格 checkBlock（applySectionDelta 内）→ 与注入共享下方光屏障。
                 for (Map.Entry<Long, DeltaWork> e : deltaBatch) {
                     long key = e.getKey();
-                    if (!pendingDeltas.containsKey(key)) {
-                        continue; // REPLACE 后旧条目已被新 batch 接管 / 断连清理
+                    // 先等旧的本地光工作结束，再换节；不得让旧 phase-1 / 回调覆盖权威增量。
+                    if (inflightLight.containsKey(key) || LightNeighborhoodGate.isAwaiting(key)
+                            || pending.containsKey(key) || generated.containsKey(key)
+                            || !pendingDeltas.remove(key, e.getValue())) {
+                        continue;
                     }
-                    pendingDeltas.remove(key);
                     ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
                     DeltaWork work = e.getValue();
                     // hash 比对/保存仍与 delta 同 chunk 锁互斥；光引擎不拿此锁，
@@ -2164,6 +2194,7 @@ public final class ShadowLightCompute {
                                 "[SHADOW_DELTA] Apply failed ({}, {}), yield to vanilla tracking",
                                 pos.x(), pos.z());
                     } else {
+                        invalidateLightAfterContentChange(key);
                         // 成功应用：部分命中 = 本地缓存整柱基线；分片 = FULL 整段 / BLOCKS 按格折算。
                         io.github.limuqy.mc.hassium.metrics.NetworkStats.recordCacheDeltaSaved(
                                 io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_CHUNK_BYTES);
@@ -2238,6 +2269,10 @@ public final class ShadowLightCompute {
         long deadlineMs = System.currentTimeMillis() + CONVERGENCE_WAIT_TIMEOUT_MS;
         synchronized (LIGHT_ENGINE_MUTEX) { // 锁只覆盖「提交循环」，等待/回调/回传全在锁外
             for (LightTask t : tasks) {
+                // Keep the queued replacement until the preceding LIGHT has packed its snapshot.
+                if (inflightLight.containsKey(t.key)) {
+                    continue;
+                }
                 // 提交即条件移除（REPLACE 守卫）：已被同 key 新投递覆盖 → 放弃本屏障。
                 switch (t.source) {
                     case PENDING:
@@ -2529,7 +2564,7 @@ public final class ShadowLightCompute {
 
     /** 原版 LIGHT future 完成后的唯一完成收口。 */
     private static boolean completeLight(InflightLight inf, boolean converged) {
-        if (!inflightLight.remove(inf.key, inf)) {
+        if (inflightLight.get(inf.key) != inf || !inf.completionQueued.compareAndSet(false, true)) {
             return false;
         }
         // 【#36】本会话 LIGHT 步已完成（与 I2 无关）：推送门用它，不再依赖 isLightCorrect。
@@ -2537,19 +2572,40 @@ public final class ShadowLightCompute {
         lightRan.add(inf.key);
         HassiumTaskExecutor executor = HassiumTaskExecutor.getClient();
         if (executor == null || !executor.isRunning() || !isEnabled()) {
+            inflightLight.remove(inf.key, inf);
             return true;
         }
         Minecraft mc = Minecraft.getInstance();
         if (mc != null && mc.isSameThread()) {
-            finishLight(inf, converged);
+            finishLightAndRelease(inf, converged);
             return true;
         }
         try {
-            executor.submit(() -> finishLight(inf, converged), TaskCategory.BEST_EFFORT);
+            executor.submit(() -> finishLightAndRelease(inf, converged), TaskCategory.BEST_EFFORT);
         } catch (java.util.concurrent.RejectedExecutionException ignored) {
+            inflightLight.remove(inf.key, inf);
             // 断连竞态：执行器已停止，丢弃本次回传。
         }
         return true;
+    }
+
+    /** The same-column barrier covers snapshot packing as well as the engine future. */
+    private static void finishLightAndRelease(InflightLight inf, boolean converged) {
+        // Packing already belongs to the shadow main loop. Keep the ownership until that
+        // actual pack/offer has run, rather than merely scheduling another asynchronous pack.
+        ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(inf.key), DimensionKey.chunkZOf(inf.key));
+        runBuildOnShadowMain(pos, () -> {
+            try {
+                if (inflightLight.get(inf.key) == inf) {
+                    finishLight(inf, converged);
+                }
+            } finally {
+                inflightLight.remove(inf.key, inf);
+                if (inflightLight.size() < PIPELINE_LOW_WATER && hasStartablePendingWork() && isEnabled()) {
+                    pump();
+                }
+            }
+        });
     }
     /** LIGHT 未完成时退出该柱光照，不广播 partial；其它柱继续。 */
     private static void abortLight(long key, Throwable cause) {
@@ -2625,8 +2681,12 @@ public final class ShadowLightCompute {
                 }
             }
             recheckPendingAuthoritative(server, dimension, pos);
-            if (repaired) {
-                recheckAuthoritativeNeighbors(server, dimension, pos);
+            // A changed column also removes light in its neighbors. Their earlier full snapshots
+            // must be refreshed through the same neighborhood/LIGHT/full-delivery path.
+            if (repaired || task.traceOrigin == TraceOrigin.SECTION_DELTA
+                    || task.traceOrigin == TraceOrigin.REMOTE_PULL) {
+                recheckAuthoritativeNeighbors(server, dimension, pos,
+                        task.traceOrigin == TraceOrigin.SECTION_DELTA || task.traceOrigin == TraceOrigin.REMOTE_PULL);
             }
         }
         if (inflightLight.size() < PIPELINE_LOW_WATER && hasStartablePendingWork() && isEnabled()) {
@@ -2753,11 +2813,12 @@ public final class ShadowLightCompute {
      * 对同一 A 最多触发一次 ⟹ A 被重投 ≤ 8 次（实际按降级率远小于此）。
      */
     private static void recheckAuthoritativeNeighbors(ShadowSeedServer server,
-                                                      String dimension, ChunkPos center) {
+                                                      String dimension, ChunkPos center,
+                                                      boolean contentChanged) {
         Long eventEpoch = LightNeighborhoodGate.cleanEpochOf(
                 DimensionKey.key(dimension, center.x(), center.z()));
-        if (eventEpoch == null) {
-            return; // 事件源自身没有 clean 序号（异常）：不触发
+        if (!contentChanged && eventEpoch == null) {
+            return; // A degraded repair still uses the bounded clean-epoch rule.
         }
         List<LightTask> tasks = null;
         for (int dx = -1; dx <= 1; dx++) {
@@ -2769,6 +2830,26 @@ public final class ShadowLightCompute {
                 int nz = center.z() + dz;
                 long nKey = DimensionKey.key(dimension, nx, nz);
                 ChunkPos nPos = new ChunkPos(nx, nz);
+                if (contentChanged) {
+                    LevelChunk neighbor = server.injectedChunk(dimension, nx, nz);
+                    net.minecraft.server.level.ServerLevel owner = server.level(dimension);
+                    if (neighbor == null || owner == null) {
+                        continue;
+                    }
+                    // Promotion order precedes LIGHT completion, so it cannot prove that a
+                    // neighbor's client/disk snapshot includes this content change. Coalesce
+                    // one follow-up in the existing queue even if its previous pack is busy.
+                    neighbor.setLightCorrect(false);
+                    ShadowStorageHashes.markLightDirty(dimension, nPos);
+                    LightNeighborhoodGate.rearm(nKey);
+                    generated.compute(nKey, (ignored, queued) -> new GenEntry(neighbor, owner, false,
+                            queued != null && queued.renderOnly,
+                            queued == null ? TraceOrigin.SHADOW_MEMORY_CACHE : queued.traceOrigin));
+                    continue;
+                }
+                if (isChunkBarrierBusy(nKey) || LightNeighborhoodGate.isAwaiting(nKey)) {
+                    continue; // Its pending completion will pack the updated engine light.
+                }
                 if (!isColumnLightAuthoritative(dimension, nPos)) {
                     continue; // 只对**已权威**的邻居（非权威走既有 S2c 路径）
                 }
@@ -2810,6 +2891,16 @@ public final class ShadowLightCompute {
         if (tasks != null) {
             submitLightBatch(server, tasks);
         }
+    }
+
+    /** 权威内容换节后，旧的本地 INITIALIZE / LIGHT 凭据不能复用。 */
+    public static void invalidateLightAfterContentChange(long key) {
+        lightInitialized.remove(key);
+        lightInitPassed.remove(key);
+        lightRan.remove(key);
+        nativeLightChunks.remove(key);
+        pendingAuthoritative.remove(key);
+        LightNeighborhoodGate.rearm(key);
     }
 
     /** 区块卸载前取消该柱所有尚未完成的影子光照/回传工作。 */
@@ -3499,6 +3590,7 @@ public final class ShadowLightCompute {
      *  条件移除 {@code inflightLight.remove(key, inf)} 保证 exactly-once）。 */
     private static final class InflightLight extends LightTask {
         final long deadlineMs;
+        final AtomicBoolean completionQueued = new AtomicBoolean();
         /** 已调用 {@code lightChunk}：预览 adopt 必须跳过，以免 queued 盖掉邻柱入流。 */
         volatile boolean lightChunkSubmitted;
 
@@ -3512,7 +3604,12 @@ public final class ShadowLightCompute {
     }
 
 
-    private record PendingEntry(ClientboundLevelChunkWithLightPacket packet, TraceOrigin traceOrigin) {}
+    private record PendingEntry(ClientboundLevelChunkWithLightPacket packet, TraceOrigin traceOrigin,
+                                long contentHash) {
+        PendingEntry(ClientboundLevelChunkWithLightPacket packet, TraceOrigin traceOrigin) {
+            this(packet, traceOrigin, 0L);
+        }
+    }
 
     /**
      * 【S2c】降级放行的柱：重算时重建 LightTask 所需的上下文（chunk 每次现查，不缓存实例）。
