@@ -1,0 +1,263 @@
+{
+  "date": "2026-10-21",
+  "branch": "2.0.0",
+  "capability": "SLEEP_WINDOW",
+  "visibleColumns": 9,
+  "lightColumns": 25,
+  "recovery": "Same connection; existing selector / ShadowPull / injection / light / client apply; no near-column reset",
+  "inputCheck": "Every client tick from wake input until delayed distant test column (3,0) is visible after COLUMN_READY; bow use duration and mining stage never decrease; Esc release is allowed",
+  "timingCheck": "Delay client apply for 2 seconds; mutate server column after FULL snapshot; replay bounded immutable native tail before COLUMN_READY; reject duplicate/older snapshot replacement",
+  "limits": [
+    "Native renderer and controlled vanilla fixtures; not validation of Sodium/Embeddium/OptiFine or arbitrary modpacks",
+    "Boundary roof/halo checks do not replace a full moving cave/overhang lighting acceptance pass",
+    "No new bandwidth saving claim; old reconnect measurements do not apply",
+    "Buffer overflow is covered by unit tests, not forced in this runtime scenario"
+  ],
+  "runs": [
+    {
+      "session": "sleepwindow_1201_20261021_f",
+      "version": "1.20.1",
+      "loader": "forge",
+      "pass": true,
+      "failures": [],
+      "warningCodes": [
+        "SPATIAL_SNAPSHOT_INCOMPLETE"
+      ],
+      "tests": 512,
+      "testFailures": 0,
+      "testErrors": 0,
+      "build": "PASS",
+      "scanVersionBoundaries": "PASS",
+      "restoredFiles": 10,
+      "restoreChecks": [
+        {
+          "path": "client/options.txt",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "FF0949904B47C93BC714A456CA918BACB520CD712D754C73B87A106C8D46947D"
+        },
+        {
+          "path": "client/config/hassium/hassium-client.toml",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "C4308096BEBFE91B3F716236802F02FAF22494C83F0D53AC16B86F57E8240EA0"
+        },
+        {
+          "path": "client/config/hassium/hassium-server.toml",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "BD7AE942898504F24200B4E9EB9EFA9A8F3714674EB10B7BCB8E2DD2089411DD"
+        },
+        {
+          "path": "server/server.properties",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "518540259053B63234B0D3C5235F03B0C24054F3BA03EC96131E22DB01800C6B"
+        },
+        {
+          "path": "client/config/hassium/sleep-profiles.properties",
+          "existed": false,
+          "matchesBackup": true,
+          "sha256": null
+        },
+        {
+          "path": "server/eula.txt",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "94169D86BECDFCCBB25AB7800C7FFEC69ABA470FBC1A7E4604E36833AB2EEB8F"
+        },
+        {
+          "path": "server/ops.json",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "A143A7EF0DF1FB6D4A652E6E974F98DF1182888C5371432AA8BC5F7A8EC69E1C"
+        },
+        {
+          "path": "server/config/hassium/hassium-server.toml",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "4BF1E50D2414CF0BD79F18148918BAE1B0BAC0B6423893BC20A68DAA24E22A6D"
+        },
+        {
+          "path": "server/config/hassium/hassium_aggregation_dict.bin",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "E393FA8D66693E71A5440DD01EA0C438B097B3041B70D596654304A981A7C9CA"
+        },
+        {
+          "path": "server/config/hassium/aggregation_corpus/retrain.marker",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "36353066EF7FA9D4125ECC9FE3895E2106D1008BDF1AE0F9B28363E37F32E2DF"
+        }
+      ],
+      "result": "build/smoke-test/results/result_sleepwindow_1201_20261021_f.json",
+      "clientLog": "build/smoke-test/logs/client_sleepwindow_1201_20261021_f.log",
+      "serverLog": "build/smoke-test/logs/server_sleepwindow_1201_20261021_f.log",
+      "screenshot": "build/smoke-test/probe/sleepwindow_1201_20261021_f/sleep-window.png",
+      "clientChecks": [
+        "[18:56:02] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP automatic entry input uninterrupted; attackReleasedDuringEntry=false",
+        "[18:56:03] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP entity x=40.5 present=false",
+        "[18:56:06] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:SLEEP renderer drawnColumns=9 culledSections=3163440",
+        "[18:56:06] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:SLEEP roof/halo boundary light sky=11 block=14",
+        "[18:56:06] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:SLEEP window visible=9 light=25 distant terrain paused",
+        "[18:56:08] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP in-place trigger=turn identity/input/near-entity preserved using=true",
+        "[18:56:08] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP entity x=40.5 present=true",
+        "[18:56:23] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:SLEEP distant block and BE-only update current",
+        "[18:56:23] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:SLEEP roof/halo boundary light sky=11 block=14",
+        "[18:56:25] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP released input remained released",
+        "[18:56:27] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP automatic entry input uninterrupted; attackReleasedDuringEntry=false",
+        "[18:56:30] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP in-place trigger=move identity/input/near-entity preserved using=true",
+        "[18:56:30] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP entity x=40.5 present=true",
+        "[18:56:32] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP released input remained released",
+        "[18:56:33] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP automatic entry input uninterrupted; attackReleasedDuringEntry=false",
+        "[18:56:36] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP in-place trigger=esc identity/input/near-entity preserved using=false",
+        "[18:56:38] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP released input remained released",
+        "[18:56:56] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP automatic entry input uninterrupted; attackReleasedDuringEntry=false",
+        "[18:56:58] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP in-place trigger=sprint identity/input/near-entity preserved using=false",
+        "[18:56:58] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP actual mining progress preserved stage=4",
+        "[18:57:00] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP released input remained released"
+      ],
+      "serverChecks": [
+        "[18:56:06] [Server thread/INFO] [Hassium/]: [SLEEP] resumed inPlace player=380df991-f603-344c-a090-369bad2a924a generation=1792580109828 restoredEntities=137 usingItem=true leases=0",
+        "[18:56:08] [Server thread/INFO] [Hassium/]: HassiumSmokeTest:SLEEP snapshot tail packets=1 bytes=10 retry=false",
+        "[18:56:28] [Server thread/INFO] [Hassium/]: [SLEEP] resumed inPlace player=380df991-f603-344c-a090-369bad2a924a generation=1792580109829 restoredEntities=132 usingItem=true leases=0",
+        "[18:56:30] [Server thread/INFO] [Hassium/]: HassiumSmokeTest:SLEEP snapshot tail packets=2 bytes=19 retry=false",
+        "[18:56:33] [Server thread/INFO] [Hassium/]: [SLEEP] resumed inPlace player=380df991-f603-344c-a090-369bad2a924a generation=1792580109830 restoredEntities=128 usingItem=true leases=0",
+        "[18:56:36] [Server thread/INFO] [Hassium/]: HassiumSmokeTest:SLEEP snapshot tail packets=1 bytes=13 retry=false",
+        "[18:56:56] [Server thread/INFO] [Hassium/]: [SLEEP] resumed inPlace player=380df991-f603-344c-a090-369bad2a924a generation=1792580109831 restoredEntities=127 usingItem=false leases=0",
+        "[18:56:58] [Server thread/INFO] [Hassium/]: HassiumSmokeTest:SLEEP snapshot tail packets=2 bytes=23 retry=false"
+      ],
+      "jar": "forge/build/1_20_1/libs/hassium-forge-2.1.3-1.20.1.jar",
+      "sha256": "22FE86FD66D945A1E51ACC2E23231846EB7672872B3D61D30E259518BEACEDD4"
+    },
+    {
+      "session": "sleepwindow_1211_20261021_b",
+      "version": "1.21.1",
+      "loader": "neoforge",
+      "pass": true,
+      "failures": [],
+      "warningCodes": [
+        "SPATIAL_SNAPSHOT_INCOMPLETE"
+      ],
+      "tests": 505,
+      "testFailures": 0,
+      "testErrors": 0,
+      "build": "PASS",
+      "scanVersionBoundaries": "PASS",
+      "restoredFiles": 10,
+      "restoreChecks": [
+        {
+          "path": "client/options.txt",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "13728D09F29EAC6D24760253FE242BB3327AF63256E69598863FFA5CC1B80B37"
+        },
+        {
+          "path": "client/config/hassium/hassium-client.toml",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "CB1DC56A5454A5091FAEBED0C8A16103CC58D758AD78178C6372B173017DE119"
+        },
+        {
+          "path": "client/config/hassium/hassium-server.toml",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "1F250DDD98D5BCAF86CCB873DFE8BAC4FBCDB55EF9E506B71F5F88951995830E"
+        },
+        {
+          "path": "server/server.properties",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "E2F6F05F14398CB8E2AAE622B52CF8ABA11460A327F91E6387560269142EF704"
+        },
+        {
+          "path": "client/config/hassium/sleep-profiles.properties",
+          "existed": false,
+          "matchesBackup": true,
+          "sha256": null
+        },
+        {
+          "path": "server/eula.txt",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "94169D86BECDFCCBB25AB7800C7FFEC69ABA470FBC1A7E4604E36833AB2EEB8F"
+        },
+        {
+          "path": "server/ops.json",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "A143A7EF0DF1FB6D4A652E6E974F98DF1182888C5371432AA8BC5F7A8EC69E1C"
+        },
+        {
+          "path": "server/config/hassium/hassium-server.toml",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "2830D578363A0E9CBC75B09FC9AAC4A9F83E8CD57331ACF7A8959BDFDE76B025"
+        },
+        {
+          "path": "server/config/hassium/hassium_aggregation_dict.bin",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "6E84D7F9151273ADAE19D90AE101A08891513205C7D5F3AD97CB0B1A457FB17F"
+        },
+        {
+          "path": "server/config/hassium/aggregation_corpus/retrain.marker",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "9B062ABCBA4796A055BF28822B4AFC8892AA08212047802E882748D48DA59CB4"
+        }
+      ],
+      "result": "build/smoke-test/results/result_sleepwindow_1211_20261021_b.json",
+      "clientLog": "build/smoke-test/logs/client_sleepwindow_1211_20261021_b.log",
+      "serverLog": "build/smoke-test/logs/server_sleepwindow_1211_20261021_b.log",
+      "screenshot": "build/smoke-test/probe/sleepwindow_1211_20261021_b/sleep-window.png",
+      "clientChecks": [
+        "[18:53:18] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP automatic entry input uninterrupted; attackReleasedDuringEntry=false",
+        "[18:53:19] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP entity x=40.5 present=false",
+        "[18:53:22] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:SLEEP renderer drawnColumns=9 culledSections=1888584",
+        "[18:53:22] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:SLEEP roof/halo boundary light sky=11 block=14",
+        "[18:53:22] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:SLEEP window visible=9 light=25 distant terrain paused",
+        "[18:53:24] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP in-place trigger=turn identity/input/near-entity preserved using=true",
+        "[18:53:24] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP entity x=40.5 present=true",
+        "[18:53:39] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:SLEEP distant block and BE-only update current",
+        "[18:53:39] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:SLEEP roof/halo boundary light sky=11 block=14",
+        "[18:53:41] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP released input remained released",
+        "[18:53:42] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP automatic entry input uninterrupted; attackReleasedDuringEntry=false",
+        "[18:53:46] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP in-place trigger=move identity/input/near-entity preserved using=true",
+        "[18:53:46] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP entity x=40.5 present=true",
+        "[18:53:47] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP released input remained released",
+        "[18:53:49] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP automatic entry input uninterrupted; attackReleasedDuringEntry=false",
+        "[18:53:52] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP in-place trigger=esc identity/input/near-entity preserved using=false",
+        "[18:53:53] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP released input remained released",
+        "[18:54:12] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP automatic entry input uninterrupted; attackReleasedDuringEntry=false",
+        "[18:54:14] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP in-place trigger=sprint identity/input/near-entity preserved using=false",
+        "[18:54:14] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP actual mining progress preserved stage=4",
+        "[18:54:16] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP released input remained released"
+      ],
+      "serverChecks": [
+        "[18:53:22] [Server thread/INFO] [Hassium/]: [SLEEP] resumed inPlace player=380df991-f603-344c-a090-369bad2a924a generation=1792579947647 restoredEntities=149 usingItem=true leases=0",
+        "[18:53:24] [Server thread/INFO] [Hassium/]: HassiumSmokeTest:SLEEP snapshot tail packets=4 bytes=38 retry=false",
+        "[18:53:43] [Server thread/INFO] [Hassium/]: [SLEEP] resumed inPlace player=380df991-f603-344c-a090-369bad2a924a generation=1792579947648 restoredEntities=134 usingItem=true leases=0",
+        "[18:53:46] [Server thread/INFO] [Hassium/]: HassiumSmokeTest:SLEEP snapshot tail packets=1 bytes=10 retry=false",
+        "[18:53:49] [Server thread/INFO] [Hassium/]: [SLEEP] resumed inPlace player=380df991-f603-344c-a090-369bad2a924a generation=1792579947649 restoredEntities=125 usingItem=true leases=0",
+        "[18:53:52] [Server thread/INFO] [Hassium/]: HassiumSmokeTest:SLEEP snapshot tail packets=2 bytes=20 retry=false",
+        "[18:54:12] [Server thread/INFO] [Hassium/]: [SLEEP] resumed inPlace player=380df991-f603-344c-a090-369bad2a924a generation=1792579947650 restoredEntities=123 usingItem=false leases=0",
+        "[18:54:14] [Server thread/INFO] [Hassium/]: HassiumSmokeTest:SLEEP snapshot tail packets=1 bytes=17 retry=false"
+      ],
+      "jar": "neoforge/build/1_21_1/libs/hassium-neoforge-2.1.3-1.21.1.jar",
+      "sha256": "63BCF7FB763F4D6B43D6104620EF58D1E6143F35412C93C4C0A9002524E0ABF5"
+    }
+  ],
+  "retainedFailures": [
+    {
+      "session": "sleepwindow_1201_20261021_a",
+      "cause": "Accelerated test auto-sleep timer re-entered during recovery observation; reset test override at resume"
+    },
+    {
+      "session": "sleepwindow_1201_20261021_b",
+      "cause": "Forced FULL pending item reinjected repeatedly; consume forced pending token after one successful injection"
+    }
+  ],
+  "port25565Listening": false
+}

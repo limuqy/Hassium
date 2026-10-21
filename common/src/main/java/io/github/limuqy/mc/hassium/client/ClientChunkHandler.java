@@ -93,17 +93,30 @@ public class ClientChunkHandler {
      * （{@code MixinClientPacketListener} HEAD 钩子接管影子光照管线）。
      */
     public static boolean applyShadowPullFull(byte[] payload) {
+        return applyShadowPullFull(payload, false);
+    }
+
+    public static boolean applyShadowPullFull(byte[] payload, boolean nbtRepair) {
         net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket packet = decodeChunkPacket(payload);
         if (packet == null) {
             return false;
         }
-        markPullApply(packet.getX(), packet.getZ());
         net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
         net.minecraft.client.multiplayer.ClientPacketListener listener = mc.getConnection();
         if (listener == null) {
             return false;
         }
-        mc.execute(() -> listener.handleLevelChunkWithLight(packet));
+        mc.execute(() -> {
+            if (mc.getConnection() != listener) return;
+            if (nbtRepair && io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.shouldInterceptVanillaChunks()) {
+                io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.submitVisible(
+                        io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.currentDimension(),
+                        new ChunkPos(packet.getX(), packet.getZ()), packet, TraceOrigin.REMOTE_PULL, true);
+            } else {
+                markPullApply(packet.getX(), packet.getZ());
+                listener.handleLevelChunkWithLight(packet);
+            }
+        });
         return true;
     }
 

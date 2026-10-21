@@ -31,6 +31,11 @@ public class MixinConnection {
 
     @Shadow private io.netty.channel.Channel channel;
 
+    @Inject(method="channelActive",at=@At("TAIL"))
+    private void hassium$sleepTcpProbe(ChannelHandlerContext ctx,CallbackInfo ci) {
+        if(receiving==PacketFlow.SERVERBOUND) io.github.limuqy.mc.hassium.server.sleep.SleepRuntimeProbe.installTcpMeter(ctx.channel());
+    }
+
 #if MC_VER >= MC_1_21_1
     // Only the reconfigurable ProtocolInfo pipeline can pause an already active v3 FIFO.
     // Legacy setProtocol runs during initial login, before v3 is installed; leave it untouched.
@@ -40,8 +45,21 @@ public class MixinConnection {
     }
 #endif
 #if MC_VER < MC_1_21_1
+    @Unique private long hassium$sleepLoginProbeAt;
+    @Inject(method="tick",at=@At("HEAD"))
+    private void hassium$sleepLoginProbe(CallbackInfo ci) {
+        if(receiving==PacketFlow.CLIENTBOUND && io.github.limuqy.mc.hassium.client.ClientSmokeTest.isEnabled()
+                && packetListener instanceof net.minecraft.network.protocol.login.ClientLoginPacketListener
+                && System.nanoTime()-hassium$sleepLoginProbeAt>2_000_000_000L) {
+            hassium$sleepLoginProbeAt=System.nanoTime();
+            io.github.limuqy.mc.hassium.Constants.LOG.info("[SLEEP_LOGIN_PROBE] tick channel={} autoRead={} handlers={}",channel.id(),channel.config().isAutoRead(),channel.pipeline().names());
+        }
+    }
     @Inject(method = "channelRead0", at = @At("HEAD"), cancellable = true)
     private void hassium$consumeLoginQueryAnswer(ChannelHandlerContext ctx, Packet<?> packet, CallbackInfo ci) {
+        if(receiving==PacketFlow.CLIENTBOUND && io.github.limuqy.mc.hassium.client.ClientSmokeTest.isEnabled()
+                && packet instanceof net.minecraft.network.protocol.login.ClientboundCustomQueryPacket q)
+            io.github.limuqy.mc.hassium.Constants.LOG.info("[SLEEP_LOGIN_PROBE] query channel={} id={} transaction={}",ctx.channel().id(),q.getIdentifier(),q.getTransactionId());
         if (receiving != PacketFlow.SERVERBOUND || !(packet instanceof net.minecraft.network.protocol.login.ServerboundCustomQueryPacket query)) return;
         if (query.getTransactionId() != io.github.limuqy.mc.hassium.protocol.handshake.LoginHandshake.TRANSACTION_ID) return;
         if (LoginHandshakeManager.consumeQueryAnswerAtChannel((Connection)(Object)this, query.getData())) ci.cancel();
@@ -64,6 +82,10 @@ public class MixinConnection {
     private void hassium$beginWrite(Packet<?> packet, io.netty.channel.ChannelFutureListener listener, boolean flush, CallbackInfo ci) {
 #endif
         if (receiving == PacketFlow.SERVERBOUND) {
+#if MC_VER < MC_1_21_1
+            if(io.github.limuqy.mc.hassium.server.ServerSmokeTest.isEnabled() && packet instanceof net.minecraft.network.protocol.login.ClientboundCustomQueryPacket q)
+                io.github.limuqy.mc.hassium.Constants.LOG.info("[SLEEP_LOGIN_PROBE] write channel={} id={} handlers={}",channel.id(),q.getTransactionId(),channel.pipeline().names());
+#endif
             io.github.limuqy.mc.hassium.protocol.egress.EgressPipeline.callback(channel, listener != null);
         }
     }
@@ -91,13 +113,13 @@ public class MixinConnection {
     //   单参→双参→三参全部汇聚，天然无重复拦截。
     // - 1.21.6+：三参第二参类型改为 ChannelFutureListener，结构同上。
 #if MC_VER < MC_1_21_1
-    @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;Lnet/minecraft/network/PacketSendListener;)V", at = @At("HEAD"))
+    @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;Lnet/minecraft/network/PacketSendListener;)V", at = @At("HEAD"), cancellable = true)
     private void hassium$onSendPacket(Packet<?> packet, net.minecraft.network.PacketSendListener listener, CallbackInfo ci) {
 #elif MC_VER < MC_1_21_6
-    @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;Lnet/minecraft/network/PacketSendListener;Z)V", at = @At("HEAD"))
+    @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;Lnet/minecraft/network/PacketSendListener;Z)V", at = @At("HEAD"), cancellable = true)
     private void hassium$onSendPacket(Packet<?> packet, net.minecraft.network.PacketSendListener listener, boolean flush, CallbackInfo ci) {
 #else
-    @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;Lio/netty/channel/ChannelFutureListener;Z)V", at = @At("HEAD"))
+    @Inject(method = "send(Lnet/minecraft/network/protocol/Packet;Lio/netty/channel/ChannelFutureListener;Z)V", at = @At("HEAD"), cancellable = true)
     private void hassium$onSendPacket(Packet<?> packet, io.netty.channel.ChannelFutureListener listener, boolean flush, CallbackInfo ci) {
 #endif
         hassium$tryAggregate(packet, listener != null, ci);
@@ -115,11 +137,14 @@ public class MixinConnection {
         }
 
         // 实体更新包实测计数（帧率压力的输入；只计数，不改变投递语义）
+        if (io.github.limuqy.mc.hassium.server.sleep.SleepServer.bypass()) return;
         if (io.github.limuqy.mc.hassium.server.entity.EntityPacketCounters.isEntityUpdatePacket(packet)) {
             io.github.limuqy.mc.hassium.server.entity.EntityPacketCounters.observe(self);
         }
+        io.github.limuqy.mc.hassium.compat.SleepProbeCompat.source(((ServerGamePacketListenerImpl)packetListener).getPlayer(),packet);
 
         // Native PacketEncoder captures the bytes after exactly one invocation of the original codec.
+        if (io.github.limuqy.mc.hassium.server.sleep.SleepServer.suppress(self,packet,hasSendListener)) ci.cancel();
     }
 
     // review-fix: T7-60: 带描述符注入 disconnect——1.21.1+ 有 Component/DisconnectionDetails 双重载
@@ -132,6 +157,7 @@ public class MixinConnection {
     private void hassium$onDisconnect(CallbackInfo ci) {
         Connection self = (Connection) (Object) this;
         HassiumConnectionRegistry.markDisabled(self);
+        io.github.limuqy.mc.hassium.server.sleep.SleepServer.disconnected(self);
         io.github.limuqy.mc.hassium.server.entity.EntityPacketCounters.forget(self);
         // 字典 rollout：断连解除其 offer ACK 门控（或触发阻断者离开后的重试）
         io.github.limuqy.mc.hassium.protocol.DictionaryManager.onConnectionGone(self);

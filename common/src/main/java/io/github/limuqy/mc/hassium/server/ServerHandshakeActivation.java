@@ -272,6 +272,7 @@ public final class ServerHandshakeActivation {
             java.util.List<String> dimensionIds = SeedGenTail.collectDimensionIds(
                     io.github.limuqy.mc.hassium.compat.PlayerCompat.getMinecraftServer(player));
             Services.NETWORK_MANAGER.sendPlayInit(player, caps, worldSeed, stemNbt, enabled, dimensionIds);
+            if (LoginCaps.has(caps,LoginCaps.SLEEP)) io.github.limuqy.mc.hassium.server.sleep.SleepServer.onPlayReady(player);
         } catch (Exception e) {
             Constants.LOG.warn("Hassium: Failed to send play init to {}",
                     player.getName().getString(), e);

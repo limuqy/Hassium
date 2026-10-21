@@ -20,13 +20,13 @@
 
 - 用 **内容哈希**（非 `inhabitedTime`）判断缓存是否可复用
 - section 方块数据哈希排除会每 tick 变化的 blockEntity NBT
-- blockEntity 不进缓存命中域：区块 apply 后再走专用请求（`block_entity_request_c2s` / `block_entity_data_s2c`）
+- blockEntity 不进方块哈希：协商 `PULL_NBT` 后，`UNCHANGED` 响应也附带当前整柱客户端 BE 更新快照，先应用再允许缓存交付；不存在额外的 `block_entity_request_c2s` 请求
 - 客户端缓存 payload 为**磁盘 chunk `CompoundTag`**（影子端原版存档格式），跨大版本约束放宽到 NBT schema 兼容
 
 ## 2. 哈希
 
 ```
-sectionHash = hash(section 方块 palette + 生物群系序列化字节)
+sectionHash = hash(section 完整 BlockState 序列，不含生物群系或 BE NBT)
 chunkHash   = combineSectionHashes(sectionIndex → sectionHash)
 ```
 
@@ -38,7 +38,7 @@ chunkHash   = combineSectionHashes(sectionIndex → sectionHash)
 
 1. 内存已注入 → `ShadowStorageHashes` 表优先，无表现算
 2. 未注入 → `ShadowSeedServer.loadFromDisk` 读影子端存档比对（光脏标记拦截欠光块）
-3. 与服务端 `chunkHash` 相等 → 命中直接回传；不等且光干净 → 分段增量候选
+3. 与服务端 `chunkHash` 相等 → 复用地形，先补齐响应携带的 BE 更新快照；不等 → 分段增量候选
 
 ## 3. 现行数据流
 
@@ -80,7 +80,7 @@ ShadowPullRequestC2S(chunkHash, sectionHashes, planes)
     │
     ▼
 服务端权威比较
-    ├─ UNCHANGED → 影子端 materialize 后回传官方 chunk+light
+    ├─ UNCHANGED → 补齐 BE 更新快照，复用影子地形和光照
     ├─ DELTA     → 复用 SectionDeltaS2CPacket → 影子端 apply + 重算光照
     ├─ FULL      → 影子端注入服务端原版 chunk+light payload
     └─ ERROR     → 无 baseline ShadowPull 请求权威 FULL
@@ -92,6 +92,16 @@ ClientPacketListener.handleLevelChunkWithLight
 - `UNCHANGED` 只有影子端实际 materialize 柱时才算命中；hash 有记录但找不到柱时立即重试无 baseline 的权威 FULL。
 - 本地生成必须同时满足客户端开关、服务端许可、真实 seed 和 content hash；任一条件缺失、生成失败或 hash mismatch 均提交无 baseline ShadowPull。
 - `DELTA` 的编码、传输、应用和失败回退全部由统一 ShadowPull 管理，不再发送旧独立分段请求。
+
+### 3.3 BE NBT 与缓存回放（2026-10-21）
+
+`PULL_NBT` 为双端按位与协商的能力。启用后 `UNCHANGED` 只代表方块状态未变化，响应 payload 必须包含完整 BE 更新列表（位置、类型、`getUpdateTag`）；数量 0 是明确空快照，零字节不是合法的新能力响应。最多 4096 项、2 MiB，拒绝越柱坐标、重复位置及尾随数据。`DELTA` / `FULL` 继续携带原有 BE 数据。不把服务端完整存档 NBT 当作客户端更新数据，也不引入每 tick 的 NBT 哈希计算。
+
+收到命中响应后先更新影子 BE 与 `ShadowBlockEntitySnapshots`、标脏保存，再确认权威并发布缓存。已显示的柱原位更新 BE，清理不在快照内的旧实体和 pending NBT；不重建世界、玩家或连接。命中响应无需地形解压，在原生主线程接收入口按序处理，避免后台 decode hop 排在后来的原生 BE 更新之后。普通在线变化仍由原生更新包镜像到影子端。无物化基线或快照应用失败回退权威 FULL；修复意图绑定请求与对应注入工作项，即使方块哈希相等也必须覆盖 NBT，成功后消费一次，不能被普通重复区块门禁吞掉。
+
+缓存读盘必须区分 `ImposterProtoChunk` 与真正的 `ProtoChunk`：前者解包后执行原版 `LevelChunk.runPostLoad()`，让存档 BE 完成加载；转换和 postLoad 都调度到影子主循环。随后恢复保存的客户端 NBT 快照。此前直接把包装层重新构造为 `LevelChunk` 丢掉了延迟加载回调，造成磁盘中有文字而 R2 回放成空告示牌。
+
+休眠恢复使用同一比较入口。`UNCHANGED` / `DELTA` / `FULL` 均建立快照后更新缓冲，并在实际应用确认后补放更新、开放显示；普通缓存不依赖休眠控制协议。未协商 `PULL_NBT` 的休眠连接仍强制 FULL；新服务端对旧客户端的含 BE 命中不发送新载荷，走已有 DELTA/FULL 路径。双方更新后才能完整启用新的 NBT 命中语义。
 
 ## 4. 主线程限流
 

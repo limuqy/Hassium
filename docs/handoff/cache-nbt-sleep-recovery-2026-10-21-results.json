@@ -1,0 +1,1108 @@
+{
+  "date": "2026-10-21",
+  "branch": "2.0.0",
+  "finding": "FULL disk read wrapped a LevelChunk with deferred BE postLoad. Treating it as a new ProtoChunk lost that callback. Unwrap and run postLoad on the shadow loop; separately refresh client-visible BE NBT on negotiated UNCHANGED hits.",
+  "isolation": {
+    "session": "cachenbt_1201_20261021_readfix",
+    "harness": "FAIL (expected before freshness fix)",
+    "evidence": [
+      "[19:43:53] [hassium-seedgen-main/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT loaded pos=BlockPos{x=8, y=68, z=3} text=R1_0 waxed=false",
+      "[19:43:53] [hassium-seedgen-main/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT loaded pos=BlockPos{x=10, y=68, z=3} text=R1_1 waxed=false",
+      "[19:43:53] [hassium-seedgen-main/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT loaded pos=BlockPos{x=40, y=68, z=3} text=R1_2 waxed=false",
+      "[19:43:53] [hassium-seedgen-main/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT loaded pos=BlockPos{x=42, y=68, z=3} text=R1_3 waxed=false",
+      "[19:44:23] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R2 group=nbt_only pos=BlockPos{x=8, y=68, z=3} expected=R2_0 actual=R1_0 waxed=false correct=false",
+      "[19:44:23] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R2 group=nbt_only pos=BlockPos{x=10, y=68, z=3} expected=R2_1 actual=R1_1 waxed=false correct=false",
+      "[19:44:23] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R2 group=block_changed pos=BlockPos{x=40, y=68, z=3} expected=R2_2 actual=R2_2 waxed=true correct=true",
+      "[19:44:23] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R2 group=block_changed pos=BlockPos{x=42, y=68, z=3} expected=R2_3 actual=R2_3 waxed=true correct=true",
+      "[19:44:23] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R2 wallCorrect=true staleSigns=2"
+    ],
+    "explanation": "Read-only fix restores R1 text rather than blank; R2 must still fail until the new authoritative NBT projection is enabled."
+  },
+  "compileAnchors": [
+    "1.20.1",
+    "1.21.1",
+    "1.21.2",
+    "1.21.5",
+    "1.21.6",
+    "1.21.9",
+    "1.21.11"
+  ],
+  "compileAndBoundaryResult": "PASS",
+  "trafficAnalyzerUnitTests": 3,
+  "capability": "PULL_NBT",
+  "wire": "UNCHANGED payload is a bounded complete client update-tag projection; empty count is explicit; terrain hash stays independent.",
+  "exploratoryFailures": [
+    {
+      "session": "cachenbt_1201_20261021_fixed_c",
+      "reason": "New fault-injection fixture referenced ClientLevel from a dedicated-server-loaded class; isolated client implementation into a nested class."
+    },
+    {
+      "session": "cachenbt_1201_20261021_fixed_d",
+      "reason": "Forcing every FULL to replace bypassed ordinary duplicate protection and regressed R1 updates. Repair intent is now bound only to explicit NBT repair request IDs and their injection work item."
+    },
+    {
+      "sessions": [
+        "cachenbt_1201_20261021_fixed_e",
+        "cachenbt_1201_20261021_fixed_f",
+        "cachenbt_1201_20261021_fixed_g",
+        "cachenbt_1201_20261021_fixed_h"
+      ],
+      "reason": "Queued empty responses consumed request metadata before the terminal FULL arrived. Per-column request tracking now retains mode/repair intent across empty acknowledgements and split responses; final fixed_i passes all 24 client checks."
+    }
+  ],
+  "sampling": "One adjacent 30-second normal/sleep pair per input mode, recovery >=30 seconds and all paused visible columns ready. Same dictionary and fixture as old forced-FULL sample, separate fresh worlds. No packet capture TCP/IP headers or client-upload bytes.",
+  "runs": [
+    {
+      "visualCheck": {
+        "path": "build\\smoke-test\\probe\\sleepcache_1201_20261021_b\\sleep-window.png",
+        "sha256": "bd59fef99ba645563016645b0477ee354a463af5888d8c934898a39157b1a8af",
+        "reviewed": "No mask; nearby 3x3 status visible; bow remains drawn."
+      },
+      "cacheRestored": {
+        "fileCount": 22,
+        "allSha256Match": true
+      },
+      "version": "1.20.1",
+      "loader": "forge",
+      "sessions": {
+        "nbt": "cachenbt_1201_20261021_fixed_j",
+        "sleep": "sleepcache_1201_20261021_b",
+        "traffic": "sleepcachetraffic_1201_20261021_b"
+      },
+      "nbt": {
+        "session": "cachenbt_1201_20261021_fixed_j",
+        "harness": "PASS",
+        "qualityProblems": [],
+        "clientChecks": [
+          "[20:44:39] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R1 case=0 pos=BlockPos{x=8, y=68, z=3} expected=R1_0 actual=R1_0 waxed=false correct=true",
+          "[20:44:39] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R1 case=1 pos=BlockPos{x=10, y=68, z=3} expected=R1_1 actual=R1_1 waxed=false correct=true",
+          "[20:44:39] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R1 case=2 pos=BlockPos{x=40, y=68, z=3} expected=R1_2 actual=R1_2 waxed=false correct=true",
+          "[20:44:39] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R1 case=3 pos=BlockPos{x=42, y=68, z=3} expected=R1_3 actual=R1_3 waxed=false correct=true",
+          "[20:44:39] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R1 case=4 pos=BlockPos{x=12, y=68, z=3} expected=R1_4 actual=R1_4 waxed=false correct=true",
+          "[20:44:39] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R1 case=5 pos=BlockPos{x=14, y=68, z=3} expected=R1_5 actual=R1_5 waxed=false correct=true",
+          "[20:44:39] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R1 case=6 pos=BlockPos{x=44, y=68, z=3} expected=R1_6 actual=R1_6 waxed=false correct=true",
+          "[20:44:39] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R1 case=7 pos=BlockPos{x=46, y=68, z=3} expected=R1_7 actual=R1_7 waxed=false correct=true",
+          "[20:44:39] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R1 wallCorrect=true staleSigns=0",
+          "[20:45:16] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R2 case=0 pos=BlockPos{x=8, y=68, z=3} expected=R2_0 actual=R2_0 waxed=true correct=true",
+          "[20:45:16] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R2 case=1 pos=BlockPos{x=10, y=68, z=3} expected=R2_1 actual=R2_1 waxed=true correct=true",
+          "[20:45:16] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R2 case=2 pos=BlockPos{x=40, y=68, z=3} expected=R2_2 actual=R2_2 waxed=true correct=true",
+          "[20:45:16] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R2 case=3 pos=BlockPos{x=42, y=68, z=3} expected=R2_3 actual=R2_3 waxed=true correct=true",
+          "[20:45:16] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R2 case=4 pos=BlockPos{x=12, y=68, z=3} expected=R1_4 actual=R1_4 waxed=false correct=true",
+          "[20:45:16] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R2 case=5 pos=BlockPos{x=14, y=68, z=3} expected= actual= waxed=true correct=true",
+          "[20:45:16] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R2 case=6 pos=BlockPos{x=44, y=68, z=3} expected=R2_6 actual=MISSING waxed=false correct=true",
+          "[20:45:16] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R2 case=7 pos=BlockPos{x=46, y=68, z=3} expected=R2_7 actual=MISSING waxed=false correct=true",
+          "[20:45:16] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R2 wallCorrect=true staleSigns=0",
+          "[20:45:21] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R3 case=0 pos=BlockPos{x=8, y=68, z=3} expected=R2_0 actual=R2_0 waxed=true correct=true",
+          "[20:45:21] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R3 case=1 pos=BlockPos{x=10, y=68, z=3} expected=R2_1 actual=R2_1 waxed=true correct=true",
+          "[20:45:21] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R3 case=2 pos=BlockPos{x=40, y=68, z=3} expected=R2_2 actual=R2_2 waxed=true correct=true",
+          "[20:45:21] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R3 case=3 pos=BlockPos{x=42, y=68, z=3} expected=R2_3 actual=R2_3 waxed=true correct=true",
+          "[20:45:21] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R3 case=4 pos=BlockPos{x=12, y=68, z=3} expected=R1_4 actual=R1_4 waxed=false correct=true",
+          "[20:45:21] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R3 case=5 pos=BlockPos{x=14, y=68, z=3} expected= actual= waxed=true correct=true",
+          "[20:45:21] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R3 case=6 pos=BlockPos{x=44, y=68, z=3} expected=R2_6 actual=MISSING waxed=false correct=true",
+          "[20:45:21] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R3 case=7 pos=BlockPos{x=46, y=68, z=3} expected=R2_7 actual=MISSING waxed=false correct=true",
+          "[20:45:21] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R3 wallCorrect=true staleSigns=0"
+        ],
+        "diskRestores": [
+          "[20:44:46] [hassium-seedgen-main/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT loaded pos=BlockPos{x=8, y=68, z=3} text=R1_0 waxed=false",
+          "[20:44:46] [hassium-seedgen-main/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT loaded pos=BlockPos{x=10, y=68, z=3} text=R1_1 waxed=false",
+          "[20:44:46] [hassium-seedgen-main/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT loaded pos=BlockPos{x=12, y=68, z=3} text=R1_4 waxed=false",
+          "[20:44:46] [hassium-seedgen-main/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT loaded pos=BlockPos{x=14, y=68, z=3} text=R1_5 waxed=false",
+          "[20:44:46] [hassium-seedgen-main/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT loaded pos=BlockPos{x=40, y=68, z=3} text=R1_2 waxed=false",
+          "[20:44:46] [hassium-seedgen-main/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT loaded pos=BlockPos{x=42, y=68, z=3} text=R1_3 waxed=false",
+          "[20:44:46] [hassium-seedgen-main/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT loaded pos=BlockPos{x=44, y=68, z=3} text=R1_6 waxed=false",
+          "[20:44:46] [hassium-seedgen-main/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT loaded pos=BlockPos{x=46, y=68, z=3} text=R1_7 waxed=false"
+        ],
+        "storedNbt": [
+          "[20:44:46] [hassium-seedgen-main/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT disk pos=[0, 0] stored=[{back_text:{color:\"black\",has_glowing_text:0b,messages:['{\"text\":\"\"}','{\"text\":\"\"}','{\"text\":\"\"}','{\"text\":\"\"}']},front_text:{color:\"black\",has_glowing_text:0b,messages:['{\"text\":\"R1_0\"}','{\"text\":\"\"}','{\"text\":\"\"}','{\"text\":\"\"}']},\"hassium:client_nbt\":1b,id:\"minecraft:sign\",is_waxed:0b,keepPacked:0b,x:8,y:68,z:3}, {back_text:{color:\"black\",has_glowing_text:0b,messages:['{\"text\":\"\"}','{\"text\":\"\"}','{\"text\":\"\"}','{\"text\":\"\"}']},front_text:{color:\"black\",has_glowing_text:0b,messages:['{\"text\":\"R1_1\"}','{\"text\":\"\"}','{\"text\":\"\"}','{\"text\":\"\"}']},\"hassium:client_nbt\":1b,id:\"minecraft:sign\",is_waxed:0b,keepPacked:0b,x:10,y:68,z:3}, {back_text:{color:\"black\",has_glowing_text:0b,messages:['{\"text\":\"\"}','{\"text\":\"\"}','{\"text\":\"\"}','{\"text\":\"\"}']},front_text:{color:\"black\",has_glowing_text:0b,messages:['{\"text\":\"R1_4\"}','{\"text\":\"\"}','{\"text\":\"\"}','{\"text\":\"\"}']},\"hassium:client_nbt\":1b,id:\"minecraft:sign\",is_waxed:0b,keepPacked:0b,x:12,y:68,z:3}, {back_text:{color:\"black\",has_glowing_text:0b,messages:['{\"text\":\"\"}','{\"text\":\"\"}','{\"text\":\"\"}','{\"text\":\"\"}']},front_text:{color:\"black\",has_glowing_text:0b,messages:['{\"text\":\"R1_5\"}','{\"text\":\"\"}','{\"text\":\"\"}','{\"text\":\"\"}']},\"hassium:client_nbt\":1b,id:\"minecraft:sign\",is_waxed:0b,keepPacked:0b,x:14,y:68,z:3}]",
+          "[20:44:46] [hassium-seedgen-main/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT disk pos=[2, 0] stored=[{back_text:{color:\"black\",has_glowing_text:0b,messages:['{\"text\":\"\"}','{\"text\":\"\"}','{\"text\":\"\"}','{\"text\":\"\"}']},front_text:{color:\"black\",has_glowing_text:0b,messages:['{\"text\":\"R1_2\"}','{\"text\":\"\"}','{\"text\":\"\"}','{\"text\":\"\"}']},\"hassium:client_nbt\":1b,id:\"minecraft:sign\",is_waxed:0b,keepPacked:0b,x:40,y:68,z:3}, {back_text:{color:\"black\",has_glowing_text:0b,messages:['{\"text\":\"\"}','{\"text\":\"\"}','{\"text\":\"\"}','{\"text\":\"\"}']},front_text:{color:\"black\",has_glowing_text:0b,messages:['{\"text\":\"R1_3\"}','{\"text\":\"\"}','{\"text\":\"\"}','{\"text\":\"\"}']},\"hassium:client_nbt\":1b,id:\"minecraft:sign\",is_waxed:0b,keepPacked:0b,x:42,y:68,z:3}, {back_text:{color:\"black\",has_glowing_text:0b,messages:['{\"text\":\"\"}','{\"text\":\"\"}','{\"text\":\"\"}','{\"text\":\"\"}']},front_text:{color:\"black\",has_glowing_text:0b,messages:['{\"text\":\"R1_6\"}','{\"text\":\"\"}','{\"text\":\"\"}','{\"text\":\"\"}']},\"hassium:client_nbt\":1b,id:\"minecraft:sign\",is_waxed:0b,keepPacked:0b,x:44,y:68,z:3}, {back_text:{color:\"black\",has_glowing_text:0b,messages:['{\"text\":\"\"}','{\"text\":\"\"}','{\"text\":\"\"}','{\"text\":\"\"}']},front_text:{color:\"black\",has_glowing_text:0b,messages:['{\"text\":\"R1_7\"}','{\"text\":\"\"}','{\"text\":\"\"}','{\"text\":\"\"}']},\"hassium:client_nbt\":1b,id:\"minecraft:sign\",is_waxed:0b,keepPacked:0b,x:46,y:68,z:3}]"
+        ],
+        "serverMutations": [
+          "[20:43:59] [Server thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT server R1 prepared signs=8 controlHash=9df08a97e9e3f3be nbtOnlyHash=58ace20ad6cc6f45",
+          "[20:44:39] [Server thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT server R2 pos=BlockPos{x=8, y=68, z=3} text=R2_0 waxed=true players=0",
+          "[20:44:39] [Server thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT server R2 pos=BlockPos{x=10, y=68, z=3} text=R2_1 waxed=true players=0",
+          "[20:44:39] [Server thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT server R2 pos=BlockPos{x=40, y=68, z=3} text=R2_2 waxed=true players=0",
+          "[20:44:39] [Server thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT server R2 pos=BlockPos{x=42, y=68, z=3} text=R2_3 waxed=true players=0",
+          "[20:44:39] [Server thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT server R2 pos=BlockPos{x=14, y=68, z=3} text= waxed=true players=0",
+          "[20:44:39] [Server thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT offline controlChanged=true nbtOnlyUnchanged=true controlBefore=a1aadaf79a51f19c controlAfter=bb4015e447b7da84 nbtBefore=58ace20ad6cc6f45 nbtAfter=58ace20ad6cc6f45"
+        ],
+        "pullResults": [
+          "[20:43:59] [Hassium-PullDecode/INFO] [Hassium/]: [SHADOW_PULL] result id=6 pos=(0, 0) kind=FULL hash=58ace20ad6cc6f45 intercepted=false",
+          "[20:43:59] [Hassium-PullDecode/INFO] [Hassium/]: [SHADOW_PULL] result id=10 pos=(2, 0) kind=FULL hash=bf0845886f72bb81 intercepted=false",
+          "[20:44:46] [Render thread/INFO] [Hassium/]: [SHADOW_PULL] result id=550 pos=(0, 0) kind=UNCHANGED hash=58ace20ad6cc6f45 intercepted=false",
+          "[20:44:46] [Hassium-PullDecode/INFO] [Hassium/]: [SHADOW_PULL] result id=555 pos=(2, 0) kind=DELTA hash=bb4015e447b7da84 intercepted=false",
+          "[20:45:16] [Hassium-PullDecode/INFO] [Hassium/]: [SHADOW_PULL] result id=1046 pos=(0, 0) kind=FULL hash=58ace20ad6cc6f45 intercepted=false"
+        ],
+        "nbtSnapshots": [
+          "[20:44:46] [Render thread/INFO] [Hassium/]: [SHADOW_PULL_NBT] id=550 pos=(0, 0) entries=4 bytes=1101",
+          "[20:44:46] [Render thread/INFO] [Hassium/]: [SHADOW_PULL_NBT] id=551 pos=(0, 1) entries=1 bytes=208",
+          "[20:44:46] [Render thread/INFO] [Hassium/]: [SHADOW_PULL_NBT] id=570 pos=(2, -2) entries=3 bytes=259",
+          "[20:44:46] [Render thread/INFO] [Hassium/]: [SHADOW_PULL_NBT] id=603 pos=(5, 2) entries=1 bytes=208",
+          "[20:44:46] [Render thread/INFO] [Hassium/]: [SHADOW_PULL_NBT] id=676 pos=(5, -4) entries=2 bytes=231",
+          "[20:44:46] [Render thread/INFO] [Hassium/]: [SHADOW_PULL_NBT] id=682 pos=(4, -6) entries=3 bytes=259",
+          "[20:44:47] [Render thread/INFO] [Hassium/]: [SHADOW_PULL_NBT] id=698 pos=(-5, -5) entries=3 bytes=259",
+          "[20:44:47] [Render thread/INFO] [Hassium/]: [SHADOW_PULL_NBT] id=702 pos=(-5, -6) entries=3 bytes=261",
+          "[20:44:47] [Render thread/INFO] [Hassium/]: [SHADOW_PULL_NBT] id=748 pos=(-3, 8) entries=1 bytes=29",
+          "[20:44:47] [Render thread/INFO] [Hassium/]: [SHADOW_PULL_NBT] id=746 pos=(-2, 8) entries=2 bytes=231",
+          "[20:44:47] [Render thread/INFO] [Hassium/]: [SHADOW_PULL_NBT] id=758 pos=(-8, 2) entries=3 bytes=259",
+          "[20:44:47] [Render thread/INFO] [Hassium/]: [SHADOW_PULL_NBT] id=794 pos=(6, -6) entries=3 bytes=259",
+          "[20:44:47] [Render thread/INFO] [Hassium/]: [SHADOW_PULL_NBT] id=829 pos=(3, -9) entries=2 bytes=231",
+          "[20:44:47] [Render thread/INFO] [Hassium/]: [SHADOW_PULL_NBT] id=835 pos=(-5, -9) entries=2 bytes=231",
+          "[20:44:47] [Render thread/INFO] [Hassium/]: [SHADOW_PULL_NBT] id=851 pos=(2, 9) entries=9 bytes=629",
+          "[20:44:47] [Render thread/INFO] [Hassium/]: [SHADOW_PULL_NBT] id=870 pos=(11, -1) entries=3 bytes=261",
+          "[20:44:48] [Render thread/INFO] [Hassium/]: [SHADOW_PULL_NBT] id=938 pos=(-8, -8) entries=1 bytes=29",
+          "[20:44:48] [Render thread/INFO] [Hassium/]: [SHADOW_PULL_NBT] id=937 pos=(-7, -8) entries=1 bytes=205",
+          "[20:44:48] [Render thread/INFO] [Hassium/]: [SHADOW_PULL_NBT] id=940 pos=(-7, -9) entries=1 bytes=29",
+          "[20:44:48] [Render thread/INFO] [Hassium/]: [SHADOW_PULL_NBT] id=976 pos=(-11, 3) entries=1 bytes=29",
+          "[20:44:48] [Render thread/INFO] [Hassium/]: [SHADOW_PULL_NBT] id=992 pos=(-11, 4) entries=1 bytes=203"
+        ],
+        "failures": []
+      },
+      "traffic": {
+        "session": "sleepcachetraffic_1201_20261021_b",
+        "harness": "PASS",
+        "qualityProblems": [],
+        "measurement": "Successful all-protocol TCP application payload writes, including Minecraft framing; excludes TCP/IP headers, retransmissions and client upload.",
+        "windows": {
+          "idle_normal": {
+            "seconds": 30.3001199,
+            "tcpPayloadBytes": 434540,
+            "bytesPerSecond": 14341.197375921936,
+            "startMs": 1792586982509,
+            "endMs": 1792587012809,
+            "nativeBlockAcks": 0,
+            "outputItems": 1215,
+            "actualWorldTPS": 19.99992085839898
+          },
+          "idle_entry": {
+            "seconds": 0.3020388,
+            "tcpPayloadBytes": 4621,
+            "bytesPerSecond": 15299.358890314754,
+            "startMs": 1792587012809,
+            "endMs": 1792587013112,
+            "nativeBlockAcks": 0,
+            "outputItems": 1,
+            "actualWorldTPS": 19.86499747714532
+          },
+          "idle_sleep": {
+            "seconds": 30.2964441,
+            "tcpPayloadBytes": 117879,
+            "bytesPerSecond": 3890.852656203307,
+            "startMs": 1792587013112,
+            "endMs": 1792587043408,
+            "nativeBlockAcks": 0,
+            "outputItems": 1216,
+            "actualWorldTPS": 20.002347404195863
+          },
+          "idle_recovery": {
+            "seconds": 30.3010655,
+            "tcpPayloadBytes": 648678,
+            "bytesPerSecond": 21407.762047179494,
+            "startMs": 1792587043408,
+            "endMs": 1792587073709,
+            "nativeBlockAcks": 0,
+            "outputItems": 1216,
+            "actualWorldTPS": 19.999296724400665
+          },
+          "hold_attack_normal": {
+            "seconds": 30.2499041,
+            "tcpPayloadBytes": 432921,
+            "bytesPerSecond": 14311.483387479566,
+            "startMs": 1792587073709,
+            "endMs": 1792587103958,
+            "nativeBlockAcks": 2,
+            "outputItems": 1200,
+            "actualWorldTPS": 20.00006340515969
+          },
+          "hold_attack_entry": {
+            "seconds": 0.3002908,
+            "tcpPayloadBytes": 5028,
+            "bytesPerSecond": 16743.769705898416,
+            "startMs": 1792587103958,
+            "endMs": 1792587104259,
+            "nativeBlockAcks": 0,
+            "outputItems": 16,
+            "actualWorldTPS": 19.980632107277344
+          },
+          "hold_attack_sleep": {
+            "seconds": 30.3488809,
+            "tcpPayloadBytes": 121310,
+            "bytesPerSecond": 3997.18198505303,
+            "startMs": 1792587104259,
+            "endMs": 1792587134608,
+            "nativeBlockAcks": 2,
+            "outputItems": 1216,
+            "actualWorldTPS": 20.000737490126035
+          },
+          "hold_attack_recovery": {
+            "seconds": 30.3000998,
+            "tcpPayloadBytes": 617836,
+            "bytesPerSecond": 20390.55990172019,
+            "startMs": 1792587134608,
+            "endMs": 1792587164908,
+            "nativeBlockAcks": 0,
+            "outputItems": 1216,
+            "actualWorldTPS": 19.999934125629512
+          },
+          "periodic_attack_normal": {
+            "seconds": 30.30325,
+            "tcpPayloadBytes": 434145,
+            "bytesPerSecond": 14326.681131561796,
+            "startMs": 1792587164908,
+            "endMs": 1792587195211,
+            "nativeBlockAcks": 60,
+            "outputItems": 1215,
+            "actualWorldTPS": 19.99785501555114
+          },
+          "periodic_attack_entry": {
+            "seconds": 0.2974521,
+            "tcpPayloadBytes": 4734,
+            "bytesPerSecond": 15915.167517728065,
+            "startMs": 1792587195211,
+            "endMs": 1792587195509,
+            "nativeBlockAcks": 0,
+            "outputItems": 1,
+            "actualWorldTPS": 20.17131497810908
+          },
+          "periodic_attack_sleep": {
+            "seconds": 30.2989471,
+            "tcpPayloadBytes": 119150,
+            "bytesPerSecond": 3932.4798847548072,
+            "startMs": 1792587195509,
+            "endMs": 1792587225808,
+            "nativeBlockAcks": 60,
+            "outputItems": 1216,
+            "actualWorldTPS": 20.00069500764929
+          },
+          "periodic_attack_recovery": {
+            "seconds": 30.3018359,
+            "tcpPayloadBytes": 590512,
+            "bytesPerSecond": 19487.664112127277,
+            "startMs": 1792587225808,
+            "endMs": 1792587256110,
+            "nativeBlockAcks": 0,
+            "outputItems": 1216,
+            "actualWorldTPS": 19.998788258238836
+          }
+        },
+        "cycles": {
+          "idle": {
+            "normalBytesPerSecond": 14341.197375921936,
+            "sleepBytesPerSecond": 3890.852656203307,
+            "entryBytes": 4621,
+            "recoveryBytes": 648678,
+            "recoverySeconds": 30.3010655,
+            "measuredCycleBytes": 1205718,
+            "conservativeBreakEvenSeconds": 62.514588515659014,
+            "incrementalBreakEvenSeconds": 20.51739408301047,
+            "reductionPercent": 72.86940166700563,
+            "recoveryBytesPerSecond": 21407.762047179494,
+            "recoveryPullResults": {
+              "UNCHANGED": 412,
+              "DELTA": 112
+            },
+            "visibleWindowReadyMs": 4244,
+            "recoveryObservationMs": 30046
+          },
+          "hold_attack": {
+            "normalBytesPerSecond": 14311.483387479566,
+            "sleepBytesPerSecond": 3997.18198505303,
+            "entryBytes": 5028,
+            "recoveryBytes": 617836,
+            "recoverySeconds": 30.3000998,
+            "measuredCycleBytes": 1177095,
+            "conservativeBreakEvenSeconds": 60.38838460290344,
+            "incrementalBreakEvenSeconds": 17.92918502790779,
+            "reductionPercent": 72.070107082331,
+            "recoveryBytesPerSecond": 20390.55990172019,
+            "recoveryPullResults": {
+              "UNCHANGED": 458,
+              "DELTA": 66
+            },
+            "visibleWindowReadyMs": 4353,
+            "recoveryObservationMs": 30048
+          },
+          "periodic_attack": {
+            "normalBytesPerSecond": 14326.681131561796,
+            "sleepBytesPerSecond": 3932.4798847548072,
+            "entryBytes": 4734,
+            "recoveryBytes": 590512,
+            "recoverySeconds": 30.3018359,
+            "measuredCycleBytes": 1148541,
+            "conservativeBreakEvenSeconds": 57.26712287611851,
+            "incrementalBreakEvenSeconds": 15.091083407622175,
+            "reductionPercent": 72.55135471612108,
+            "recoveryBytesPerSecond": 19487.664112127277,
+            "recoveryPullResults": {
+              "UNCHANGED": 465,
+              "DELTA": 59
+            },
+            "visibleWindowReadyMs": 4247,
+            "recoveryObservationMs": 30042
+          }
+        },
+        "capability": "SLEEP_WINDOW",
+        "visibleColumns": 9,
+        "lightColumns": 25,
+        "fixture": "Same generated 16-lane vanilla factory layout on separate fresh worlds; VD=10; fixed dictionary",
+        "sampling": "One adjacent 30-second normal/sleep pair per input mode; recovery >=30 seconds and all paused visible columns ready; no injected offline wait",
+        "recoveryInput": "No attack actions during recovery observation; normal and sleep windows use matching scripted native interactions",
+        "serverResumeCount": 3
+      },
+      "previousTrafficSession": "sleepwindowtraffic_1201_20261021_a",
+      "trafficComparison": {
+        "idle": {
+          "beforeRecoveryBytes": 3889901,
+          "afterRecoveryBytes": 648678,
+          "recoveryReductionPercent": 83.32404860689256,
+          "beforeReadyMs": 4954,
+          "afterReadyMs": 4244
+        },
+        "hold_attack": {
+          "beforeRecoveryBytes": 3892440,
+          "afterRecoveryBytes": 617836,
+          "recoveryReductionPercent": 84.12728262991851,
+          "beforeReadyMs": 5049,
+          "afterReadyMs": 4353
+        },
+        "periodic_attack": {
+          "beforeRecoveryBytes": 3878526,
+          "afterRecoveryBytes": 590512,
+          "recoveryReductionPercent": 84.77483456343981,
+          "beforeReadyMs": 4995,
+          "afterReadyMs": 4247
+        }
+      },
+      "inputChecks": [
+        "[20:46:50] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP in-place trigger=turn identity/input/near-entity preserved using=true visiblePending=0 elapsedMs=4821",
+        "[20:47:13] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP in-place trigger=move identity/input/near-entity preserved using=true visiblePending=0 elapsedMs=4202",
+        "[20:47:21] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP in-place trigger=esc identity/input/near-entity preserved using=false visiblePending=0 elapsedMs=4100",
+        "[20:47:44] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP in-place trigger=sprint identity/input/near-entity preserved using=false visiblePending=0 elapsedMs=4049"
+      ],
+      "miningChecks": [
+        "[20:47:44] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP actual mining progress preserved stage=6"
+      ],
+      "worldChecks": [
+        "[20:46:45] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:SLEEP roof/halo boundary light sky=11 block=14",
+        "[20:46:45] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:SLEEP window visible=9 light=25 distant terrain paused",
+        "[20:47:05] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:SLEEP distant block and BE-only update current",
+        "[20:47:05] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:SLEEP roof/halo boundary light sky=11 block=14"
+      ],
+      "recoveryPulls": [
+        "[20:46:14] [Hassium-PullDecode/INFO] [Hassium/]: [SHADOW_PULL] result id=96 pos=(3, 0) kind=FULL hash=10a05ebfd1ace7c6 intercepted=false",
+        "[20:46:14] [Hassium-PullDecode/INFO] [Hassium/]: [SHADOW_PULL] result id=116 pos=(4, 0) kind=FULL hash=e31295797a821b26 intercepted=false",
+        "[20:46:46] [Render thread/INFO] [Hassium/]: [SHADOW_PULL] result id=515 pos=(4, 0) kind=UNCHANGED hash=1da6ad8fff7a8d25 intercepted=false",
+        "[20:46:46] [Hassium-PullDecode/INFO] [Hassium/]: [SHADOW_PULL] result id=509 pos=(3, 0) kind=DELTA hash=3e2a948edde80623 intercepted=false",
+        "[20:47:10] [Render thread/INFO] [Hassium/]: [SHADOW_PULL] result id=1033 pos=(3, 0) kind=UNCHANGED hash=8cf366a707c14302 intercepted=false",
+        "[20:47:10] [Render thread/INFO] [Hassium/]: [SHADOW_PULL] result id=1039 pos=(4, 0) kind=UNCHANGED hash=9020b5ec858b568d intercepted=false",
+        "[20:47:17] [Render thread/INFO] [Hassium/]: [SHADOW_PULL] result id=1563 pos=(4, 0) kind=UNCHANGED hash=9020b5ec858b568d intercepted=false",
+        "[20:47:17] [Hassium-PullDecode/INFO] [Hassium/]: [SHADOW_PULL] result id=1557 pos=(3, 0) kind=DELTA hash=9c3c4cd808d547d intercepted=false",
+        "[20:47:41] [Render thread/INFO] [Hassium/]: [SHADOW_PULL] result id=2087 pos=(4, 0) kind=UNCHANGED hash=9020b5ec858b568d intercepted=false",
+        "[20:47:41] [Hassium-PullDecode/INFO] [Hassium/]: [SHADOW_PULL] result id=2081 pos=(3, 0) kind=DELTA hash=406193b46e949deb intercepted=false"
+      ],
+      "restoreChecks": {
+        "nbt": [
+          {
+            "path": "client/options.txt",
+            "matchesBackup": true,
+            "sha256": "ff0949904b47c93bc714a456ca918bacb520cd712d754c73b87a106c8d46947d"
+          },
+          {
+            "path": "client/config/hassium/hassium-client.toml",
+            "matchesBackup": true,
+            "sha256": "c4308096bebfe91b3f716236802f02faf22494c83f0d53ac16b86f57e8240ea0"
+          },
+          {
+            "path": "client/config/hassium/hassium-server.toml",
+            "matchesBackup": true,
+            "sha256": "bd7ae942898504f24200b4e9eb9efa9a8f3714674eb10b7bcb8e2dd2089411dd"
+          },
+          {
+            "path": "server/server.properties",
+            "matchesBackup": true,
+            "sha256": "518540259053b63234b0d3c5235f03b0c24054f3ba03ec96131e22db01800c6b"
+          },
+          {
+            "path": "client/config/hassium/sleep-profiles.properties",
+            "matchesBackup": true,
+            "sha256": null
+          },
+          {
+            "path": "server/eula.txt",
+            "matchesBackup": true,
+            "sha256": "94169d86becdfccbb25ab7800c7ffec69aba470fbc1a7e4604e36833ab2eeb8f"
+          },
+          {
+            "path": "server/ops.json",
+            "matchesBackup": true,
+            "sha256": "a143a7ef0df1fb6d4a652e6e974f98df1182888c5371432aa8bc5f7a8ec69e1c"
+          },
+          {
+            "path": "server/config/hassium/hassium-server.toml",
+            "matchesBackup": true,
+            "sha256": "4bf1e50d2414cf0bd79f18148918bae1b0bac0b6423893bc20a68daa24e22a6d"
+          },
+          {
+            "path": "server/config/hassium/hassium_aggregation_dict.bin",
+            "matchesBackup": true,
+            "sha256": "e393fa8d66693e71a5440dd01ea0c438b097b3041b70d596654304a981a7c9ca"
+          },
+          {
+            "path": "server/config/hassium/aggregation_corpus/retrain.marker",
+            "matchesBackup": true,
+            "sha256": "36353066ef7fa9d4125ecc9fe3895e2106d1008bdf1ae0f9b28363e37f32e2df"
+          }
+        ],
+        "sleep": [
+          {
+            "path": "client/options.txt",
+            "matchesBackup": true,
+            "sha256": "ff0949904b47c93bc714a456ca918bacb520cd712d754c73b87a106c8d46947d"
+          },
+          {
+            "path": "client/config/hassium/hassium-client.toml",
+            "matchesBackup": true,
+            "sha256": "c4308096bebfe91b3f716236802f02faf22494c83f0d53ac16b86f57e8240ea0"
+          },
+          {
+            "path": "client/config/hassium/hassium-server.toml",
+            "matchesBackup": true,
+            "sha256": "bd7ae942898504f24200b4e9eb9efa9a8f3714674eb10b7bcb8e2dd2089411dd"
+          },
+          {
+            "path": "server/server.properties",
+            "matchesBackup": true,
+            "sha256": "518540259053b63234b0d3c5235f03b0c24054f3ba03ec96131e22db01800c6b"
+          },
+          {
+            "path": "client/config/hassium/sleep-profiles.properties",
+            "matchesBackup": true,
+            "sha256": null
+          },
+          {
+            "path": "server/eula.txt",
+            "matchesBackup": true,
+            "sha256": "94169d86becdfccbb25ab7800c7ffec69aba470fbc1a7e4604e36833ab2eeb8f"
+          },
+          {
+            "path": "server/ops.json",
+            "matchesBackup": true,
+            "sha256": "a143a7ef0df1fb6d4a652e6e974f98df1182888c5371432aa8bc5f7a8ec69e1c"
+          },
+          {
+            "path": "server/config/hassium/hassium-server.toml",
+            "matchesBackup": true,
+            "sha256": "4bf1e50d2414cf0bd79f18148918bae1b0bac0b6423893bc20a68daa24e22a6d"
+          },
+          {
+            "path": "server/config/hassium/hassium_aggregation_dict.bin",
+            "matchesBackup": true,
+            "sha256": "e393fa8d66693e71a5440dd01ea0c438b097b3041b70d596654304a981a7c9ca"
+          },
+          {
+            "path": "server/config/hassium/aggregation_corpus/retrain.marker",
+            "matchesBackup": true,
+            "sha256": "36353066ef7fa9d4125ecc9fe3895e2106d1008bdf1ae0f9b28363e37f32e2df"
+          }
+        ],
+        "traffic": [
+          {
+            "path": "client/options.txt",
+            "matchesBackup": true,
+            "sha256": "ff0949904b47c93bc714a456ca918bacb520cd712d754c73b87a106c8d46947d"
+          },
+          {
+            "path": "client/config/hassium/hassium-client.toml",
+            "matchesBackup": true,
+            "sha256": "c4308096bebfe91b3f716236802f02faf22494c83f0d53ac16b86f57e8240ea0"
+          },
+          {
+            "path": "client/config/hassium/hassium-server.toml",
+            "matchesBackup": true,
+            "sha256": "bd7ae942898504f24200b4e9eb9efa9a8f3714674eb10b7bcb8e2dd2089411dd"
+          },
+          {
+            "path": "server/server.properties",
+            "matchesBackup": true,
+            "sha256": "518540259053b63234b0d3c5235f03b0c24054f3ba03ec96131e22db01800c6b"
+          },
+          {
+            "path": "client/config/hassium/sleep-profiles.properties",
+            "matchesBackup": true,
+            "sha256": null
+          },
+          {
+            "path": "server/eula.txt",
+            "matchesBackup": true,
+            "sha256": "94169d86becdfccbb25ab7800c7ffec69aba470fbc1a7e4604e36833ab2eeb8f"
+          },
+          {
+            "path": "server/ops.json",
+            "matchesBackup": true,
+            "sha256": "a143a7ef0df1fb6d4a652e6e974f98df1182888c5371432aa8bc5f7a8ec69e1c"
+          },
+          {
+            "path": "server/config/hassium/hassium-server.toml",
+            "matchesBackup": true,
+            "sha256": "4bf1e50d2414cf0bd79f18148918bae1b0bac0b6423893bc20a68daa24e22a6d"
+          },
+          {
+            "path": "server/config/hassium/hassium_aggregation_dict.bin",
+            "matchesBackup": true,
+            "sha256": "e393fa8d66693e71a5440dd01ea0c438b097b3041b70d596654304a981a7c9ca"
+          },
+          {
+            "path": "server/config/hassium/aggregation_corpus/retrain.marker",
+            "matchesBackup": true,
+            "sha256": "36353066ef7fa9d4125ecc9fe3895e2106d1008bdf1ae0f9b28363e37f32e2df"
+          }
+        ]
+      },
+      "warningCodes": {
+        "nbt": [],
+        "sleep": [
+          "SPATIAL_SNAPSHOT_INCOMPLETE"
+        ],
+        "traffic": []
+      },
+      "jar": "forge\\build\\1_20_1\\libs\\hassium-forge-2.1.3-1.20.1.jar",
+      "jarSha256": "5f7b0f085dbfd54c6cd5dec16d4b9f92bdb9859c05bcd6694b1a3260e0e84a54",
+      "priorNeoSleepTrafficJarSha256": null,
+      "priorNeoSleepTrafficNote": null,
+      "dictionarySha256": "e393fa8d66693e71a5440dd01ea0c438b097b3041b70d596654304a981a7c9ca",
+      "tests": {
+        "tests": 518,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    },
+    {
+      "visualCheck": {
+        "path": "build\\smoke-test\\probe\\sleepcache_1211_20261021_a\\sleep-window.png",
+        "sha256": "ce22813bb902bbb77b19c1db2816f7b51724175e11a427f91a5dae87adb98a3b",
+        "reviewed": "No mask; nearby 3x3 status visible; bow remains drawn."
+      },
+      "cacheRestored": {
+        "fileCount": 16,
+        "allSha256Match": true
+      },
+      "version": "1.21.1",
+      "loader": "neoforge",
+      "sessions": {
+        "nbt": "cachenbt_1211_20261021_fixed_b",
+        "sleep": "sleepcache_1211_20261021_a",
+        "traffic": "sleepcachetraffic_1211_20261021_a"
+      },
+      "nbt": {
+        "session": "cachenbt_1211_20261021_fixed_b",
+        "harness": "PASS",
+        "qualityProblems": [],
+        "clientChecks": [
+          "[20:42:02] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R1 case=0 pos=BlockPos{x=8, y=68, z=3} expected=R1_0 actual=R1_0 waxed=false correct=true",
+          "[20:42:02] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R1 case=1 pos=BlockPos{x=10, y=68, z=3} expected=R1_1 actual=R1_1 waxed=false correct=true",
+          "[20:42:02] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R1 case=2 pos=BlockPos{x=40, y=68, z=3} expected=R1_2 actual=R1_2 waxed=false correct=true",
+          "[20:42:02] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R1 case=3 pos=BlockPos{x=42, y=68, z=3} expected=R1_3 actual=R1_3 waxed=false correct=true",
+          "[20:42:02] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R1 case=4 pos=BlockPos{x=12, y=68, z=3} expected=R1_4 actual=R1_4 waxed=false correct=true",
+          "[20:42:02] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R1 case=5 pos=BlockPos{x=14, y=68, z=3} expected=R1_5 actual=R1_5 waxed=false correct=true",
+          "[20:42:02] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R1 case=6 pos=BlockPos{x=44, y=68, z=3} expected=R1_6 actual=R1_6 waxed=false correct=true",
+          "[20:42:02] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R1 case=7 pos=BlockPos{x=46, y=68, z=3} expected=R1_7 actual=R1_7 waxed=false correct=true",
+          "[20:42:02] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R1 wallCorrect=true staleSigns=0",
+          "[20:42:38] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R2 case=0 pos=BlockPos{x=8, y=68, z=3} expected=R2_0 actual=R2_0 waxed=true correct=true",
+          "[20:42:38] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R2 case=1 pos=BlockPos{x=10, y=68, z=3} expected=R2_1 actual=R2_1 waxed=true correct=true",
+          "[20:42:38] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R2 case=2 pos=BlockPos{x=40, y=68, z=3} expected=R2_2 actual=R2_2 waxed=true correct=true",
+          "[20:42:38] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R2 case=3 pos=BlockPos{x=42, y=68, z=3} expected=R2_3 actual=R2_3 waxed=true correct=true",
+          "[20:42:38] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R2 case=4 pos=BlockPos{x=12, y=68, z=3} expected=R1_4 actual=R1_4 waxed=false correct=true",
+          "[20:42:38] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R2 case=5 pos=BlockPos{x=14, y=68, z=3} expected= actual= waxed=true correct=true",
+          "[20:42:38] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R2 case=6 pos=BlockPos{x=44, y=68, z=3} expected=R2_6 actual=MISSING waxed=false correct=true",
+          "[20:42:38] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R2 case=7 pos=BlockPos{x=46, y=68, z=3} expected=R2_7 actual=MISSING waxed=false correct=true",
+          "[20:42:38] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R2 wallCorrect=true staleSigns=0",
+          "[20:42:43] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R3 case=0 pos=BlockPos{x=8, y=68, z=3} expected=R2_0 actual=R2_0 waxed=true correct=true",
+          "[20:42:43] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R3 case=1 pos=BlockPos{x=10, y=68, z=3} expected=R2_1 actual=R2_1 waxed=true correct=true",
+          "[20:42:43] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R3 case=2 pos=BlockPos{x=40, y=68, z=3} expected=R2_2 actual=R2_2 waxed=true correct=true",
+          "[20:42:43] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R3 case=3 pos=BlockPos{x=42, y=68, z=3} expected=R2_3 actual=R2_3 waxed=true correct=true",
+          "[20:42:43] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R3 case=4 pos=BlockPos{x=12, y=68, z=3} expected=R1_4 actual=R1_4 waxed=false correct=true",
+          "[20:42:43] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R3 case=5 pos=BlockPos{x=14, y=68, z=3} expected= actual= waxed=true correct=true",
+          "[20:42:43] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R3 case=6 pos=BlockPos{x=44, y=68, z=3} expected=R2_6 actual=MISSING waxed=false correct=true",
+          "[20:42:43] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R3 case=7 pos=BlockPos{x=46, y=68, z=3} expected=R2_7 actual=MISSING waxed=false correct=true",
+          "[20:42:43] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R3 wallCorrect=true staleSigns=0"
+        ],
+        "diskRestores": [
+          "[20:42:08] [hassium-seedgen-main/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT loaded pos=BlockPos{x=8, y=68, z=3} text=R1_0 waxed=false",
+          "[20:42:08] [hassium-seedgen-main/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT loaded pos=BlockPos{x=10, y=68, z=3} text=R1_1 waxed=false",
+          "[20:42:08] [hassium-seedgen-main/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT loaded pos=BlockPos{x=12, y=68, z=3} text=R1_4 waxed=false",
+          "[20:42:08] [hassium-seedgen-main/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT loaded pos=BlockPos{x=14, y=68, z=3} text=R1_5 waxed=false",
+          "[20:42:08] [hassium-seedgen-main/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT loaded pos=BlockPos{x=40, y=68, z=3} text=R1_2 waxed=false",
+          "[20:42:08] [hassium-seedgen-main/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT loaded pos=BlockPos{x=42, y=68, z=3} text=R1_3 waxed=false",
+          "[20:42:08] [hassium-seedgen-main/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT loaded pos=BlockPos{x=44, y=68, z=3} text=R1_6 waxed=false",
+          "[20:42:08] [hassium-seedgen-main/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT loaded pos=BlockPos{x=46, y=68, z=3} text=R1_7 waxed=false"
+        ],
+        "storedNbt": [
+          "[20:42:08] [hassium-seedgen-main/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT disk pos=[0, 0] stored=[{back_text:{color:\"black\",has_glowing_text:0b,messages:['\"\"','\"\"','\"\"','\"\"']},front_text:{color:\"black\",has_glowing_text:0b,messages:['\"R1_0\"','\"\"','\"\"','\"\"']},\"hassium:client_nbt\":1b,id:\"minecraft:sign\",is_waxed:0b,keepPacked:0b,x:8,y:68,z:3}, {back_text:{color:\"black\",has_glowing_text:0b,messages:['\"\"','\"\"','\"\"','\"\"']},front_text:{color:\"black\",has_glowing_text:0b,messages:['\"R1_1\"','\"\"','\"\"','\"\"']},\"hassium:client_nbt\":1b,id:\"minecraft:sign\",is_waxed:0b,keepPacked:0b,x:10,y:68,z:3}, {back_text:{color:\"black\",has_glowing_text:0b,messages:['\"\"','\"\"','\"\"','\"\"']},front_text:{color:\"black\",has_glowing_text:0b,messages:['\"R1_4\"','\"\"','\"\"','\"\"']},\"hassium:client_nbt\":1b,id:\"minecraft:sign\",is_waxed:0b,keepPacked:0b,x:12,y:68,z:3}, {back_text:{color:\"black\",has_glowing_text:0b,messages:['\"\"','\"\"','\"\"','\"\"']},front_text:{color:\"black\",has_glowing_text:0b,messages:['\"R1_5\"','\"\"','\"\"','\"\"']},\"hassium:client_nbt\":1b,id:\"minecraft:sign\",is_waxed:0b,keepPacked:0b,x:14,y:68,z:3}]",
+          "[20:42:08] [hassium-seedgen-main/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT disk pos=[2, 0] stored=[{back_text:{color:\"black\",has_glowing_text:0b,messages:['\"\"','\"\"','\"\"','\"\"']},front_text:{color:\"black\",has_glowing_text:0b,messages:['\"R1_2\"','\"\"','\"\"','\"\"']},\"hassium:client_nbt\":1b,id:\"minecraft:sign\",is_waxed:0b,keepPacked:0b,x:40,y:68,z:3}, {back_text:{color:\"black\",has_glowing_text:0b,messages:['\"\"','\"\"','\"\"','\"\"']},front_text:{color:\"black\",has_glowing_text:0b,messages:['\"R1_3\"','\"\"','\"\"','\"\"']},\"hassium:client_nbt\":1b,id:\"minecraft:sign\",is_waxed:0b,keepPacked:0b,x:42,y:68,z:3}, {back_text:{color:\"black\",has_glowing_text:0b,messages:['\"\"','\"\"','\"\"','\"\"']},front_text:{color:\"black\",has_glowing_text:0b,messages:['\"R1_6\"','\"\"','\"\"','\"\"']},\"hassium:client_nbt\":1b,id:\"minecraft:sign\",is_waxed:0b,keepPacked:0b,x:44,y:68,z:3}, {back_text:{color:\"black\",has_glowing_text:0b,messages:['\"\"','\"\"','\"\"','\"\"']},front_text:{color:\"black\",has_glowing_text:0b,messages:['\"R1_7\"','\"\"','\"\"','\"\"']},\"hassium:client_nbt\":1b,id:\"minecraft:sign\",is_waxed:0b,keepPacked:0b,x:46,y:68,z:3}]"
+        ],
+        "serverMutations": [
+          "[20:41:25] [Server thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT server R1 prepared signs=8 controlHash=ebc4b14a034872c4 nbtOnlyHash=11a4c22fa91d1d2e",
+          "[20:42:02] [Server thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT server R2 pos=BlockPos{x=8, y=68, z=3} text=R2_0 waxed=true players=0",
+          "[20:42:02] [Server thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT server R2 pos=BlockPos{x=10, y=68, z=3} text=R2_1 waxed=true players=0",
+          "[20:42:02] [Server thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT server R2 pos=BlockPos{x=40, y=68, z=3} text=R2_2 waxed=true players=0",
+          "[20:42:02] [Server thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT server R2 pos=BlockPos{x=42, y=68, z=3} text=R2_3 waxed=true players=0",
+          "[20:42:02] [Server thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT server R2 pos=BlockPos{x=14, y=68, z=3} text= waxed=true players=0",
+          "[20:42:02] [Server thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT offline controlChanged=true nbtOnlyUnchanged=true controlBefore=5cb01c1996794f5e controlAfter=d455aed98f7eeee9 nbtBefore=11a4c22fa91d1d2e nbtAfter=11a4c22fa91d1d2e"
+        ],
+        "pullResults": [
+          "[20:41:25] [Hassium-PullDecode/INFO] [Hassium/]: [SHADOW_PULL] result id=6 pos=(0, 0) kind=FULL hash=11a4c22fa91d1d2e intercepted=false",
+          "[20:41:25] [Hassium-PullDecode/INFO] [Hassium/]: [SHADOW_PULL] result id=10 pos=(2, 0) kind=FULL hash=e0d592c18dc8457e intercepted=false",
+          "[20:42:08] [Render thread/INFO] [Hassium/]: [SHADOW_PULL] result id=550 pos=(0, 0) kind=UNCHANGED hash=11a4c22fa91d1d2e intercepted=false",
+          "[20:42:08] [Hassium-PullDecode/INFO] [Hassium/]: [SHADOW_PULL] result id=555 pos=(2, 0) kind=DELTA hash=6dc0fe17ce0e806e intercepted=false",
+          "[20:42:38] [Hassium-PullDecode/INFO] [Hassium/]: [SHADOW_PULL] result id=1046 pos=(0, 0) kind=FULL hash=11a4c22fa91d1d2e intercepted=false"
+        ],
+        "nbtSnapshots": [
+          "[20:42:08] [Render thread/INFO] [Hassium/]: [SHADOW_PULL_NBT] id=550 pos=(0, 0) entries=4 bytes=805",
+          "[20:42:08] [Render thread/INFO] [Hassium/]: [SHADOW_PULL_NBT] id=551 pos=(0, 1) entries=1 bytes=206",
+          "[20:42:08] [Render thread/INFO] [Hassium/]: [SHADOW_PULL_NBT] id=684 pos=(-5, -5) entries=3 bytes=253",
+          "[20:42:08] [Render thread/INFO] [Hassium/]: [SHADOW_PULL_NBT] id=676 pos=(5, -4) entries=2 bytes=227",
+          "[20:42:08] [Render thread/INFO] [Hassium/]: [SHADOW_PULL_NBT] id=704 pos=(-5, -6) entries=3 bytes=255",
+          "[20:42:08] [Render thread/INFO] [Hassium/]: [SHADOW_PULL_NBT] id=698 pos=(4, -6) entries=3 bytes=253",
+          "[20:42:09] [Render thread/INFO] [Hassium/]: [SHADOW_PULL_NBT] id=748 pos=(-3, 8) entries=1 bytes=27",
+          "[20:42:09] [Render thread/INFO] [Hassium/]: [SHADOW_PULL_NBT] id=746 pos=(-2, 8) entries=2 bytes=227",
+          "[20:42:09] [Render thread/INFO] [Hassium/]: [SHADOW_PULL_NBT] id=758 pos=(-8, 2) entries=3 bytes=253",
+          "[20:42:09] [Render thread/INFO] [Hassium/]: [SHADOW_PULL_NBT] id=794 pos=(6, -6) entries=3 bytes=253",
+          "[20:42:09] [Render thread/INFO] [Hassium/]: [SHADOW_PULL_NBT] id=829 pos=(3, -9) entries=2 bytes=227",
+          "[20:42:09] [Render thread/INFO] [Hassium/]: [SHADOW_PULL_NBT] id=835 pos=(-5, -9) entries=2 bytes=227",
+          "[20:42:09] [Render thread/INFO] [Hassium/]: [SHADOW_PULL_NBT] id=851 pos=(2, 9) entries=9 bytes=315",
+          "[20:42:09] [Render thread/INFO] [Hassium/]: [SHADOW_PULL_NBT] id=870 pos=(11, -1) entries=3 bytes=255",
+          "[20:42:09] [Render thread/INFO] [Hassium/]: [SHADOW_PULL_NBT] id=938 pos=(-8, -8) entries=1 bytes=27",
+          "[20:42:09] [Render thread/INFO] [Hassium/]: [SHADOW_PULL_NBT] id=937 pos=(-7, -8) entries=1 bytes=203",
+          "[20:42:09] [Render thread/INFO] [Hassium/]: [SHADOW_PULL_NBT] id=940 pos=(-7, -9) entries=1 bytes=27",
+          "[20:42:10] [Render thread/INFO] [Hassium/]: [SHADOW_PULL_NBT] id=976 pos=(-11, 3) entries=1 bytes=27",
+          "[20:42:10] [Render thread/INFO] [Hassium/]: [SHADOW_PULL_NBT] id=992 pos=(-11, 4) entries=1 bytes=201"
+        ],
+        "failures": []
+      },
+      "traffic": {
+        "session": "sleepcachetraffic_1211_20261021_a",
+        "harness": "PASS",
+        "qualityProblems": [],
+        "measurement": "Successful all-protocol TCP application payload writes, including Minecraft framing; excludes TCP/IP headers, retransmissions and client upload.",
+        "windows": {
+          "idle_normal": {
+            "seconds": 30.2982586,
+            "tcpPayloadBytes": 519027,
+            "bytesPerSecond": 17130.588488673075,
+            "startMs": 1792586144034,
+            "endMs": 1792586174332,
+            "nativeBlockAcks": 0,
+            "outputItems": 1215,
+            "actualWorldTPS": 20.001149505008186
+          },
+          "idle_entry": {
+            "seconds": 0.3499694,
+            "tcpPayloadBytes": 6504,
+            "bytesPerSecond": 18584.481957565433,
+            "startMs": 1792586174332,
+            "endMs": 1792586174683,
+            "nativeBlockAcks": 0,
+            "outputItems": 1,
+            "actualWorldTPS": 20.00174872431704
+          },
+          "idle_sleep": {
+            "seconds": 30.3476881,
+            "tcpPayloadBytes": 137052,
+            "bytesPerSecond": 4516.060648455129,
+            "startMs": 1792586174683,
+            "endMs": 1792586205030,
+            "nativeBlockAcks": 0,
+            "outputItems": 1216,
+            "actualWorldTPS": 20.001523608646817
+          },
+          "idle_recovery": {
+            "seconds": 30.249022,
+            "tcpPayloadBytes": 846426,
+            "bytesPerSecond": 27981.929465355937,
+            "startMs": 1792586205030,
+            "endMs": 1792586235279,
+            "nativeBlockAcks": 0,
+            "outputItems": 1216,
+            "actualWorldTPS": 20.00064663247625
+          },
+          "hold_attack_normal": {
+            "seconds": 30.3005161,
+            "tcpPayloadBytes": 517429,
+            "bytesPerSecond": 17076.573821130394,
+            "startMs": 1792586235279,
+            "endMs": 1792586265580,
+            "nativeBlockAcks": 2,
+            "outputItems": 1216,
+            "actualWorldTPS": 19.999659345736358
+          },
+          "hold_attack_entry": {
+            "seconds": 0.3000657,
+            "tcpPayloadBytes": 3506,
+            "bytesPerSecond": 11684.107847048164,
+            "startMs": 1792586265580,
+            "endMs": 1792586265879,
+            "nativeBlockAcks": 0,
+            "outputItems": 0,
+            "actualWorldTPS": 19.995620959009976
+          },
+          "hold_attack_sleep": {
+            "seconds": 30.351325,
+            "tcpPayloadBytes": 136344,
+            "bytesPerSecond": 4492.192680220715,
+            "startMs": 1792586265879,
+            "endMs": 1792586296230,
+            "nativeBlockAcks": 2,
+            "outputItems": 1216,
+            "actualWorldTPS": 19.999126891494853
+          },
+          "hold_attack_recovery": {
+            "seconds": 30.2487433,
+            "tcpPayloadBytes": 729055,
+            "bytesPerSecond": 24101.993023954816,
+            "startMs": 1792586296230,
+            "endMs": 1792586326479,
+            "nativeBlockAcks": 0,
+            "outputItems": 1216,
+            "actualWorldTPS": 20.00083091055224
+          },
+          "periodic_attack_normal": {
+            "seconds": 30.2993774,
+            "tcpPayloadBytes": 520925,
+            "bytesPerSecond": 17192.597495419162,
+            "startMs": 1792586326479,
+            "endMs": 1792586356779,
+            "nativeBlockAcks": 60,
+            "outputItems": 1216,
+            "actualWorldTPS": 20.00041096554017
+          },
+          "periodic_attack_entry": {
+            "seconds": 0.3013351,
+            "tcpPayloadBytes": 3455,
+            "bytesPerSecond": 11465.640743477941,
+            "startMs": 1792586356779,
+            "endMs": 1792586357081,
+            "nativeBlockAcks": 0,
+            "outputItems": 0,
+            "actualWorldTPS": 19.911387687660678
+          },
+          "periodic_attack_sleep": {
+            "seconds": 30.2992995,
+            "tcpPayloadBytes": 138035,
+            "bytesPerSecond": 4555.715883794607,
+            "startMs": 1792586357081,
+            "endMs": 1792586387379,
+            "nativeBlockAcks": 60,
+            "outputItems": 1216,
+            "actualWorldTPS": 20.00046238692746
+          },
+          "periodic_attack_recovery": {
+            "seconds": 30.2495295,
+            "tcpPayloadBytes": 722778,
+            "bytesPerSecond": 23893.859241678452,
+            "startMs": 1792586387379,
+            "endMs": 1792586417629,
+            "nativeBlockAcks": 0,
+            "outputItems": 1216,
+            "actualWorldTPS": 20.000311079218605
+          }
+        },
+        "cycles": {
+          "idle": {
+            "normalBytesPerSecond": 17130.588488673075,
+            "sleepBytesPerSecond": 4516.060648455129,
+            "entryBytes": 6504,
+            "recoveryBytes": 846426,
+            "recoverySeconds": 30.249022,
+            "measuredCycleBytes": 1509009,
+            "conservativeBreakEvenSeconds": 67.61489695085278,
+            "incrementalBreakEvenSeconds": 26.06132186018257,
+            "reductionPercent": 73.63744595557125,
+            "recoveryBytesPerSecond": 27981.929465355937,
+            "recoveryPullResults": {
+              "UNCHANGED": 367,
+              "DELTA": 157
+            },
+            "visibleWindowReadyMs": 4347,
+            "recoveryObservationMs": 30002
+          },
+          "hold_attack": {
+            "normalBytesPerSecond": 17076.573821130394,
+            "sleepBytesPerSecond": 4492.192680220715,
+            "entryBytes": 3506,
+            "recoveryBytes": 729055,
+            "recoverySeconds": 30.2487433,
+            "measuredCycleBytes": 1386334,
+            "conservativeBreakEvenSeconds": 58.211920935751785,
+            "incrementalBreakEvenSeconds": 16.758234322569383,
+            "reductionPercent": 73.69382917630634,
+            "recoveryBytesPerSecond": 24101.993023954816,
+            "recoveryPullResults": {
+              "UNCHANGED": 459,
+              "DELTA": 65
+            },
+            "visibleWindowReadyMs": 4255,
+            "recoveryObservationMs": 30004
+          },
+          "periodic_attack": {
+            "normalBytesPerSecond": 17192.597495419162,
+            "sleepBytesPerSecond": 4555.715883794607,
+            "entryBytes": 3455,
+            "recoveryBytes": 722778,
+            "recoverySeconds": 30.2495295,
+            "measuredCycleBytes": 1385193,
+            "conservativeBreakEvenSeconds": 57.46932054281056,
+            "incrementalBreakEvenSeconds": 15.904578991249421,
+            "reductionPercent": 73.50187553097521,
+            "recoveryBytesPerSecond": 23893.859241678452,
+            "recoveryPullResults": {
+              "UNCHANGED": 454,
+              "DELTA": 70
+            },
+            "visibleWindowReadyMs": 4400,
+            "recoveryObservationMs": 30001
+          }
+        },
+        "capability": "SLEEP_WINDOW",
+        "visibleColumns": 9,
+        "lightColumns": 25,
+        "fixture": "Same generated 16-lane vanilla factory layout on separate fresh worlds; VD=10; fixed dictionary",
+        "sampling": "One adjacent 30-second normal/sleep pair per input mode; recovery >=30 seconds and all paused visible columns ready; no injected offline wait",
+        "recoveryInput": "No attack actions during recovery observation; normal and sleep windows use matching scripted native interactions",
+        "serverResumeCount": 3
+      },
+      "previousTrafficSession": "sleepwindowtraffic_1211_20261021_a",
+      "trafficComparison": {
+        "idle": {
+          "beforeRecoveryBytes": 4025170,
+          "afterRecoveryBytes": 846426,
+          "recoveryReductionPercent": 78.9716707617318,
+          "beforeReadyMs": 5097,
+          "afterReadyMs": 4347
+        },
+        "hold_attack": {
+          "beforeRecoveryBytes": 4023100,
+          "afterRecoveryBytes": 729055,
+          "recoveryReductionPercent": 81.87827794486839,
+          "beforeReadyMs": 5002,
+          "afterReadyMs": 4255
+        },
+        "periodic_attack": {
+          "beforeRecoveryBytes": 4021372,
+          "afterRecoveryBytes": 722778,
+          "recoveryReductionPercent": 82.02658197252082,
+          "beforeReadyMs": 4949,
+          "afterReadyMs": 4400
+        }
+      },
+      "inputChecks": [
+        "[20:32:56] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP in-place trigger=turn identity/input/near-entity preserved using=true visiblePending=0 elapsedMs=4921",
+        "[20:33:20] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP in-place trigger=move identity/input/near-entity preserved using=true visiblePending=0 elapsedMs=4097",
+        "[20:33:27] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP in-place trigger=esc identity/input/near-entity preserved using=false visiblePending=0 elapsedMs=4053",
+        "[20:33:51] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP in-place trigger=sprint identity/input/near-entity preserved using=false visiblePending=0 elapsedMs=4147"
+      ],
+      "miningChecks": [
+        "[20:33:51] [Render thread/INFO] [Hassium/SmokeTest/]: HassiumSmokeTest:SLEEP actual mining progress preserved stage=6"
+      ],
+      "worldChecks": [
+        "[20:32:51] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:SLEEP roof/halo boundary light sky=14 block=14",
+        "[20:32:52] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:SLEEP window visible=9 light=25 distant terrain paused",
+        "[20:33:11] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:SLEEP distant block and BE-only update current",
+        "[20:33:11] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:SLEEP roof/halo boundary light sky=14 block=14"
+      ],
+      "recoveryPulls": [
+        "[20:32:31] [Hassium-PullDecode/INFO] [Hassium/]: [SHADOW_PULL] result id=154 pos=(3, 0) kind=FULL hash=dfcdb52d8c9a2932 intercepted=false",
+        "[20:32:31] [Hassium-PullDecode/INFO] [Hassium/]: [SHADOW_PULL] result id=157 pos=(4, 0) kind=FULL hash=87adfa8b43a163fe intercepted=false",
+        "[20:32:52] [Render thread/INFO] [Hassium/]: [SHADOW_PULL] result id=444 pos=(4, 0) kind=UNCHANGED hash=87adfa8b43a163fe intercepted=false",
+        "[20:32:52] [Hassium-PullDecode/INFO] [Hassium/]: [SHADOW_PULL] result id=438 pos=(3, 0) kind=DELTA hash=423454da1be7e554 intercepted=false",
+        "[20:33:16] [Render thread/INFO] [Hassium/]: [SHADOW_PULL] result id=968 pos=(4, 0) kind=UNCHANGED hash=7be4080dab5e6392 intercepted=false",
+        "[20:33:16] [Hassium-PullDecode/INFO] [Hassium/]: [SHADOW_PULL] result id=962 pos=(3, 0) kind=DELTA hash=595402ab6843f990 intercepted=false",
+        "[20:33:23] [Render thread/INFO] [Hassium/]: [SHADOW_PULL] result id=1492 pos=(4, 0) kind=UNCHANGED hash=7be4080dab5e6392 intercepted=false",
+        "[20:33:23] [Hassium-PullDecode/INFO] [Hassium/]: [SHADOW_PULL] result id=1486 pos=(3, 0) kind=DELTA hash=2f3621b51b0bcdf7 intercepted=false",
+        "[20:33:47] [Render thread/INFO] [Hassium/]: [SHADOW_PULL] result id=2016 pos=(4, 0) kind=UNCHANGED hash=5e084b1ad606260a intercepted=false",
+        "[20:33:47] [Hassium-PullDecode/INFO] [Hassium/]: [SHADOW_PULL] result id=2010 pos=(3, 0) kind=DELTA hash=1bbaa3edde563293 intercepted=false"
+      ],
+      "restoreChecks": {
+        "nbt": [
+          {
+            "path": "client/options.txt",
+            "matchesBackup": true,
+            "sha256": "13728d09f29eac6d24760253fe242bb3327af63256e69598863ffa5cc1b80b37"
+          },
+          {
+            "path": "client/config/hassium/hassium-client.toml",
+            "matchesBackup": true,
+            "sha256": "cb1dc56a5454a5091faebed0c8a16103cc58d758ad78178c6372b173017de119"
+          },
+          {
+            "path": "client/config/hassium/hassium-server.toml",
+            "matchesBackup": true,
+            "sha256": "1f250ddd98d5bcaf86ccb873dfe8bac4fbcdb55ef9e506b71f5f88951995830e"
+          },
+          {
+            "path": "server/server.properties",
+            "matchesBackup": true,
+            "sha256": "e2f6f05f14398cb8e2aae622b52cf8aba11460a327f91e6387560269142ef704"
+          },
+          {
+            "path": "client/config/hassium/sleep-profiles.properties",
+            "matchesBackup": true,
+            "sha256": null
+          },
+          {
+            "path": "server/eula.txt",
+            "matchesBackup": true,
+            "sha256": "94169d86becdfccbb25ab7800c7ffec69aba470fbc1a7e4604e36833ab2eeb8f"
+          },
+          {
+            "path": "server/ops.json",
+            "matchesBackup": true,
+            "sha256": "a143a7ef0df1fb6d4a652e6e974f98df1182888c5371432aa8bc5f7a8ec69e1c"
+          },
+          {
+            "path": "server/config/hassium/hassium-server.toml",
+            "matchesBackup": true,
+            "sha256": "2830d578363a0e9cbc75b09fc9aac4a9f83e8cd57331acf7a8959bdfde76b025"
+          },
+          {
+            "path": "server/config/hassium/hassium_aggregation_dict.bin",
+            "matchesBackup": true,
+            "sha256": "6e84d7f9151273adae19d90ae101a08891513205c7d5f3ad97cb0b1a457fb17f"
+          },
+          {
+            "path": "server/config/hassium/aggregation_corpus/retrain.marker",
+            "matchesBackup": true,
+            "sha256": "9b062abcba4796a055bf28822b4afc8892aa08212047802e882748d48da59cb4"
+          }
+        ],
+        "sleep": [
+          {
+            "path": "client/options.txt",
+            "matchesBackup": true,
+            "sha256": "13728d09f29eac6d24760253fe242bb3327af63256e69598863ffa5cc1b80b37"
+          },
+          {
+            "path": "client/config/hassium/hassium-client.toml",
+            "matchesBackup": true,
+            "sha256": "cb1dc56a5454a5091faebed0c8a16103cc58d758ad78178c6372b173017de119"
+          },
+          {
+            "path": "client/config/hassium/hassium-server.toml",
+            "matchesBackup": true,
+            "sha256": "1f250ddd98d5bcaf86ccb873dfe8bac4fbcdb55ef9e506b71f5f88951995830e"
+          },
+          {
+            "path": "server/server.properties",
+            "matchesBackup": true,
+            "sha256": "e2f6f05f14398cb8e2aae622b52cf8aba11460a327f91e6387560269142ef704"
+          },
+          {
+            "path": "client/config/hassium/sleep-profiles.properties",
+            "matchesBackup": true,
+            "sha256": null
+          },
+          {
+            "path": "server/eula.txt",
+            "matchesBackup": true,
+            "sha256": "94169d86becdfccbb25ab7800c7ffec69aba470fbc1a7e4604e36833ab2eeb8f"
+          },
+          {
+            "path": "server/ops.json",
+            "matchesBackup": true,
+            "sha256": "a143a7ef0df1fb6d4a652e6e974f98df1182888c5371432aa8bc5f7a8ec69e1c"
+          },
+          {
+            "path": "server/config/hassium/hassium-server.toml",
+            "matchesBackup": true,
+            "sha256": "2830d578363a0e9cbc75b09fc9aac4a9f83e8cd57331acf7a8959bdfde76b025"
+          },
+          {
+            "path": "server/config/hassium/hassium_aggregation_dict.bin",
+            "matchesBackup": true,
+            "sha256": "6e84d7f9151273adae19d90ae101a08891513205c7d5f3ad97cb0b1a457fb17f"
+          },
+          {
+            "path": "server/config/hassium/aggregation_corpus/retrain.marker",
+            "matchesBackup": true,
+            "sha256": "9b062abcba4796a055bf28822b4afc8892aa08212047802e882748d48da59cb4"
+          }
+        ],
+        "traffic": [
+          {
+            "path": "client/options.txt",
+            "matchesBackup": true,
+            "sha256": "13728d09f29eac6d24760253fe242bb3327af63256e69598863ffa5cc1b80b37"
+          },
+          {
+            "path": "client/config/hassium/hassium-client.toml",
+            "matchesBackup": true,
+            "sha256": "cb1dc56a5454a5091faebed0c8a16103cc58d758ad78178c6372b173017de119"
+          },
+          {
+            "path": "client/config/hassium/hassium-server.toml",
+            "matchesBackup": true,
+            "sha256": "1f250ddd98d5bcaf86ccb873dfe8bac4fbcdb55ef9e506b71f5f88951995830e"
+          },
+          {
+            "path": "server/server.properties",
+            "matchesBackup": true,
+            "sha256": "e2f6f05f14398cb8e2aae622b52cf8aba11460a327f91e6387560269142ef704"
+          },
+          {
+            "path": "client/config/hassium/sleep-profiles.properties",
+            "matchesBackup": true,
+            "sha256": null
+          },
+          {
+            "path": "server/eula.txt",
+            "matchesBackup": true,
+            "sha256": "94169d86becdfccbb25ab7800c7ffec69aba470fbc1a7e4604e36833ab2eeb8f"
+          },
+          {
+            "path": "server/ops.json",
+            "matchesBackup": true,
+            "sha256": "a143a7ef0df1fb6d4a652e6e974f98df1182888c5371432aa8bc5f7a8ec69e1c"
+          },
+          {
+            "path": "server/config/hassium/hassium-server.toml",
+            "matchesBackup": true,
+            "sha256": "2830d578363a0e9cbc75b09fc9aac4a9f83e8cd57331acf7a8959bdfde76b025"
+          },
+          {
+            "path": "server/config/hassium/hassium_aggregation_dict.bin",
+            "matchesBackup": true,
+            "sha256": "6e84d7f9151273adae19d90ae101a08891513205c7d5f3ad97cb0b1a457fb17f"
+          },
+          {
+            "path": "server/config/hassium/aggregation_corpus/retrain.marker",
+            "matchesBackup": true,
+            "sha256": "9b062abcba4796a055bf28822b4afc8892aa08212047802e882748d48da59cb4"
+          }
+        ]
+      },
+      "warningCodes": {
+        "nbt": [],
+        "sleep": [
+          "SPATIAL_SNAPSHOT_INCOMPLETE"
+        ],
+        "traffic": []
+      },
+      "jar": "neoforge\\build\\1_21_1\\libs\\hassium-neoforge-2.1.3-1.21.1.jar",
+      "jarSha256": "1e4097cd9337edaf196f553c32112012185261660e4ced963d389373d429bc27",
+      "priorNeoSleepTrafficJarSha256": "9dcfd4c69e7e7d29315d7f88dede4257dcad71050f35bacfcba8709674224ae7",
+      "priorNeoSleepTrafficNote": "Sleep/traffic were measured before the final same-advertised-hash FULL fallback guard; measured recovery FULL count is zero in all modes. Final NBT rerun and unit tests cover the guard.",
+      "dictionarySha256": "e393fa8d66693e71a5440dd01ea0c438b097b3041b70d596654304a981a7c9ca",
+      "tests": {
+        "tests": 511,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 0
+      }
+    }
+  ],
+  "finalCleanup": {
+    "checkedAt": "2026-10-21T20:55:18.962412+08:00",
+    "port25565Listeners": 0,
+    "originalCaches": "Per-file SHA256 match: Forge 22, NeoForge 16",
+    "configurationRestore": "All six final profiles match their 10-file backup manifests"
+  }
+}

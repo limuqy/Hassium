@@ -55,6 +55,10 @@ public record ShadowPullResponseS2CPacket(
             return new Result(x, z, Kind.UNCHANGED, hash, sectionHashes, new byte[0], "");
         }
 
+        public static Result unchanged(int x, int z, long hash, List<Long> sectionHashes, byte[] blockEntities) {
+            return new Result(x, z, Kind.UNCHANGED, hash, sectionHashes, blockEntities, "");
+        }
+
         public static Result payload(int x, int z, Kind kind, long hash,
                                      List<Long> sectionHashes, byte[] payload) {
             if (kind != Kind.DELTA && kind != Kind.FULL) {

@@ -33,6 +33,21 @@ test {
     useJUnitPlatform()
 }
 
+// R0 only: use each anchor's real Minecraft codecs without starting a client/server.
+tasks.register('entityMotionReplayNativeCheck', JavaExec) {
+    group = 'verification'
+    description = 'Verify offline R0 replay requests with native Minecraft motion codecs'
+    dependsOn tasks.named('testClasses')
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'io.github.limuqy.mc.hassium.protocol.replay.EntityMotionReplayNativeCheck'
+    doFirst {
+        if (!project.hasProperty('r0Requests') || !project.hasProperty('r0Report')) {
+            throw new GradleException('Pass -Pr0Requests=<jsonl.gz> and -Pr0Report=<new-result.json>')
+        }
+        setArgs([project.property('r0Requests').toString(), project.property('r0Report').toString()])
+    }
+}
+
 // 嵌入 zstd-jni 资源（与 native-dep-shade.gradle 同款机制、同版本源 zstd_jni_version）：
 // 让 common:test 的 ZstdRuntimeBridge 走与生产一致的嵌入隔离路径（无外部回退可用）。
 // common 产物仅内部消费；loader 发布 jar 由各自 native-dep-shade.gradle 的嵌入兜底，

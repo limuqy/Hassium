@@ -63,6 +63,7 @@ public class MixinMinecraftServer {
      */
     @Inject(method = "tickServer", at = @At("HEAD"))
     private void hassium$onServerTickStart(BooleanSupplier hasTimeLeft, CallbackInfo ci) {
+        io.github.limuqy.mc.hassium.compat.SleepProbeCompat.beforeTick((MinecraftServer)(Object)this);
         io.github.limuqy.mc.hassium.server.entity.EntityUpdatePacing.onServerTickStart((MinecraftServer) (Object) this);
     }
 
@@ -71,6 +72,9 @@ public class MixinMinecraftServer {
     private void hassium$onServerTick(BooleanSupplier hasTimeLeft, CallbackInfo ci) {
         MinecraftServer server = (MinecraftServer) (Object) this;
         if (server != RuntimeServerContext.getActiveServer()) return;
+        io.github.limuqy.mc.hassium.server.sleep.SleepServer.tick(server);
+        io.github.limuqy.mc.hassium.compat.SleepProbeCompat.afterTick(server);
+        io.github.limuqy.mc.hassium.server.sleep.SleepRuntimeProbe.traffic(server);
         // 刷新服务端主线程回调队列（每 tick 调用）
         long tFlush = System.nanoTime();
         MainThreadDispatcher.flushServer();
@@ -120,6 +124,7 @@ public class MixinMinecraftServer {
         if (server instanceof io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer
                 || server != RuntimeServerContext.getActiveServer()) return;
         io.github.limuqy.mc.hassium.protocol.ShadowPullServer.clear();
+        io.github.limuqy.mc.hassium.server.sleep.SleepServer.clear(server);
         // 服务器关闭时清理推送管理器
         ServerChunkPushManager.getInstance().shutdown();
         Constants.LOG.info("Hassium: ServerChunkPushManager shutdown");

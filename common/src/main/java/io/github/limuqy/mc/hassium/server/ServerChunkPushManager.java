@@ -344,6 +344,9 @@ public class ServerChunkPushManager {
      */
     private boolean dropOrKeepLive(PendingPull pending, long now, List<PendingPull> live) {
         ServerPlayer player = pending.player();
+        if (!io.github.limuqy.mc.hassium.server.sleep.SleepServer.allowsChunk(player,pending.entry().chunkX(),pending.entry().chunkZ())) {
+            releaseDemandTicket(pending); unqueuePull(pending); return true;
+        }
         if (!io.github.limuqy.mc.hassium.protocol.ShadowPullServer.isCurrentSession(player, pending.connection)
                 || pending.epoch() != io.github.limuqy.mc.hassium.protocol.ShadowPullServer.WIRE_EPOCH) {
             releaseDemandTicket(pending);
@@ -391,7 +394,9 @@ public class ServerChunkPushManager {
             return false;
         }
         try {
-            ClassifiedPull classified = classifyPull(pending.entry(), chunk, level);
+            boolean nbtSupported = ServerHandshakeActivation.hasCaps(pending.player().getUUID(),
+                    io.github.limuqy.mc.hassium.protocol.handshake.LoginCaps.PULL_NBT);
+            ClassifiedPull classified = classifyPull(pending.entry(), chunk, level, nbtSupported);
             if (classified.unchanged()) {
                 if (unchangedLeft <= 0) {
                     return false;
@@ -399,6 +404,8 @@ public class ServerChunkPushManager {
                 lastCompletedUnchanged = true;
                 releaseDemandTicket(pending);
                 unqueuePull(pending);
+                io.github.limuqy.mc.hassium.server.sleep.SleepTerrainServer.snapshot(pending.player(),
+                        pending.entry().chunkX(), pending.entry().chunkZ(), pending.requestId());
                 sendPullResponse(pending.player(), pending, classified.result());
                 return true;
             }
@@ -408,6 +415,8 @@ public class ServerChunkPushManager {
             lastCompletedUnchanged = false;
             releaseDemandTicket(pending);
             unqueuePull(pending);
+            io.github.limuqy.mc.hassium.server.sleep.SleepTerrainServer.snapshot(pending.player(),
+                    pending.entry().chunkX(),pending.entry().chunkZ(),pending.requestId());
             submitEncodedPull(pending, classified, level.registryAccess());
             return true;
         } catch (Throwable t) {
@@ -429,6 +438,7 @@ public class ServerChunkPushManager {
                                                                   ShadowPullRequestC2SPacket.Entry entry,
                                                                   String dimension) {
         if (player == null || entry == null) return null;
+        if (!io.github.limuqy.mc.hassium.server.sleep.SleepServer.allowsChunk(player,entry.chunkX(),entry.chunkZ())) return null;
         if (request == null || request.epoch() != io.github.limuqy.mc.hassium.protocol.ShadowPullServer.WIRE_EPOCH
                 || !io.github.limuqy.mc.hassium.protocol.ShadowPullServer.isCurrentSession(player, player.connection)) {
             return ShadowPullResponseS2CPacket.Result.error(entry.chunkX(), entry.chunkZ(), "permission");
@@ -481,7 +491,7 @@ public class ServerChunkPushManager {
 
     /** 主线程：hash + 比较 + FULL 包快照 / DELTA 列快照。encode/zstd 在 pushPool。 */
     private ClassifiedPull classifyPull(ShadowPullRequestC2SPacket.Entry entry,
-                                        LevelChunk chunk, ServerLevel level) {
+                                        LevelChunk chunk, ServerLevel level, boolean nbtSupported) {
         // 逐段 hash：先查服务端**共享**缓存（跨玩家复用），未命中再现算并落缓存。
         // 贵的是 computeSectionHashes 的逐位置扫描（24 段 × 16³ = 98_304 次
         // getBlockState+Block.getId），而 UNCHANGED/DELTA/FULL 三种响应都要回带
@@ -502,10 +512,19 @@ public class ServerChunkPushManager {
         }
         boolean hashMatch = entry.chunkHash() != 0L && entry.chunkHash() == chunkHash;
         boolean sectionsMatch = sectionHashesEqual(entry.sectionHashes(), sectionHashArray);
-        if (hashMatch || sectionsMatch) {
-            return new ClassifiedPull(true, ShadowPullResponseS2CPacket.Result.unchanged(
-                    entry.chunkX(), entry.chunkZ(), chunkHash, sectionHashList),
-                    null, null, chunkHash, sectionHashList);
+        if ((hashMatch || sectionsMatch) && (nbtSupported || chunk.getBlockEntities().isEmpty())) {
+            try {
+                byte[] nbt = nbtSupported
+                        ? io.github.limuqy.mc.hassium.protocol.BlockEntitySnapshot.encode(collectBlockEntities(chunk))
+                        : new byte[0];
+                return new ClassifiedPull(true, ShadowPullResponseS2CPacket.Result.unchanged(
+                        entry.chunkX(), entry.chunkZ(), chunkHash, sectionHashList, nbt),
+                        null, null, chunkHash, sectionHashList);
+            } catch (IllegalArgumentException oversized) {
+                // A bounded projection that cannot be represented uses the existing FULL
+                // encoding; do not strand a valid terrain baseline on an ERROR response.
+                return new ClassifiedPull(false, null, buildChunkPacket(chunk, level), null, chunkHash, sectionHashList);
+            }
         }
         SectionDeltaColumnSnap deltaSnap = null;
         if (!entry.sectionHashes().isEmpty()
@@ -581,6 +600,8 @@ public class ServerChunkPushManager {
         }
         if (!io.github.limuqy.mc.hassium.protocol.ShadowPullServer.isCurrentSession(player, pending.connection)
                 || PlayerCompat.getServerLevel(player) != pending.level()) return;
+        if(!io.github.limuqy.mc.hassium.server.sleep.SleepTerrainServer.responseAllowed(player,
+                pending.entry().chunkX(),pending.entry().chunkZ(),pending.requestId())) return;
         ShadowPullResponseS2CPacket response = new ShadowPullResponseS2CPacket(
                 pending.dimension(), pending.epoch(), pending.requestId(), List.of(result));
         FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
@@ -844,7 +865,7 @@ public class ServerChunkPushManager {
 #endif
             String type = String.valueOf(
                     net.minecraft.core.registries.BuiltInRegistries.BLOCK_ENTITY_TYPE.getKey(be.getType()));
-            result.add(new SectionDeltaS2CPacket.BlockEntityData(pos, type, nbt));
+            result.add(new SectionDeltaS2CPacket.BlockEntityData(pos.immutable(), type, nbt == null ? null : nbt.copy()));
         }
         return result;
     }

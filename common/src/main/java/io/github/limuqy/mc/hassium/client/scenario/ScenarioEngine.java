@@ -223,11 +223,14 @@ public final class ScenarioEngine {
             case WAIT -> execWait(step, mc, now);
             case FLY -> execFly(step, mc, now);
             case COMMAND -> execCommand(step, mc, now);
+            case INPUT -> execInput(step, mc, now);
+            case SLEEP -> execSleep(step,mc,now);
             case DIMENSION -> execDimension(step, mc, now);
             case DISCONNECT -> execDisconnect(mc, now);
             case RECONNECT -> execReconnect(step, mc, now);
             case DUMP -> execDump(step, mc);
             case ASSERT_PROBE -> execAssertProbe(step, mc);
+            case NBT -> { io.github.limuqy.mc.hassium.compat.CacheNbtProbeCompat.assertClient((int)step.longParam("round",1)); yield Outcome.DONE; }
             case EXIT -> execExit(step, mc);
         };
     }
@@ -406,6 +409,326 @@ public final class ScenarioEngine {
         return Outcome.DONE;
     }
 
+    private static int profileInputStep = -1;
+    private static int sleepInputStep = -1;
+    private static boolean sleepAutoEntering;
+    private static boolean sleepAutoReleased;
+    private static Object sleepResumeConnection,sleepResumeLevel,sleepResumePlayer,sleepResumeNear;
+    private static int sleepResumeUsingTicks;
+    private static int sleepResumeMiningStage;
+    private static long sleepTrafficReadyMs;
+    private static Outcome execSleep(ScenarioStep step, Minecraft mc, long now) {
+        String action=step.param("action");
+        if(sleepInputStep!=index) {
+            sleepInputStep=index;
+            if("auto_menu".equals(action)) {
+                io.github.limuqy.mc.hassium.client.sleep.SleepClient.testAutoDelay(1000);
+                mc.setScreen(new io.github.limuqy.mc.hassium.client.sleep.SleepSetupScreen(null));
+            }
+            else if("auto".equals(action)) {
+                sleepAutoEntering=false; sleepAutoReleased=false;
+                io.github.limuqy.mc.hassium.client.sleep.SleepClient.testAutoDelay(1500);
+                mc.options.keyAttack.setDown(true); mc.options.keyUse.setDown(true);
+            }
+            else if("release".equals(action)) {
+                io.github.limuqy.mc.hassium.client.sleep.SleepClient.testAutoDelay(0);
+                mc.options.keyAttack.setDown(false); mc.options.keyUse.setDown(false);
+            }
+            else if("enter".equals(action)) {
+                if(step.boolParam("ui",false)) {
+                    mc.pauseGame(false);
+                    pressSleepButton(mc,"hassium.sleep.enter");
+                    pressSleepButton(mc,"hassium.sleep.enter");
+                } else io.github.limuqy.mc.hassium.client.sleep.SleepClient.enter(Float.parseFloat(step.param("threshold")==null?"6":step.param("threshold")));
+            }
+            else if("panel".equals(action)) {
+                io.github.limuqy.mc.hassium.client.sleep.SleepClient.showPanel();
+                if(!(mc.screen instanceof io.github.limuqy.mc.hassium.client.sleep.SleepPanelScreen)) throw new IllegalStateException("Sleep legacy panel missing");
+                pressSleepButton(mc,"hassium.sleep.continue");
+                LOGGER.info("HassiumSmokeTest:SLEEP panel buttons verified"); return Outcome.DONE;
+            }
+            else if("disconnected".equals(action)) { }
+            else if("reject".equals(action)) {
+                if(mc.getConnection()==null) throw new IllegalStateException("Sleep rejection lost normal connection");
+                io.github.limuqy.mc.hassium.client.sleep.SleepClient.enter(Float.parseFloat(step.param("threshold")==null?"6":step.param("threshold")));
+            }
+            else if("manual".equals(action)) {
+                io.github.limuqy.mc.hassium.client.sleep.SleepClient.allowManualConnection();
+                disconnectAtMs=now; return Outcome.DONE;
+            }
+            else if("observer".equals(action)) { io.github.limuqy.mc.hassium.compat.SleepProbeCompat.assertObserver(); return Outcome.DONE; }
+            else if("afk_baseline".equals(action)) { io.github.limuqy.mc.hassium.compat.SleepProbeCompat.assertAfk(); return Outcome.DONE; }
+            else if("capture".equals(action)) { io.github.limuqy.mc.hassium.compat.SleepProbeCompat.capture("sleep-overlay"); return Outcome.DONE; }
+            else if("arm_held".equals(action)) { mc.options.keyAttack.setDown(true); return Outcome.DONE; }
+            else if("held".equals(action)) {
+                if(!mc.options.keyAttack.isDown() || mc.options.keyAttack.consumeClick()) throw new IllegalStateException("Sleep held input lost or synthesized a click");
+                LOGGER.info("HassiumSmokeTest:SLEEP held input preserved, no generated click"); return Outcome.DONE;
+            }
+            else if("entity".equals(action)) {
+                boolean present=false;
+                if(mc.level!=null) for(var e:mc.level.entitiesForRendering())
+                    if(e.getType()==net.minecraft.world.entity.EntityType.PIG && Math.abs(e.getX()-Double.parseDouble(step.param("x")))<1) present=true;
+                if(present!=step.boolParam("present",true)) throw new IllegalStateException("Sleep entity visibility x="+step.param("x")+" present="+present);
+                LOGGER.info("HassiumSmokeTest:SLEEP entity x={} present={}",step.param("x"),present); return Outcome.DONE;
+            }
+            else if("world_current".equals(action)) {
+                io.github.limuqy.mc.hassium.compat.SleepProbeCompat.assertWakeWorld(); return Outcome.DONE;
+            }
+            else if("world_paused".equals(action)) {
+                io.github.limuqy.mc.hassium.compat.SleepProbeCompat.assertPausedWorld(); return Outcome.DONE;
+            }
+            else if("traffic_wake".equals(action)) {
+                if(!io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.restricted())
+                    throw new IllegalStateException("Traffic profile did not negotiate the sleep window");
+                sleepResumeConnection=mc.getConnection().getConnection(); sleepResumeLevel=mc.level; sleepResumePlayer=mc.player;
+                sleepTrafficReadyMs=-1;
+                io.github.limuqy.mc.hassium.client.sleep.SleepClient.wake();
+            }
+            else if("resume".equals(action)) {
+                io.github.limuqy.mc.hassium.client.sleep.SleepClient.testAutoDelay(0);
+                if(!io.github.limuqy.mc.hassium.client.sleep.SleepClient.inPlaceSupported()
+                        || io.github.limuqy.mc.hassium.client.sleep.SleepClient.state()!=io.github.limuqy.mc.hassium.client.sleep.SleepClient.State.SLEEPING)
+                    throw new IllegalStateException("In-place sleep capability/state missing");
+                sleepResumeConnection=mc.getConnection().getConnection(); sleepResumeLevel=mc.level; sleepResumePlayer=mc.player;
+                sleepResumeNear=null;
+                for(var e:mc.level.entitiesForRendering()) if(e.getType()==net.minecraft.world.entity.EntityType.PIG && Math.abs(e.getX()-5.5)<1) sleepResumeNear=e;
+                if(sleepResumeNear==null) throw new IllegalStateException("Nearby entity fixture missing");
+                if(step.boolParam("using",false) && !mc.player.isUsingItem()) throw new IllegalStateException("Bow use did not start before wake");
+                sleepResumeUsingTicks=mc.player.getTicksUsingItem();
+                sleepResumeMiningStage=mc.gameMode.getDestroyStage();
+                if(step.boolParam("mining",false) && (!mc.gameMode.isDestroying() || sleepResumeMiningStage<0))
+                    throw new IllegalStateException("Mining fixture did not start");
+                String trigger=step.param("trigger");
+                if("esc".equals(trigger)) io.github.limuqy.mc.hassium.compat.SleepClientCompat.pressEscape();
+                else if("move".equals(trigger)) mc.options.keyUp.setDown(true);
+                else if("sprint".equals(trigger)) mc.options.keySprint.setDown(true);
+                else if("turn".equals(trigger)) mc.player.setYRot(mc.player.getYRot()+25);
+                else throw new IllegalArgumentException("Unknown resume trigger "+trigger);
+            }
+            else if("equipment".equals(action)) {
+                int damage=mc.player.getMainHandItem().getDamageValue();
+                if(damage<step.longParam("minimumDamage",1)) throw new IllegalStateException("Sleep inventory durability not synchronized: "+damage);
+                LOGGER.info("HassiumSmokeTest:SLEEP inventory damage={}",damage); return Outcome.DONE;
+            }
+            else if("expire".equals(action)) {
+                io.github.limuqy.mc.hassium.client.sleep.SleepClient.testReconnectDelay(30_000);
+                io.github.limuqy.mc.hassium.client.sleep.SleepClient.testLegacyWake();
+                io.github.limuqy.mc.hassium.client.sleep.SleepClient.testDuplicateWake();
+            }
+            else if("wake_safety".equals(action) || "wake_failure".equals(action)) {
+                io.github.limuqy.mc.hassium.client.sleep.SleepClient.testReconnectDelay(1000);
+                io.github.limuqy.mc.hassium.client.sleep.SleepClient.testLegacyWake();
+            }
+            else if("wake".equals(action)) {
+                io.github.limuqy.mc.hassium.client.sleep.SleepClient.testReconnectDelay(step.longParam("offlineMs",5000));
+                io.github.limuqy.mc.hassium.client.sleep.SleepClient.testLegacyWake();
+            } else throw new IllegalArgumentException("Unknown sleep action "+action);
+        }
+        var state=io.github.limuqy.mc.hassium.client.sleep.SleepClient.state();
+        if("traffic_wake".equals(action)) {
+            if(mc.getConnection()==null || mc.getConnection().getConnection()!=sleepResumeConnection || mc.level!=sleepResumeLevel || mc.player!=sleepResumePlayer)
+                throw new IllegalStateException("Traffic recovery recreated connection/world/player");
+            int pending=0;
+            int vd=io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession.serverViewDistance();
+            int radius=io.github.limuqy.mc.hassium.compat.ChunkShapeCompat.boundingRadius(vd);
+            var center=mc.player.chunkPosition();
+            for(int x=center.x-radius;x<=center.x+radius;x++) for(int z=center.z-radius;z<=center.z+radius;z++)
+                if(io.github.limuqy.mc.hassium.compat.ChunkShapeCompat.contains(center.x,center.z,vd,x,z)
+                        && !io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.visible(x,z)) pending++;
+            if(state==io.github.limuqy.mc.hassium.client.sleep.SleepClient.State.IDLE && pending==0) {
+                if(sleepTrafficReadyMs<0) sleepTrafficReadyMs=now-stepStartMs;
+                if(now-stepStartMs>=30_000) {
+                    LOGGER.info("HassiumSmokeTest:SLEEP traffic recovery sameConnection=true visiblePending=0 readyMs={} observationMs={}",sleepTrafficReadyMs,now-stepStartMs);
+                    return Outcome.DONE;
+                }
+            }
+            if(now-stepStartMs>120_000) throw new IllegalStateException("Traffic recovery not complete: pending="+pending);
+            return Outcome.RUNNING;
+        }
+        if("resume".equals(action)) {
+            boolean escape="esc".equals(step.param("trigger"));
+            if(mc.getConnection()==null || mc.getConnection().getConnection()!=sleepResumeConnection || mc.level!=sleepResumeLevel || mc.player!=sleepResumePlayer)
+                throw new IllegalStateException("In-place resume recreated connection/world/player");
+            if(!escape && (!mc.options.keyAttack.isDown() || !mc.options.keyUse.isDown() || io.github.limuqy.mc.hassium.client.sleep.SleepClient.blocksInput()))
+                throw new IllegalStateException("In-place resume interrupted held input");
+            if(!escape && step.boolParam("using",false) && !mc.player.isUsingItem()) throw new IllegalStateException("In-place resume interrupted bow use");
+            if(!escape && step.boolParam("using",false)) {
+                if(mc.player.getTicksUsingItem()<sleepResumeUsingTicks) throw new IllegalStateException("In-place resume restarted use duration");
+                sleepResumeUsingTicks=mc.player.getTicksUsingItem();
+            }
+            if(step.boolParam("mining",false)) {
+                if(!mc.gameMode.isDestroying() || mc.gameMode.getDestroyStage()<sleepResumeMiningStage)
+                    throw new IllegalStateException("Resume interrupted mining progress");
+                sleepResumeMiningStage=mc.gameMode.getDestroyStage();
+            }
+            boolean sameNear=false;
+            for(var e:mc.level.entitiesForRendering()) if(e==sleepResumeNear) sameNear=true;
+            if(!sameNear) throw new IllegalStateException("In-place resume replaced nearby entity");
+            if(now-stepStartMs>10_000) throw new IllegalStateException("In-place resume timed out");
+            // Movement only triggers wake; attack/use stay held until the entire visible
+            // selection is restored (including the separate NBT-only tail fixture).
+            if(now-stepStartMs>=200) mc.options.keyUp.setDown(false);
+            int pendingVisible=0;
+            int vd=io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession.serverViewDistance();
+            int radius=io.github.limuqy.mc.hassium.compat.ChunkShapeCompat.boundingRadius(vd);
+            var center=mc.player.chunkPosition();
+            for(int x=center.x-radius;x<=center.x+radius;x++) for(int z=center.z-radius;z<=center.z+radius;z++)
+                if(io.github.limuqy.mc.hassium.compat.ChunkShapeCompat.contains(center.x,center.z,vd,x,z)
+                        && !io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.visible(x,z)) pendingVisible++;
+            if(state!=io.github.limuqy.mc.hassium.client.sleep.SleepClient.State.IDLE || now-stepStartMs<1000
+                    || pendingVisible!=0) return Outcome.RUNNING;
+            if(escape && !(mc.screen instanceof net.minecraft.client.gui.screens.PauseScreen)) throw new IllegalStateException("Resume ACK stole Esc menu");
+            if(!escape && mc.screen!=null) throw new IllegalStateException("In-place resume opened a screen");
+            mc.options.keyUp.setDown(false);
+            mc.options.keySprint.setDown(false);
+            if(escape) mc.setScreen(null);
+            LOGGER.info("HassiumSmokeTest:SLEEP in-place trigger={} identity/input/near-entity preserved using={} visiblePending=0 elapsedMs={}",step.param("trigger"),step.boolParam("using",false),now-stepStartMs);
+            if(step.boolParam("mining",false)) LOGGER.info("HassiumSmokeTest:SLEEP actual mining progress preserved stage={}",sleepResumeMiningStage);
+            return Outcome.DONE;
+        }
+        if("auto_menu".equals(action)) {
+            if(state!=io.github.limuqy.mc.hassium.client.sleep.SleepClient.State.IDLE || !(mc.screen instanceof io.github.limuqy.mc.hassium.client.sleep.SleepSetupScreen))
+                throw new IllegalStateException("Auto sleep stole an open screen");
+            if(now-stepStartMs<2500) return Outcome.RUNNING;
+            io.github.limuqy.mc.hassium.compat.SleepProbeCompat.capture("sleep-settings");
+            pressSleepButton(mc,"hassium.sleep.save");
+            if(mc.screen!=null) throw new IllegalStateException("Sleep settings did not return to game");
+            LOGGER.info("HassiumSmokeTest:SLEEP auto menu gate and settings save verified"); return Outcome.DONE;
+        }
+        if("release".equals(action)) {
+            if(mc.options.keyAttack.isDown() || mc.options.keyUse.isDown()) throw new IllegalStateException("Sleep replayed released input");
+            if(now-stepStartMs<1500) return Outcome.RUNNING;
+            LOGGER.info("HassiumSmokeTest:SLEEP released input remained released"); return Outcome.DONE;
+        }
+        if("auto".equals(action)) {
+            if(mc.screen!=null || mc.options.keyAttack.isDown()==sleepAutoReleased || !mc.options.keyUse.isDown()
+                    || io.github.limuqy.mc.hassium.client.sleep.SleepClient.blocksInput())
+                throw new IllegalStateException("Auto sleep interrupted held input or focus");
+            if(state==io.github.limuqy.mc.hassium.client.sleep.SleepClient.State.ENTERING) {
+                sleepAutoEntering=true;
+                if(step.boolParam("releaseDuringEntry",false)) { mc.options.keyAttack.setDown(false); sleepAutoReleased=true; }
+            }
+            if(state==io.github.limuqy.mc.hassium.client.sleep.SleepClient.State.SLEEPING) {
+                if(!sleepAutoEntering) throw new IllegalStateException("Auto sleep handshake was not observed by input probe");
+                LOGGER.info("HassiumSmokeTest:SLEEP automatic entry input uninterrupted; attackReleasedDuringEntry={}",sleepAutoReleased); return Outcome.DONE;
+            }
+            if(now-stepStartMs>10_000) throw new IllegalStateException("Auto sleep did not enter");
+            return Outcome.RUNNING;
+        }
+        if("reject".equals(action)) {
+            if(state==io.github.limuqy.mc.hassium.client.sleep.SleepClient.State.IDLE && mc.player!=null && mc.getConnection()!=null
+                    && mc.screen instanceof io.github.limuqy.mc.hassium.client.sleep.SleepPanelScreen) {
+                pressSleepButton(mc,"menu.returnToGame");
+                LOGGER.info("HassiumSmokeTest:SLEEP rejected entry, normal connection retained"); return Outcome.DONE;
+            }
+            if(now-stepStartMs>10_000) { fail("SLEEP expected entry rejection without disconnect",3); return Outcome.DONE; }
+            return Outcome.RUNNING;
+        }
+        if("disconnected".equals(action) || "expire".equals(action) || "wake_safety".equals(action) || "wake_failure".equals(action)) {
+            if(state==io.github.limuqy.mc.hassium.client.sleep.SleepClient.State.IDLE && mc.getConnection()==null && mc.player==null) {
+                LOGGER.info("HassiumSmokeTest:SLEEP action={} noAutomaticReconnect=true",action); return Outcome.DONE;
+            }
+            if(now-stepStartMs>60_000) { fail("SLEEP expected disconnect/expiry: "+action,3); return Outcome.DONE; }
+            return Outcome.RUNNING;
+        }
+        boolean done="enter".equals(action) ? state==io.github.limuqy.mc.hassium.client.sleep.SleepClient.State.SLEEPING
+                : state==io.github.limuqy.mc.hassium.client.sleep.SleepClient.State.IDLE && mc.player!=null;
+        if(done) { LOGGER.info("HassiumSmokeTest:SLEEP action={} state={}",action,state); return Outcome.DONE; }
+        if(now-stepStartMs>120_000) { fail("SLEEP timeout action="+action+" state="+state,3); return Outcome.DONE; }
+        return Outcome.RUNNING;
+    }
+    private static void pressSleepButton(Minecraft mc,String key) {
+        if(mc.screen==null) throw new IllegalStateException("Sleep screen missing");
+        String title=net.minecraft.network.chat.Component.translatable(key).getString();
+        for(var child:mc.screen.children()) if(child instanceof net.minecraft.client.gui.components.Button button && button.getMessage().getString().equals(title)) { io.github.limuqy.mc.hassium.compat.SleepClientCompat.pressButton(button); return; }
+        throw new IllegalStateException("Sleep button missing: "+key);
+    }
+    private static long profileAttackCycle = -1;
+    private static boolean profileAttacking;
+
+    private static Outcome execInput(ScenarioStep step, Minecraft mc, long now) {
+        if (mc.player == null) return Outcome.RUNNING;
+        String expectedSleep=step.param("sleepState");
+        if(expectedSleep!=null) {
+            var sleep=io.github.limuqy.mc.hassium.client.sleep.SleepClient.state();
+            if(!expectedSleep.equals(sleep.name())) throw new IllegalStateException("Traffic phase sleep state="+sleep+" expected="+expectedSleep);
+            if("SLEEPING".equals(expectedSleep)) {
+                if(!io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.restricted()) throw new IllegalStateException("Traffic sleep window missing");
+                var center=mc.player.chunkPosition(); int visible=0,light=0;
+                for(int x=center.x-4;x<=center.x+4;x++) for(int z=center.z-4;z<=center.z+4;z++) {
+                    if(io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.visible(x,z)) visible++;
+                    if(io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.allows(x,z)) light++;
+                }
+                if(visible!=9 || light!=25) throw new IllegalStateException("Traffic window geometry="+visible+"/"+light);
+            }
+        }
+        // Profiling runs unattended; the native pause screen suppresses keyboard movement.
+        mc.options.pauseOnLostFocus = false;
+        if (mc.screen instanceof net.minecraft.client.gui.screens.PauseScreen) mc.setScreen(null);
+        mc.mouseHandler.releaseMouse();
+        long elapsed = now - stepStartMs;
+        boolean running = elapsed < step.longParam("ms", 60_000L);
+        String mode = step.param("mode");
+        if (!java.util.Set.of("walk", "idle", "hover", "hold_attack", "periodic_attack", "entity_attack").contains(mode))
+            throw new IllegalArgumentException("Unknown profiling input mode: " + mode);
+        if (profileInputStep != index) {
+            profileInputStep = index;
+            profileAttackCycle = -1;
+            profileAttacking = false;
+            LOGGER.info("HassiumSmokeTest: INPUT_BEGIN mode={} screen={} pos=({}, {}, {})",
+                    mode, mc.screen, mc.player.getX(), mc.player.getY(), mc.player.getZ());
+        }
+        mc.options.keyUp.setDown(running && "walk".equals(mode));
+        mc.options.keyDown.setDown(false);
+        mc.options.keyLeft.setDown(false);
+        mc.options.keyRight.setDown(false);
+        mc.options.keyJump.setDown(false);
+        mc.options.keyShift.setDown(false);
+        mc.options.keySprint.setDown(false);
+        mc.options.keyAttack.setDown(false);
+        mc.options.keyUse.setDown(false);
+        if ("hover".equals(mode) && !mc.player.getAbilities().flying) {
+            if (!mc.player.getAbilities().mayfly) throw new IllegalStateException("Hover requires native flight permission");
+            mc.player.getAbilities().flying = true;
+            mc.player.setDeltaMovement(0, 0, 0);
+            mc.player.onUpdateAbilities();
+        }
+        if (running && "walk".equals(mode)) {
+            // Four 4-second legs; ordinary walking speed, no teleport or sprint in the window.
+            mc.player.setYRot((float) ((elapsed / 4000L) % 4L) * 90.0f);
+            mc.player.setXRot(10.0f);
+        }
+        if (java.util.Set.of("hold_attack", "periodic_attack").contains(mode) && mc.gameMode != null) {
+            boolean attacking = running && ("hold_attack".equals(mode) || elapsed % 1000L < 100L);
+            // Use native interaction APIs: background windows cannot acquire the mouse.
+            // No synthetic network packets. The fixture target is unbreakable in survival.
+            var target = new net.minecraft.core.BlockPos((int)step.longParam("targetX",30), (int)step.longParam("targetY",139), (int)step.longParam("targetZ",5));
+            long cycle = "hold_attack".equals(mode) ? 0 : elapsed / 1000L;
+            if (attacking) {
+                if (profileAttackCycle != cycle) {
+                    mc.gameMode.startDestroyBlock(target, net.minecraft.core.Direction.UP);
+                    profileAttackCycle = cycle;
+                } else {
+                    mc.gameMode.continueDestroyBlock(target, net.minecraft.core.Direction.UP);
+                }
+                mc.player.swing(net.minecraft.world.InteractionHand.MAIN_HAND);
+            } else if (profileAttacking) {
+                mc.gameMode.stopDestroyBlock();
+            }
+            profileAttacking = attacking;
+        }
+        if(running && "entity_attack".equals(mode) && mc.gameMode!=null && elapsed/1000L!=profileAttackCycle) {
+            profileAttackCycle=elapsed/1000L;
+            for(var entity:mc.level.entitiesForRendering()) if(entity.getType()==net.minecraft.world.entity.EntityType.PIG
+                    && entity.isAlive() && entity.distanceToSqr(mc.player)<9) {
+                mc.gameMode.attack(mc.player,entity); mc.player.swing(net.minecraft.world.InteractionHand.MAIN_HAND); break;
+            }
+        }
+        if (!running) LOGGER.info("HassiumSmokeTest: INPUT_END mode={} pos=({}, {}, {})",
+                mode, mc.player.getX(), mc.player.getY(), mc.player.getZ());
+        return running ? Outcome.RUNNING : Outcome.DONE;
+    }
+
     // -------------------------------------------------------------- dimension
 
     /**
@@ -480,7 +803,8 @@ public final class ScenarioEngine {
             return Outcome.DONE;
         }
         LOGGER.info("HassiumSmokeTest: reconnecting to {}", host);
-        triggerReconnect(mc);
+        if(step.boolParam("sleep",false)) io.github.limuqy.mc.hassium.client.sleep.SleepClient.reconnectManually();
+        else triggerReconnect(mc);
         return Outcome.DONE;
     }
 
@@ -581,10 +905,10 @@ public final class ScenarioEngine {
                 return Outcome.DONE;
             }
             boolean ok;
-            if (step.boolParam("vanilla", false)) {
+            if (step.boolParam("vanilla", false) || step.boolParam("world",false)) {
                 var content = SmokeProbeWriter.sampleContentCheck(mc);
                 ok = SmokeProbeWriter.currentLoadedChunkCount(mc) > 64 && content.chunksWithNonAir() > 0;
-                LOGGER.info("HassiumSmokeTest: vanilla delivery {} loaded={} nonAir={} pass={}",
+                LOGGER.info("HassiumSmokeTest: world delivery {} loaded={} nonAir={} pass={}",
                         roundLabel, SmokeProbeWriter.currentLoadedChunkCount(mc), content.chunksWithNonAir(), ok);
             } else {
                 ok = validateStats(plain, roundLabel);

@@ -9,6 +9,15 @@ import io.github.limuqy.mc.hassium.config.HassiumConfigService;
  * 服务端声明服务端侧开启（配置开关）；按位与后即本连接实际启用的能力集合。
  */
 public final class LoginCaps {
+    public static final int SLEEP = 1 << 8;
+    /** Per-login context for the single authorized wake reconnect, not ordinary manual login. */
+    public static final int SLEEP_WAKE_ATTEMPT = 1 << 9;
+    /** Sleep keeps terrain current, so entity visibility can resume on the same connection. */
+    public static final int SLEEP_IN_PLACE = 1 << 10;
+    /** 3x3 rendering, light halo and per-column snapshot recovery on the same connection. */
+    public static final int SLEEP_WINDOW = 1 << 11;
+    /** UNCHANGED includes a complete client-visible block entity snapshot. */
+    public static final int PULL_NBT = 1 << 12;
     private LoginCaps() {
     }
 
@@ -49,6 +58,7 @@ public final class LoginCaps {
     public static int buildServerCaps() {
         HassiumConfigService cfg = HassiumConfigService.getInstance();
         int caps = 0;
+        if (io.github.limuqy.mc.hassium.compat.SleepLeaseCompat.supported() && cfg.getConfig().master().sleepEnabled()) caps |= SLEEP | SLEEP_WAKE_ATTEMPT | SLEEP_IN_PLACE;
         if (cfg.isPacketAggregationEnabled()) {
             caps |= AGGREGATION | EGRESS_V3;
         }
@@ -65,7 +75,8 @@ public final class LoginCaps {
         if (cfg.isServerLightStrip()) {
             caps |= LIGHT_STRIP;
         }
-        caps |= SHADOW_PULL;
+        if ((caps & (SLEEP | PULL_MODE)) == (SLEEP | PULL_MODE)) caps |= SLEEP_WINDOW;
+        caps |= SHADOW_PULL | PULL_NBT;
         return caps;
     }
 
@@ -73,6 +84,8 @@ public final class LoginCaps {
     public static int buildClientCaps() {
         HassiumConfigService cfg = HassiumConfigService.getInstance();
         int caps = 0;
+        if (io.github.limuqy.mc.hassium.compat.SleepLeaseCompat.supported()) caps |= SLEEP | SLEEP_IN_PLACE;
+        if ((caps & SLEEP)!=0 && io.github.limuqy.mc.hassium.client.sleep.SleepClient.automaticWake()) caps |= SLEEP_WAKE_ATTEMPT;
         if (cfg.isPacketAggregationEnabled()) {
             caps |= AGGREGATION | EGRESS_V3;
         }
@@ -88,13 +101,16 @@ public final class LoginCaps {
             caps |= PULL_MODE;
             // AUTHORITY_NOTIFY 整族降级：不声明
         }
-        caps |= SHADOW_PULL;
+        if ((caps & (SLEEP | PULL_MODE)) == (SLEEP | PULL_MODE)) caps |= SLEEP_WINDOW;
+        caps |= SHADOW_PULL | PULL_NBT;
         return caps;
     }
 
     /** 按位与协商。 */
     public static int negotiate(int serverCaps, int clientCaps) {
         int caps = serverCaps & clientCaps;
+        if ((caps & SLEEP)==0) caps &= ~(SLEEP_WAKE_ATTEMPT | SLEEP_IN_PLACE);
+        if ((caps & (SLEEP | SLEEP_IN_PLACE | PULL_MODE)) != (SLEEP | SLEEP_IN_PLACE | PULL_MODE)) caps &= ~SLEEP_WINDOW;
         if ((caps & EGRESS_V3) == 0) caps &= ~AGGREGATION;
         if ((caps & AGGREGATION) == 0) caps &= ~EGRESS_V3;
         return caps;

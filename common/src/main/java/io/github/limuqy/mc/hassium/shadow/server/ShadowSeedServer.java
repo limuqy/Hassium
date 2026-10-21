@@ -938,7 +938,7 @@ public class ShadowSeedServer extends MinecraftServer {
             // 1) 离线改节再发布；旧读者继续持有旧节，避免 palette 并发撕裂。
             for (SectionDeltaS2CPacket.SectionData sd : entry.changedSections()) {
                 LevelChunkSection previousSection = chunk.getSection(sd.sectionIndex());
-                LevelChunkSection section = LevelChunkSectionCompat.copyDetached(previousSection);
+                LevelChunkSection section = LevelChunkSectionCompat.copyMutableDetached(previousSection);
                 FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(sd.blockData()));
                 try {
                     if (sd.kind() == SectionDeltaS2CPacket.KIND_FULL) {
@@ -1893,9 +1893,18 @@ public class ShadowSeedServer extends MinecraftServer {
             if (accChunk == null) {
                 return null;
             }
-            LevelChunk result = toLevelChunk(dimension, accChunk, pos);
-            if (result != null) io.github.limuqy.mc.hassium.compat.ShadowBlockEntityCompat.restore(result, tag);
-            return result;
+            return io.github.limuqy.mc.hassium.compat.ShadowPoiGate.callExclusive(this, () -> {
+                // FULL disk reads wrap a LevelChunk whose BE NBT lives in its postLoad
+                // callback. Converting that wrapper as a ProtoChunk drops the callback.
+                LevelChunk result = accChunk instanceof net.minecraft.world.level.chunk.ImposterProtoChunk wrapper
+                        ? wrapper.getWrapped() : toLevelChunk(dimension, accChunk, pos);
+                if (result != null) {
+                    result.runPostLoad();
+                    io.github.limuqy.mc.hassium.compat.ShadowBlockEntityCompat.restore(result, tag);
+                    io.github.limuqy.mc.hassium.compat.CacheNbtProbeCompat.disk(result, tag);
+                }
+                return result;
+            });
         } catch (Throwable t) {
             LOGGER.debug("Hassium: parseNbtBytes failed for {}", pos, t);
             return null;

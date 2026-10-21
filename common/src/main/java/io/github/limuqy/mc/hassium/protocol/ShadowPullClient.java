@@ -36,6 +36,7 @@ import net.minecraft.world.level.ChunkPos;
 public final class ShadowPullClient {
 
     private static final AtomicLong NEXT_REQUEST_ID = new AtomicLong();
+    public static long nextRequestFloor() { return NEXT_REQUEST_ID.get()+1; }
     /**
      * 请求模式（requestId → 是否带本地基线），仅覆盖在途响应；断连时清空。
      * <p>
@@ -45,15 +46,8 @@ public final class ShadowPullClient {
      * **结构性恒 0**（2026-09-20 实测 1750 次 FULL 全部 withBaseline=0，逼得排查只能换口径）。
      * 改成逐出最旧：容量内**必命中**，代价只是极旧的在途请求退化为「模式未知」。
      */
-    private static final java.util.Map<Long, Boolean> REQUEST_MODES =
-            java.util.Collections.synchronizedMap(
-                    new java.util.LinkedHashMap<>(256, 0.75f, true) {
-                        @Override
-                        protected boolean removeEldestEntry(java.util.Map.Entry<Long, Boolean> eldest) {
-                            return size() > MAX_TRACKED_REQUESTS;
-                        }
-                    });
     private static final int MAX_TRACKED_REQUESTS = 8_192;
+    private static final PullRequestTracker REQUEST_MODES = new PullRequestTracker(MAX_TRACKED_REQUESTS);
     /**
      * C2S 载荷预算余量：vanilla 的 32767 限的是**载荷本身**，而各加载器封装
      * （forge `ShadowPullRequestWrapper` / neoforge `ByteArrayPayload`）可能再包一层。
@@ -130,7 +124,19 @@ public final class ShadowPullClient {
         request(dimension, chunks, false);
     }
 
+    /** Explicit NBT repair must replace the matching response even when terrain hashes agree. */
+    public static void requestNbtRepairFull(String dimension, List<ChunkPos> chunks) {
+        for (ChunkPos pos : chunks) clearCompareRequested(dimension, pos);
+        request(dimension, chunks, false, true);
+    }
+
     private static void request(String dimension, List<ChunkPos> chunks, boolean includeLocalBaseline) {
+        request(dimension, chunks, includeLocalBaseline, false);
+    }
+
+    private static void request(String dimension, List<ChunkPos> chunks, boolean includeLocalBaseline, boolean nbtRepair) {
+        if (chunks!=null && io.github.limuqy.mc.hassium.client.sleep.SleepClient.sleeping())
+            chunks = chunks.stream().filter(pos->io.github.limuqy.mc.hassium.client.sleep.SleepClient.allowsChunk(pos.x,pos.z)).toList();
         io.github.limuqy.mc.hassium.utils.DebugLogger.info(
                 io.github.limuqy.mc.hassium.utils.DebugLogger.LogType.NETWORK,
                 "[DIAG] ShadowPullClient.request dim={} chunks={} baseline={} first=({},{})",
@@ -176,7 +182,10 @@ public final class ShadowPullClient {
         for (List<ShadowPullRequestC2SPacket.Entry> batch
                 : ShadowPullRequestC2SPacket.batchesByEncodedSize(dimension, entries, budget)) {
             long requestId = NEXT_REQUEST_ID.incrementAndGet();
-            REQUEST_MODES.put(requestId, includeLocalBaseline);
+            REQUEST_MODES.register(requestId, batch.stream()
+                    .collect(java.util.stream.Collectors.toMap(
+                            entry -> ChunkPos.asLong(entry.chunkX(), entry.chunkZ()), ShadowPullRequestC2SPacket.Entry::chunkHash)),
+                    includeLocalBaseline, nbtRepair);
             for (var entry : batch) {
                 io.github.limuqy.mc.hassium.utils.DebugLogger.info(
                         io.github.limuqy.mc.hassium.utils.DebugLogger.LogType.NETWORK,
@@ -470,6 +479,23 @@ public final class ShadowPullClient {
     }
 
     /** Applies compare-and-pull responses for the current client dimension. */
+    public static boolean tryHandleNbtHitInline(byte[] data) {
+        if (!LoginCaps.has(ClientLoginNegotiation.current(), LoginCaps.PULL_NBT)
+                || !Minecraft.getInstance().isSameThread()) return false;
+        FriendlyByteBuf buf = new FriendlyByteBuf(Unpooled.wrappedBuffer(data));
+        try {
+            buf.readUtf(ShadowPullRequestC2SPacket.MAX_DIMENSION_LENGTH);
+            buf.readVarLong(); buf.readVarLong();
+            if (buf.readVarInt() != 1) return false;
+            buf.readVarInt(); buf.readVarInt();
+            if (buf.readVarInt() != ShadowPullResponseS2CPacket.Kind.UNCHANGED.wireValue()) return false;
+            buf.readerIndex(0);
+            handleResponse(ShadowPullResponseS2CPacket.decode(buf));
+            return true;
+        } finally { buf.release(); }
+    }
+
+    /** Applies compare-and-pull responses for the current client dimension. */
     public static void handleResponse(ShadowPullResponseS2CPacket response) {
         if (response == null) {
             return;
@@ -485,8 +511,24 @@ public final class ShadowPullClient {
                     response.dimension(), clientDim);
             return;
         }
-        Boolean comparedBaseline = REQUEST_MODES.remove(response.requestId());
         for (ShadowPullResponseS2CPacket.Result result : response.results()) {
+            // Defensive fallback for non-main-thread receivers or mixed legacy batches.
+            if (result.kind() == ShadowPullResponseS2CPacket.Kind.UNCHANGED && !minecraft.isSameThread()) {
+                var sourceLevel = minecraft.level;
+                minecraft.execute(() -> {
+                    if (minecraft.level == sourceLevel) handleResponse(new ShadowPullResponseS2CPacket(
+                            response.dimension(), response.epoch(), response.requestId(), List.of(result)));
+                });
+                continue;
+            }
+            if(!io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.acceptResponse(
+                    response.dimension(),result.chunkX(),result.chunkZ(),response.requestId())) continue;
+            PullRequestTracker.Mode mode = REQUEST_MODES.take(response.requestId(),
+                    ChunkPos.asLong(result.chunkX(), result.chunkZ()));
+            Boolean comparedBaseline = mode == null ? null : mode.comparedBaseline();
+            // A FULL for the same advertised baseline is authoritative NBT repair too
+            // (e.g. an oversized hit projection). An absent/R1 baseline must not force replacement.
+            boolean nbtRepair = mode != null && mode.requiresNbtRepair(result.chunkHash());
             switch (result.kind()) {
                 case UNCHANGED -> responseUnchanged.incrementAndGet();
                 case FULL -> responseFull.incrementAndGet();
@@ -517,7 +559,7 @@ public final class ShadowPullClient {
                         response.dimension(), pos.x, pos.z, result.chunkHash());
                 io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
                         .confirm(response.dimension(), pos);
-                if (!ClientChunkHandler.applyShadowPullFull(serverPacket)) {
+                if (!ClientChunkHandler.applyShadowPullFull(serverPacket, nbtRepair)) {
                     Constants.LOG.warn("[SHADOW_PULL] Failed to apply FULL ({}, {})", result.chunkX(), result.chunkZ());
                     io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
                             .mark(response.dimension(), pos);
@@ -549,13 +591,44 @@ public final class ShadowPullClient {
                     buffer.release();
                 }
             } else if (result.kind() == ShadowPullResponseS2CPacket.Kind.UNCHANGED) {
-                // 先 compare 落地，再允许光/交付（禁止「算完光再 compare」）。
-                io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
-                        .confirm(response.dimension(), pos);
                 var shadow = io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry
                         .getInstance().get();
                 net.minecraft.world.level.chunk.LevelChunk baseline = shadow == null ? null
                         : shadow.injectedChunk(response.dimension(), pos.x, pos.z);
+                // Block hashes do not cover BE NBT. Apply the projection BEFORE confirming
+                // authority or taking the already-visible fast path.
+                if (LoginCaps.has(ClientLoginNegotiation.current(), LoginCaps.PULL_NBT)) {
+                    try {
+                        var nbt = BlockEntitySnapshot.decode(result.payload(), pos);
+                        io.github.limuqy.mc.hassium.utils.DebugLogger.info(
+                                io.github.limuqy.mc.hassium.utils.DebugLogger.LogType.NETWORK,
+                                "[SHADOW_PULL_NBT] id={} pos=({}, {}) entries={} bytes={}",
+                                response.requestId(), pos.x, pos.z, nbt.size(), result.payload().length);
+                        if (baseline == null) throw new IllegalStateException("NBT snapshot has no material baseline");
+                        if (!nbt.isEmpty() || !baseline.getBlockEntitiesPos().isEmpty()) {
+                            io.github.limuqy.mc.hassium.compat.ShadowPoiGate.runExclusive(shadow, () ->
+                                    ShadowLightCompute.withChunkLock(pos, () -> {
+                                        io.github.limuqy.mc.hassium.compat.ShadowBlockEntityCompat.applySnapshot(baseline, nbt);
+                                        io.github.limuqy.mc.hassium.compat.ChunkDataCompat.markUnsaved(baseline);
+                                        ShadowStorageHashes.markContentDirty(response.dimension(), pos);
+                                    }));
+                        }
+                        if (ShadowLightCompute.hasClientApplyEpoch(response.dimension(), pos)) {
+                            var mc = Minecraft.getInstance();
+                            var visible = mc.level == null ? null : mc.level.getChunkSource().getChunk(pos.x, pos.z, false);
+                            if (visible != null) io.github.limuqy.mc.hassium.compat.ShadowBlockEntityCompat.applySnapshot(visible, nbt);
+                        }
+                    } catch (Throwable failure) {
+                        Constants.LOG.warn("[SHADOW_PULL] NBT snapshot failed ({}, {}), retry FULL", pos.x, pos.z, failure);
+                        requestNbtRepairFull(response.dimension(), List.of(pos));
+                        continue;
+                    }
+                }
+                io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate.confirm(response.dimension(), pos);
+                long sleepKey = io.github.limuqy.mc.hassium.utils.DimensionKey.key(response.dimension(), pos.x, pos.z);
+                io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.injected(sleepKey, response.requestId(), baseline);
+                if (!io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession.isDeliverableToClient(pos.x, pos.z))
+                    io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.haloApplied(sleepKey, response.requestId());
                 // 【2026-09-20 同柱重复交付闸（用户拍板）】客户端已持有该柱（落地凭据在）
                 // → 服务端已裁决内容未变，客户端手上的就是同一份数据：**只记命中，不回放重交付**。
                 // 此前「保鲜 compare」（ShadowTrackingSession.materialize 对权威注入柱再 compare）
@@ -688,6 +761,7 @@ public final class ShadowPullClient {
 
     public static void reset() {
         NEXT_REQUEST_ID.set(0L);
+        io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.reset();
         REQUEST_MODES.clear();
         PENDING_COMPARE.clear();
         lastFailAtMs.clear();
@@ -707,6 +781,7 @@ public final class ShadowPullClient {
 
     /** 真客户端切维：作废旧维度在途 compare / 失败冷却，避免坐标碰撞串维。 */
     public static void onClientDimensionChanged() {
+        io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.reset();
         PENDING_COMPARE.clear();
         lastFailAtMs.clear();
         REQUEST_MODES.clear();

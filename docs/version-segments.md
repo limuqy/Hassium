@@ -138,7 +138,7 @@ MC_1_21_11
 
 **当前语义**：不得使用固定 10 秒区块门控。无法在 pre-Play 阶段识别客户端时，立即走完整光照回退；已识别的 Hassium 客户端从首圈进入优化链。预握手只是能力提前声明，不替代 Play 期 `play_init_s2c` 完整激活。
 
-共用载体：`PreHandshakeProtocol`（1.20.1 legacy buf 编解码 / 1.21.1+ payload，StreamCodec 为 FriendlyByteBuf 级，无 registry 依赖）。能力字段：协议版本（`CURRENT_PROTOCOL_VERSION`）、mod 版本（格式校验）、客户端能力位（`LoginCaps`：agg/delta/seed/light/pull/shadow_pull/pull_mode）。
+共用载体：`PreHandshakeProtocol`（1.20.1 legacy buf 编解码 / 1.21.1+ payload，StreamCodec 为 FriendlyByteBuf 级，无 registry 依赖）。能力字段：协议版本（`CURRENT_PROTOCOL_VERSION`）、mod 版本（格式校验）、客户端能力位（`LoginCaps`；缓存相关含 agg/delta/seed/light/pull/shadow_pull/pull_mode/pull_nbt）。`PULL_NBT` 允许方块命中时独立刷新客户端 BE 快照；休眠窗口本身仍只向首批重点组合协商。
 运行时验证优先级：**1.20.1 → 1.21.1 → 1.21.11**；直连拓扑下无 UDP 断链冒烟（`UdpFailover` harness 与 `FAILOVER_*` / `UDP_*` marker 已随数据面退役）；其余锚点以编译 + 短冒烟为主。详见 [`runtime-smoke-test.md`](runtime-smoke-test.md)。
 
 ---

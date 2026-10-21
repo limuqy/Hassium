@@ -50,6 +50,24 @@ public final class PacketCodecCompat {
 #endif
 
     private PacketCodecCompat() {}
+    /** Immutable bounded native packet snapshot for a sleep recovery tail. */
+    public record CapturedPacket(int id, byte[] body) {
+        public Packet<?> restore(RegistryAccess access) { return deserializeClientbound(id,body,access); }
+    }
+    @SuppressWarnings({"rawtypes","unchecked"})
+    public static CapturedPacket captureClientbound(Packet<?> packet,RegistryAccess access) {
+        FriendlyByteBuf buffer=new FriendlyByteBuf(Unpooled.buffer(256,256*1024));
+        try {
+#if MC_VER < MC_1_21_1
+            buffer.writeVarInt(net.minecraft.network.ConnectionProtocol.PLAY.getPacketId(PacketFlow.CLIENTBOUND,packet));
+            packet.write(buffer);
+#else
+            ((net.minecraft.network.codec.StreamCodec)playBound(PacketFlow.CLIENTBOUND,access).codec()).encode(buffer,packet);
+#endif
+            int id=buffer.readVarInt(); byte[] body=new byte[buffer.readableBytes()]; buffer.readBytes(body);
+            return new CapturedPacket(id,body);
+        } finally { buffer.release(); }
+    }
 
     /**
      * PLAY 包枚举条目：PacketType.id + 协议内数字 ID。

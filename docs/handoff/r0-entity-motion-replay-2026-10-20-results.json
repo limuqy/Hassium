@@ -1,0 +1,280 @@
+{
+  "schema": 1,
+  "date": "2026-10-20",
+  "scope": "R0 offline mixed-observer replay and anchor-native motion codecs; no live throttling",
+  "codeSHA256": {
+    "scripts/smoke/entity_motion_replay.py": "d686c958f62debc8ff7a121ad0c5eeadb070e23ddac5ed775a8e4910f4c8d93a",
+    "scripts/smoke/test_entity_motion_replay.py": "b51794179585c78c6285625c37a65d1a0dfd0ab6c96a23be815d68425b09b0c5",
+    "common/build.gradle": "f4cfabf84d4e09d6c973798c1959f562cf3d5cc0613ca32763329df3a8a07ec1",
+    "common/src/test/java/io/github/limuqy/mc/hassium/compat/EntityMotionReplayNativeCompat.java": "b3261af947569583373f0e3e3b9276b153ba159fdc207ce21681e929d286824f",
+    "common/src/test/java/io/github/limuqy/mc/hassium/protocol/replay/EntityMotionReplayNativeCheck.java": "89fc9c2c39613749421d8de1eb699869760f23c422c1713337aee6eb9a3d95f6"
+  },
+  "pythonRegressionTests": 16,
+  "runs": [
+    {
+      "run": "r0_1201_forge_20261020_c",
+      "schema": 1,
+      "mcVersion": "1.20.1",
+      "loader": "forge",
+      "sourceSession": "traffic_1201_forge_20261020_d",
+      "modelResult": "PASS",
+      "nativeCodecResult": "PASS",
+      "scope": "offline virtual mixed observers; source sessions each used one real client",
+      "inputs": {
+        "agg-20261020-195825.jsonl": {
+          "sha256": "0a97f516e7ec51d4c35d2fb0befea3e7571cfe2c478f09ae3ff0b08f2c72edb5",
+          "bytes": 135907083
+        }
+      },
+      "captures": {
+        "/127.0.0.1:50484": {
+          "sourcePackets": {
+            "other": 208094,
+            "bundle": 40376,
+            "add": 20188,
+            "velocity": 299919,
+            "knownMotion": 443563,
+            "position": 90310,
+            "head": 31970,
+            "position_rotation": 10526,
+            "teleport": 10789,
+            "rotation": 49,
+            "remove": 19963
+          },
+          "activeTraceSHA256": "120b8da6680b811a7f7803e8be71f42def6237d7fd340ba690a271744dfb482e",
+          "activeObserversVerified": [
+            "normal-near",
+            "normal-far"
+          ],
+          "afkObservers": {
+            "afk-far": {
+              "recoveryTicks": 8054,
+              "cancelledRemovals": 6246,
+              "heldMotionPackets": 206968,
+              "snapshots": 39315,
+              "recoveryQuarantinedPackets": 1605
+            },
+            "afk-near": {
+              "heldMotionPackets": 206919,
+              "snapshots": 40624,
+              "cancelledRemovals": 6162,
+              "recoveryTicks": 8066,
+              "recoveryQuarantinedPackets": 1315
+            }
+          }
+        }
+      },
+      "wireFixtures": {
+        "sourcePackets": {
+          "add": 8,
+          "rotation": 72,
+          "knownMotion": 415,
+          "position_rotation": 72,
+          "velocity": 72,
+          "head": 72,
+          "position": 127,
+          "remove": 1,
+          "reset": 1
+        },
+        "activeTraceSHA256": "99a2325a91c85896d4d2443d871974a9807e095b5fc3e1a6e54302f1eb305680",
+        "activeObserversVerified": [
+          "normal-near",
+          "normal-far"
+        ],
+        "afkObservers": {
+          "afk-far": {
+            "recoveryTicks": 221,
+            "heldMotionPackets": 201,
+            "snapshots": 12,
+            "cancelledRemovals": 1,
+            "cancelledWorldChanges": 0
+          },
+          "afk-near": {
+            "heldMotionPackets": 214,
+            "snapshots": 13,
+            "recoveryTicks": 205,
+            "cancelledRemovals": 0,
+            "cancelledWorldChanges": 0
+          }
+        }
+      },
+      "negativeControls": {
+        "currentPositionSnapshotRejected": {
+          "expectedX": 1.5,
+          "wrongX": 1.75
+        },
+        "snapshotAfterDeltaRejected": true
+      },
+      "oracleRequests": {
+        "velocity": 379955,
+        "position": 90437,
+        "head": 112006,
+        "position_rotation": 10598,
+        "teleport": 90753,
+        "rotation": 121
+      },
+      "nativeRequestsSHA256": "2ccff5c466e28aa74fb72dcfaccbb4d92375a1110a0b53838cb02042bd5e48a0",
+      "result": "PASS",
+      "nativeOracle": {
+        "metadata": {
+          "schema": 1,
+          "mcVersion": "1.20.1",
+          "loader": "forge",
+          "sourceSession": "traffic_1201_forge_20261020_d"
+        },
+        "compiledMinecraftVersion": "1.20.1",
+        "result": "PASS",
+        "nativePacketRoundTrips": 683870,
+        "nativePositionChecks": 523942,
+        "negativeControlsPassed": 2,
+        "nativeRequestsSHA256": "2ccff5c466e28aa74fb72dcfaccbb4d92375a1110a0b53838cb02042bd5e48a0",
+        "kinds": {
+          "head": 112006,
+          "position": 90437,
+          "position_rotation": 10598,
+          "rotation": 121,
+          "teleport": 90753,
+          "velocity": 379955
+        },
+        "sources": {
+          "capture": 443563,
+          "snapshot": 239892,
+          "wire_fixture": 415
+        }
+      }
+    },
+    {
+      "run": "r0_1211_neoforge_20261020_c",
+      "schema": 1,
+      "mcVersion": "1.21.1",
+      "loader": "neoforge",
+      "sourceSession": "traffic_1211_neoforge_20261020_a",
+      "modelResult": "PASS",
+      "nativeCodecResult": "PASS",
+      "scope": "offline virtual mixed observers; source sessions each used one real client",
+      "inputs": {
+        "agg-20261020-194311.jsonl": {
+          "sha256": "edc5254a9383dba8f55f14df1ec9bf2528f60a4813495f27cfd7d1f8b583b592",
+          "bytes": 141427415
+        }
+      },
+      "captures": {
+        "/127.0.0.1:61119": {
+          "sourcePackets": {
+            "other": 211092,
+            "login": 1,
+            "bundle": 40600,
+            "add": 20300,
+            "position": 140435,
+            "knownMotion": 537709,
+            "velocity": 336299,
+            "head": 30931,
+            "teleport": 20865,
+            "position_rotation": 9158,
+            "remove": 20102,
+            "rotation": 21
+          },
+          "activeTraceSHA256": "f3c1fee9f9700bb798ca3c58314a0322b3c3d15baf3725b3b1d968fe75e6dc86",
+          "activeObserversVerified": [
+            "normal-near",
+            "normal-far"
+          ],
+          "afkObservers": {
+            "afk-far": {
+              "recoveryTicks": 8136,
+              "cancelledRemovals": 9011,
+              "heldMotionPackets": 249714,
+              "snapshots": 45739,
+              "recoveryQuarantinedPackets": 2142
+            },
+            "afk-near": {
+              "heldMotionPackets": 247706,
+              "snapshots": 46565,
+              "cancelledRemovals": 8850,
+              "recoveryTicks": 8112,
+              "recoveryQuarantinedPackets": 2355
+            }
+          }
+        }
+      },
+      "wireFixtures": {
+        "sourcePackets": {
+          "add": 8,
+          "rotation": 72,
+          "knownMotion": 415,
+          "position_rotation": 72,
+          "velocity": 72,
+          "head": 72,
+          "position": 127,
+          "remove": 1,
+          "reset": 1
+        },
+        "activeTraceSHA256": "99a2325a91c85896d4d2443d871974a9807e095b5fc3e1a6e54302f1eb305680",
+        "activeObserversVerified": [
+          "normal-near",
+          "normal-far"
+        ],
+        "afkObservers": {
+          "afk-far": {
+            "recoveryTicks": 221,
+            "heldMotionPackets": 201,
+            "snapshots": 12,
+            "cancelledRemovals": 1,
+            "cancelledWorldChanges": 0
+          },
+          "afk-near": {
+            "heldMotionPackets": 214,
+            "snapshots": 13,
+            "recoveryTicks": 205,
+            "cancelledRemovals": 0,
+            "cancelledWorldChanges": 0
+          }
+        }
+      },
+      "negativeControls": {
+        "currentPositionSnapshotRejected": {
+          "expectedX": 1.5,
+          "wrongX": 1.75
+        },
+        "snapshotAfterDeltaRejected": true
+      },
+      "oracleRequests": {
+        "position": 140562,
+        "velocity": 428700,
+        "teleport": 113194,
+        "head": 123332,
+        "position_rotation": 9230,
+        "rotation": 93
+      },
+      "nativeRequestsSHA256": "2664e8c4c342c8ee2ac6db7e45fc724e95521ec82715ba0e0e1c632f2e5506f2",
+      "result": "PASS",
+      "nativeOracle": {
+        "metadata": {
+          "schema": 1,
+          "mcVersion": "1.21.1",
+          "loader": "neoforge",
+          "sourceSession": "traffic_1211_neoforge_20261020_a"
+        },
+        "compiledMinecraftVersion": "1.21.1",
+        "result": "PASS",
+        "nativePacketRoundTrips": 815111,
+        "nativePositionChecks": 630453,
+        "negativeControlsPassed": 2,
+        "nativeRequestsSHA256": "2664e8c4c342c8ee2ac6db7e45fc724e95521ec82715ba0e0e1c632f2e5506f2",
+        "kinds": {
+          "head": 123332,
+          "position": 140562,
+          "position_rotation": 9230,
+          "rotation": 93,
+          "teleport": 113194,
+          "velocity": 428700
+        },
+        "sources": {
+          "capture": 537709,
+          "snapshot": 276987,
+          "wire_fixture": 415
+        }
+      }
+    }
+  ]
+}

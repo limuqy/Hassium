@@ -1,0 +1,8 @@
+join label=OBSERVER_JOIN since=start timeoutMs=180000
+wait ms=5000
+command text="gamemode creative"
+command text="tp @s 24.5 140 3 90 0"
+wait ms=65000
+sleep action=observer
+dump label=ROUND1 round=1 world=true
+exit rounds=1

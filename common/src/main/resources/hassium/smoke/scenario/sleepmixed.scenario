@@ -1,0 +1,43 @@
+join label=MIXED_JOIN since=start timeoutMs=180000
+wait ms=15000
+command text="gamemode creative"
+command text="tp @s 0.5 140 0.5 0 0"
+command text="gamerule doMobSpawning false"
+command text="fill -12 139 -12 60 139 12 stone"
+command text="setblock 2 140 4 hopper"
+command text="summon pig 3 140 3 {NoAI:1b,NoGravity:1b,Tags:[sleep_near]}"
+command text="summon pig 48.5 140 3 {NoAI:1b,NoGravity:1b,Invulnerable:1b,Tags:[sleep_probe_motion]}"
+wait ms=30000
+dump label=ROUND1 round=1 world=true
+sleep action=arm_held
+sleep action=enter threshold=6 ui=true
+sleep action=held
+wait ms=1000
+sleep action=capture
+sleep action=panel
+sleep action=entity x=48.5 present=false
+sleep action=entity x=3 present=true
+command text="tp @e[tag=sleep_probe_motion] 9.5 140 3"
+wait ms=2000
+sleep action=entity x=9.5 present=false
+command text="tp @e[tag=sleep_probe_motion] 6.5 140 3"
+wait ms=4000
+sleep action=entity x=6.5 present=true
+sleep action=afk_baseline
+command text="tp @e[tag=sleep_probe_motion] 48.5 140 3"
+wait ms=4000
+sleep action=entity x=48.5 present=false
+command text="gamemode survival"
+command text="item replace entity @s weapon.mainhand with minecraft:diamond_sword 1"
+command text="summon pig 0.5 140 2.5 {NoAI:1b,NoGravity:1b}"
+wait ms=1000
+input mode=entity_attack ms=4000
+sleep action=equipment minimumDamage=1
+command text="summon pig 0.5 140 2.5 {NoAI:1b,NoGravity:1b}"
+wait ms=1000
+input mode=entity_attack ms=4000
+sleep action=equipment minimumDamage=2
+sleep action=wake offlineMs=5000
+wait ms=70000
+dump label=ROUND2 round=2 world=true
+exit rounds=2

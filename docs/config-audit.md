@@ -1,6 +1,6 @@
 # Hassium 配置项审计
 
-> 审计日期：2026-10-20（`master.entity*` 实体网络优化键族共 **9 键**：分层更新 2 + 物品流独立档位 1 + 热点分档 3 + 帧预算压力 2 + 错峰 1；分档表统一逗号分隔；真相源 `ConfigSchema`，**54 键**）。
+> 审计日期：2026-10-20（新增手动休眠与恢复保载 2 键；`master.entity*` 实体网络优化键族共 **9 键**；真相源 `ConfigSchema`，**56 键**）。
 > 历史审计：2026-07-21（1.1.2 旧结构）、2026-08-09（config-restructure，74 键 + 删键 4）、2026-09-04（直连拓扑裁剪标注）、2026-09-10（OVD 退役 38 键）、2026-09-12（44 键）、2026-09-14（+`master.enabledOnLan`，45 键）、2026-09-15（51→52 口径校正）——旧键集见历史提交。
 
 ## 一、配置文件结构与加载链
@@ -19,7 +19,7 @@
 
 **Legacy key hygiene**：Fabric 加载/保存时按本 scope Schema 清除未知残留键（`purgeUnknownKeys`），不迁移、不报错。已清除键族：`net.*` 全族、`dataplane.*`、`master.controlReachableEndpoints` / `bindHost` / `authToken` / `migration*`（7 键）/ `resumeTicketTtlMs` / `globalPacketCompression` / `globalCompressionLevel` / `globalCompressionThreshold` / `magiclessZstd`、`chunk.ovdUnloadDelaySecs`（延迟卸载取消）/ `hassiumEngineEnabled` / `unloadDelaySecs` / `compressionLevel`、`storage.mode`、`chunk.seedGenThreads` / `master.serverChunkPushThreads`、`chunk.ovdLocalGeneration`、`chunk.lightHaloRadius`。OVD 两键（`viewDistanceExtensionEnabled` / `maxRenderDistance`）已随双窗重做恢复，**仅 CLIENT scope**；误写入 server.toml 的客户端键（如冒烟脚本历史注入）亦被清除。
 
-## 二、全部配置项（ConfigSchema，54 键）
+## 二、全部配置项（ConfigSchema，56 键）
 
 键名前缀：区块核心 `chunk.*` / 服务端传输面 `master.*` / 存储 `storage.*` / 兼容 `compat.*` / 调试 `debug.*`。说明列与 `ConfigSchema` commentZh 一致（= TOML 注释中文行）。
 
@@ -63,7 +63,7 @@
 | `debug.networkMetricsEnabled` | `false` | 是否启用客户端网络指标 |
 | `debug.networkMetricsAutoReset` | `true` | 登出服务器时自动重置网络指标 |
 
-### B. SERVER 键（server.toml / server spec，29 键；含双 scope 键 `chunk.seedGenEnabled` 的服务端侧，客户端侧见 A1）
+### B. SERVER 键（server.toml / server spec，31 键；含双 scope 键 `chunk.seedGenEnabled` 的服务端侧，客户端侧见 A1）
 
 **B1. chunk（2 键，区块核心服务端侧）**
 
@@ -79,12 +79,14 @@
 | `storage.enabled` | `false` | 是否启用存档压缩（默认关；区块核心缓存独立不受影响） |
 | `storage.zstdLevel` | `3` | 存储 ZSTD 压缩等级 |
 
-**B3. master.\*（17 键，服务端传输面 / 实体网络优化）**
+**B3. master.\*（19 键，服务端传输面 / 实体网络优化 / 手动休眠）**
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
 | `master.enabled` | `true` | 是否启用服务端网络通道（压缩/聚合/区块推送/实体优化） |
 | `master.enabledOnLan` | `false` | 局域网主机是否对远程玩家启用 Hassium 网络面（握手/聚合/推送/lightStrip 等）。默认关；本机 memory 连接始终原版；storage 仍仅专用服 |
+| `master.sleepEnabled` | `true` | 允许双端协商后的手动或站桩自动休眠；首批为 1.20.1 Forge、1.21.1 NeoForge，客户端自动计时偏好独立保存，兼容限制见[休眠说明](semi-online-sleep.md) |
+| `master.sleepWakeHoldSeconds` | `300` | 主动恢复的临时保载宽限，10–3600 秒；固定截止时间，重试不续期 |
 | `master.compressionLevel` | `3` | 自有通道 ZSTD 压缩等级 |
 | `master.enablePacketAggregation` | `true`（检测到 BandwidthOptimizer 时默认 `false`） | 是否启用包聚合。三方兼容（`compat/mods/ModCompatFlags`）：BO 的原版字节流批处理/流式压缩与聚合帧叠加冲突，检测到时新配置默认关；显式 `true` 恒生效，**已落盘的旧值视为显式选择、不自动翻转** |
 | `master.aggregationMaxWaitTimeMs` | `50` | 冲刷兜底：超过该时长（ms）未冲刷则强制冲一次（tick 尾冲刷为主，应对主线程卡顿） |
@@ -146,11 +148,11 @@
 | `chunk.*` | CLIENT | 14 | `seedGenEnabled`=false |
 | `debug.*` | CLIENT | 11 | 全 false（`networkMetricsAutoReset`=true） |
 | `storage.*` | SERVER | 2 | `enabled`=false |
-| `master.*` | SERVER | 17 | `enabledOnLan`=false；`entity*` 键族 = 实体网络优化 **9 键**（分层更新总开关 + 两张逗号分隔档位表 + 每档热点阈值/倍率 + 倍率上限 + 帧预算压力 + 错峰，默认全开） |
+| `master.*` | SERVER | 19 | `enabledOnLan`=false；`entity*` 9 键；手动休眠及恢复保载 2 键 |
 | `compat.*` | SERVER | 2 | `requireClientMod`=false |
 | `debug.*` | SERVER | 6 | 全 false |
 | `chunk.lightStrip` / `chunk.seedGenEnabled` | SERVER | 2 | `seedGenEnabled`=false |
-| **合计** | | **54** | |
+| **合计** | | **56** | |
 
 ## 五、审计方法
 

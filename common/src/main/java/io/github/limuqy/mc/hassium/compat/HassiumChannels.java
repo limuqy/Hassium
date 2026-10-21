@@ -14,6 +14,8 @@ import io.github.limuqy.mc.hassium.Constants;
  */
 public final class HassiumChannels {
     private HassiumChannels() {}
+    public static final PacketId SLEEP_C2S = new PacketId(Constants.MOD_ID,"sleep_control_c2s");
+    public static final PacketId SLEEP_S2C = new PacketId(Constants.MOD_ID,"sleep_control_s2c");
 
     public static final PacketId SHADOW_PULL_REQUEST_C2S = new PacketId(Constants.MOD_ID, "shadow_pull_request_c2s");
 

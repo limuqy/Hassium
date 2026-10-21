@@ -49,13 +49,13 @@ class ConfigRestructureRoundTripTest {
         Map<String, ConfigEntry<?>> byPath = ConfigSchema.entries().stream()
                 .collect(Collectors.toMap(e -> e.scope() + "/" + e.path(), Function.identity()));
 
-        assertEquals(54, ConfigSchema.entries().size(), "schema 留存键数");
-        assertEquals(54, values.asMap().size(), "defaults 键数");
+        assertEquals(56, ConfigSchema.entries().size(), "schema 留存键数");
+        assertEquals(56, values.asMap().size(), "defaults 键数");
 
         Map<String, Long> prefixCounts = ConfigSchema.entries().stream()
                 .collect(Collectors.groupingBy(e -> e.path().substring(0, e.path().indexOf('.') + 1),
                         Collectors.counting()));
-        assertEquals(Map.of("chunk.", 16L, "master.", 17L, "debug.", 17L,
+        assertEquals(Map.of("chunk.", 16L, "master.", 19L, "debug.", 17L,
                 "storage.", 2L, "compat.", 2L), prefixCounts);
 
         // 双端同名键 chunk.seedGenEnabled 各一
@@ -128,7 +128,7 @@ class ConfigRestructureRoundTripTest {
         HassiumConfig.MasterCoreConfig master = new HassiumConfig.MasterCoreConfig(
                 true, true, 9, false, 50L, 131072,
                 Set.of("MAIN_CHANNEL"), 7,
-                false, "4,8,16,32", "1,2,4,8", false, "40,30,20,10", "1.5,2.0,2.5,3.0", 8, 128, false);
+                false, "4,8,16,32", "1,2,4,8", false, "40,30,20,10", "1.5,2.0,2.5,3.0", 8, 128, false, false, 120);
         HassiumConfig.StorageConfig storage = new HassiumConfig.StorageConfig(true, 9);
         // server toml 只写 chunk.lightStrip/chunk.seedGenEnabled 两键，其余键读回默认 → 仅改这两键
         HassiumConfig.ChunkCoreConfig chunk = new HassiumConfig.ChunkCoreConfig(
@@ -281,6 +281,8 @@ class ConfigRestructureRoundTripTest {
         assertEquals(5, values.get(ConfigSchema.MASTER_ENTITY_MAX_THROTTLE_FACTOR));
         assertEquals(256, values.get(ConfigSchema.MASTER_ENTITY_FRAME_BUDGET_PER_PLAYER));
         assertEquals(true, values.get(ConfigSchema.MASTER_ENTITY_SMOOTH_PUSH));
+        assertEquals(true, values.get(ConfigSchema.MASTER_SLEEP_ENABLED));
+        assertEquals(300, values.get(ConfigSchema.MASTER_SLEEP_WAKE_HOLD_SECONDS));
         // storage.enabled 默认 false（REQ 决策 6 修正 lang 错误）
         assertEquals(false, values.get(ConfigSchema.STORAGE_ENABLED));
         // debug.* 客户端网络指标默认关闭，退出自动复位默认开启

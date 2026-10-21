@@ -250,6 +250,7 @@ public final class ShadowTrackingSession {
      * 「未知时放行（等）」的语义在 {@link #isInNeighborhoodWindow} 里单独处理。
      */
     public boolean isInComputeDomain(int x, int z) {
+        if(!io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.allows(x,z)) return false;
         if (serverViewDistance <= 0) {
             return false;
         }
@@ -436,7 +437,9 @@ public final class ShadowTrackingSession {
             }
         }
         drainAuthorityAcquires(shadow, now);
-        sweepOvdRing(shadow, now);
+        if (!io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.restricted()
+                && (!io.github.limuqy.mc.hassium.client.sleep.SleepClient.sleeping()
+                || io.github.limuqy.mc.hassium.client.sleep.SleepClient.inPlaceSupported())) sweepOvdRing(shadow, now);
         VanillaAlignedChunkProvider.drainPendingPulls();
     }
 
@@ -470,6 +473,9 @@ public final class ShadowTrackingSession {
         java.util.List<ChunkPos> enter = new java.util.ArrayList<>();
         for (int x = center.x - box; x <= center.x + box; x++) {
             for (int z = center.z - box; z <= center.z + box; z++) {
+                // Keep the physical/interaction neighbourhood refillable after knockback or motion.
+                // The existing 3x3 light gate still decides whether anything can be published.
+                if (!io.github.limuqy.mc.hassium.client.sleep.SleepClient.allowsChunk(x,z)) continue;
                 if (!isInComputeDomain(x, z)) {
                     continue;
                 }
@@ -494,6 +500,10 @@ public final class ShadowTrackingSession {
         long lastAcquireDomain = Long.MIN_VALUE;
         int materialized = 0;
         for (ChunkPos pos : enter) {
+            if(io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.needsRefresh(currentDimension,pos)) {
+                if(submitted<budget && io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.requestRefresh(currentDimension,pos)) submitted++;
+                continue;
+            }
             net.minecraft.world.level.chunk.LevelChunk injected =
                     shadow.injectedChunk(currentDimension, pos.x, pos.z);
             // 【先物化、再比较（2026-09-20）】——恢复方块级 BLOCKS 增量的关键一步。
@@ -999,6 +1009,8 @@ public final class ShadowTrackingSession {
      * 光环柱只算不交付；OVD 环带仍按 {@link #inOvdWindow} 独立放行（与二期 OVD 兼容）。
      */
     public static boolean isDeliverableToClient(int x, int z) {
+        if(io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.restricted()
+                && !io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.visible(x,z)) return false;
         ShadowTrackingSession s = INSTANCE;
         if (s == null) {
             return true;

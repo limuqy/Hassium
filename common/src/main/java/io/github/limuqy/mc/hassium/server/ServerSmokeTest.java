@@ -163,8 +163,10 @@ public final class ServerSmokeTest {
         }
         // T7：OP 提升只依赖 enabled（hassium.serverSmokeTest=true），不随阶段 armed 关闭失效
         opSmokePlayers(server);
+        io.github.limuqy.mc.hassium.compat.CacheNbtProbeCompat.tick(server);
         io.github.limuqy.mc.hassium.protocol.egress.EgressFixture.tickServer(server);
         io.github.limuqy.mc.hassium.protocol.egress.FactoryEgressBenchmark.tickServer(server);
+        TrafficProfileProbe.tickServer(server);
         if (!armed) {
             return;
         }
@@ -201,7 +203,8 @@ public final class ServerSmokeTest {
                     LOGGER.info("{} view-distance switched to {}", MARKER, vd2);
                     // 玩家离线窗口注入方块变化：R2 客户端缓存 hash mismatch → section delta →
                     // 客户端增量分段光照重算路径（[LIGHT-SEG]）真实触发（无变化时该路径不会走）。
-                    injectR2BlockChange(server);
+                    if(!"cachenbt".equals(System.getProperty("hassium.serverSmokeScenario"))) injectR2BlockChange(server);
+                    io.github.limuqy.mc.hassium.compat.CacheNbtProbeCompat.offline(server);
                 }
                 lastPlayerCount = currentCount;
             }

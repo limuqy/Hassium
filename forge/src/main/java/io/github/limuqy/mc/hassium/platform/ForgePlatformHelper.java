@@ -8,6 +8,31 @@ import net.minecraftforge.fml.loading.FMLPaths;
 import java.nio.file.Path;
 
 public class ForgePlatformHelper implements IPlatformHelper {
+    @Override public double sleepInteractionRadius(net.minecraft.server.level.ServerPlayer player) {
+#if MC_VER < MC_1_21_1
+        return Math.max(8,Math.max(player.getAttributeValue(net.minecraftforge.common.ForgeMod.BLOCK_REACH.get()),
+                player.getAttributeValue(net.minecraftforge.common.ForgeMod.ENTITY_REACH.get()))+2);
+#else
+        return 8;
+#endif
+    }
+    @Override public String sleepCompatibilityIssue() {
+        return io.github.limuqy.mc.hassium.server.sleep.SleepCompatibility.firstUnsupported(
+                ModList.get().getMods().stream().map(info->info.getModId()).toList());
+    }
+
+    @Override public void setSleepForceTick(net.minecraft.server.level.ServerLevel level, net.minecraft.world.level.ChunkPos pos, java.util.UUID lease, boolean add) {
+#if MC_VER < MC_1_21_1
+        if (add) level.getChunkSource().addRegionTicket(io.github.limuqy.mc.hassium.compat.SleepLeaseCompat.FORCE, pos, 0, lease, true);
+        else level.getChunkSource().removeRegionTicket(io.github.limuqy.mc.hassium.compat.SleepLeaseCompat.FORCE, pos, 0, lease, true);
+        if(!add) {
+            var map=((io.github.limuqy.mc.hassium.mixin.ForgeSleepForceAccess)level.getChunkSource().chunkMap.getDistanceManager()).hassium$sleepForcedTickets();
+            var remaining=map.get(pos.toLong()); if(remaining!=null && remaining.isEmpty()) map.remove(pos.toLong());
+        }
+#else
+        IPlatformHelper.super.setSleepForceTick(level,pos,lease,add);
+#endif
+    }
 
     @Override
     public java.util.List<net.minecraft.resources.ResourceKey<? extends net.minecraft.core.Registry<?>>> cacheDataPackRegistryKeys() {

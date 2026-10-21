@@ -1,0 +1,888 @@
+{
+  "schema": 1,
+  "branch": "2.0.0",
+  "recordedDate": "2026-10-21",
+  "supportedSleepCombinations": [
+    "1.20.1 Forge",
+    "1.21.1 NeoForge"
+  ],
+  "defaultWakeHoldSeconds": 300,
+  "faultTestHoldSeconds": 10,
+  "productionAutomaticReconnectDelayMs": 0,
+  "trafficTestOfflineDelayMs": 5000,
+  "trafficPostRecoveryObservationMs": 10000,
+  "repetitionsPerInput": 1,
+  "evidenceRoot": "build/traffic-profile",
+  "sessions": [
+    {
+      "kind": "hold",
+      "version": "1.20.1",
+      "loader": "forge",
+      "session": "sleep_1201_20261020_c",
+      "result": "PASS",
+      "clientExitCode": 0,
+      "gateFailures": {
+        "ProbeGateFailures": [],
+        "DimensionGateFailures": []
+      },
+      "holdReleases": [
+        {
+          "reason": "native-ticket-handoff",
+          "chunks": 625,
+          "ticks": 445,
+          "offlineTicks": 427,
+          "hoppers": 2,
+          "minimumHopperTicks": 445,
+          "failures": 0
+        }
+      ],
+      "healthChecks": [],
+      "files": {
+        "build/traffic-profile/sleep_1201_20261020_c/result_sleep_1201_20261020_c.json": "e908223654e4c25fcada915f5de3f938c1dbaf76da616e9fe8812195080bff44",
+        "build/traffic-profile/sleep_1201_20261020_c/server_sleep_1201_20261020_c.log": "e45fa883eb0ee1159a6720f65a9d196f5e701f87011cff667275c3c330c1742d",
+        "build/traffic-profile/sleep_1201_20261020_c/client_sleep_1201_20261020_c.log": "c85078a214b26bcbf6aa5207e12e3f923f03b24710dfbefeb26809650938b54f"
+      }
+    },
+    {
+      "kind": "hold",
+      "version": "1.21.1",
+      "loader": "neoforge",
+      "session": "sleep_1211_20261020_d",
+      "result": "PASS",
+      "clientExitCode": 0,
+      "gateFailures": {
+        "DimensionGateFailures": [],
+        "ProbeGateFailures": []
+      },
+      "holdReleases": [
+        {
+          "reason": "native-ticket-handoff",
+          "chunks": 625,
+          "ticks": 413,
+          "offlineTicks": 410,
+          "hoppers": 2,
+          "minimumHopperTicks": 413,
+          "failures": 0
+        }
+      ],
+      "healthChecks": [],
+      "files": {
+        "build/traffic-profile/sleep_1211_20261020_d/result_sleep_1211_20261020_d.json": "c42d2af44df753beac8be015efc69f1f7d236acf0e2d7eaf21b292ac0820fb76",
+        "build/traffic-profile/sleep_1211_20261020_d/server_sleep_1211_20261020_d.log": "c736c9c79b70334e0629931f5e18847805846b43345bc01c3ae77c558c062785",
+        "build/traffic-profile/sleep_1211_20261020_d/client_sleep_1211_20261020_d.log": "3dd3f185500c3124e5ac750107d6bd6cdfaa1851c630d9a2c29ee0ca17c13fff"
+      }
+    },
+    {
+      "kind": "hold_ui_final",
+      "version": "1.20.1",
+      "loader": "forge",
+      "session": "sleep_1201_20261021_d",
+      "result": "PASS",
+      "clientExitCode": 0,
+      "gateFailures": {
+        "DimensionGateFailures": [],
+        "ProbeGateFailures": []
+      },
+      "holdReleases": [
+        {
+          "reason": "native-ticket-handoff",
+          "chunks": 625,
+          "ticks": 437,
+          "offlineTicks": 425,
+          "hoppers": 2,
+          "minimumHopperTicks": 437,
+          "failures": 0
+        }
+      ],
+      "healthChecks": [],
+      "files": {
+        "build/traffic-profile/sleep_1201_20261021_d/result_sleep_1201_20261021_d.json": "1a7c706c2cc9f94d82e3ec9a6fa9045da83ac4d0fc62937c9e690489496a13d2",
+        "build/traffic-profile/sleep_1201_20261021_d/server_sleep_1201_20261021_d.log": "23a38212abbc00c7134f7a0eeed0428b7bff47db7320d6084b97d1f1476c2513",
+        "build/traffic-profile/sleep_1201_20261021_d/client_sleep_1201_20261021_d.log": "226eb4a90bf483449fb21a1936963c24f59fb3e6a6abc8757a88b4a597b611db"
+      }
+    },
+    {
+      "kind": "mixed",
+      "version": "1.20.1",
+      "loader": "forge",
+      "session": "sleepmixed_1201_20261020_e",
+      "result": "PASS",
+      "clientExitCode": 0,
+      "gateFailures": {
+        "ProbeGateFailures": [],
+        "DimensionGateFailures": []
+      },
+      "holdReleases": [
+        {
+          "reason": "native-ticket-handoff",
+          "chunks": 625,
+          "ticks": 136,
+          "offlineTicks": 0,
+          "hoppers": 1,
+          "minimumHopperTicks": 136,
+          "failures": 0
+        }
+      ],
+      "healthChecks": [],
+      "files": {
+        "build/traffic-profile/sleepmixed_1201_20261020_e/result_sleepmixed_1201_20261020_e.json": "b2fded1c510091cfe04bdfca8a82e0c9dd6df6d9d0ea73827d70190e1311b04b",
+        "build/traffic-profile/sleepmixed_1201_20261020_e/server_sleepmixed_1201_20261020_e.log": "3ce1c3adbc8350b6b1479ba12661905ce9fb248c06af88a5837f5c7f4470c1b0",
+        "build/traffic-profile/sleepmixed_1201_20261020_e/client_sleepmixed_1201_20261020_e.log": "e4ff31d6b2e6b6cb52a0878a50a3a45ed628f06784c549ec3527aa7812916578",
+        "build/traffic-profile/sleepmixed_1201_20261020_e/observer_sleepmixed_1201_20261020_e.log": "cc2d34f6a9de0dce22a009fb22c448774607b9ba4391a1a0b72f0905f4573f65"
+      },
+      "sleepObserver": {
+        "checks": 4,
+        "failures": 0
+      },
+      "normalObserver": {
+        "checks": 71,
+        "failures": 0
+      },
+      "heldInputPreservedWithoutClick": true,
+      "inventoryDamage": [
+        2,
+        4
+      ]
+    },
+    {
+      "kind": "mixed",
+      "version": "1.21.1",
+      "loader": "neoforge",
+      "session": "sleepmixed_1211_20261020_a",
+      "result": "PASS",
+      "clientExitCode": 0,
+      "gateFailures": {
+        "DimensionGateFailures": [],
+        "ProbeGateFailures": []
+      },
+      "holdReleases": [
+        {
+          "reason": "native-ticket-handoff",
+          "chunks": 625,
+          "ticks": 110,
+          "offlineTicks": 0,
+          "hoppers": 1,
+          "minimumHopperTicks": 110,
+          "failures": 0
+        }
+      ],
+      "healthChecks": [],
+      "files": {
+        "build/traffic-profile/sleepmixed_1211_20261020_a/result_sleepmixed_1211_20261020_a.json": "aaaf91334d5b01fc6f039161bfbca2e269b0ca30c491ca6726b45da8de6e0d8a",
+        "build/traffic-profile/sleepmixed_1211_20261020_a/server_sleepmixed_1211_20261020_a.log": "979240800cb75025b0c873376164594d380a053b3cb96a14a265333a2be82088",
+        "build/traffic-profile/sleepmixed_1211_20261020_a/client_sleepmixed_1211_20261020_a.log": "c5913c2ff643687d1a64aca8549715d41ab9e57cc388428dc7fa1c62b9c6e4b7",
+        "build/traffic-profile/sleepmixed_1211_20261020_a/observer_sleepmixed_1211_20261020_a.log": "1ba2ba6859a8fd70975a180ce48b8f76aa8c4ab5aea9566b45116db3f196ee32"
+      },
+      "sleepObserver": {
+        "checks": 4,
+        "failures": 0
+      },
+      "normalObserver": {
+        "checks": 68,
+        "failures": 0
+      },
+      "heldInputPreservedWithoutClick": true,
+      "inventoryDamage": [
+        2,
+        4
+      ]
+    },
+    {
+      "kind": "safety",
+      "version": "1.20.1",
+      "loader": "forge",
+      "session": "sleepsafety_1201_20261021_f",
+      "result": "PASS",
+      "clientExitCode": 0,
+      "gateFailures": {
+        "DimensionGateFailures": [],
+        "ProbeGateFailures": []
+      },
+      "holdReleases": [
+        {
+          "reason": "native-ticket-handoff",
+          "chunks": 625,
+          "ticks": 211,
+          "offlineTicks": 196,
+          "hoppers": 0,
+          "minimumHopperTicks": 0,
+          "failures": 0
+        }
+      ],
+      "healthChecks": [
+        {
+          "health": 6.0,
+          "max": 20.0,
+          "absorption": 0.0,
+          "dead": false,
+          "threshold": 6.0,
+          "leases": 0
+        },
+        {
+          "health": 1.0,
+          "max": 20.0,
+          "absorption": 8.0,
+          "dead": false,
+          "threshold": 6.0,
+          "leases": 0
+        },
+        {
+          "health": 6.0,
+          "max": 6.0,
+          "absorption": 0.0,
+          "dead": false,
+          "threshold": 6.0,
+          "leases": 0
+        },
+        {
+          "health": 6.0,
+          "max": 20.0,
+          "absorption": 0.0,
+          "dead": false,
+          "threshold": 6.0,
+          "leases": 1
+        },
+        {
+          "health": 0.0,
+          "max": 20.0,
+          "absorption": 0.0,
+          "dead": true,
+          "threshold": 6.0,
+          "leases": 0
+        }
+      ],
+      "files": {
+        "build/traffic-profile/sleepsafety_1201_20261021_f/result_sleepsafety_1201_20261021_f.json": "df437c9cdb0473f3f54d0009ff8932cf4595014f7b8f4d70bea299fe8465d5d3",
+        "build/traffic-profile/sleepsafety_1201_20261021_f/server_sleepsafety_1201_20261021_f.log": "899f6a8cdfeb198665620879ca21231a0c4be7a9e28cbfc575a77b66fb1fc17d",
+        "build/traffic-profile/sleepsafety_1201_20261021_f/client_sleepsafety_1201_20261021_f.log": "94fe168f8b90e3eebe0251a6ac9658939f59106ee83a4a52f55a79166a594809"
+      },
+      "entryRejectedWithoutDisconnect": true
+    },
+    {
+      "kind": "safety",
+      "version": "1.21.1",
+      "loader": "neoforge",
+      "session": "sleepsafety_1211_20261021_c",
+      "result": "PASS",
+      "clientExitCode": 0,
+      "gateFailures": {
+        "ProbeGateFailures": [],
+        "DimensionGateFailures": []
+      },
+      "holdReleases": [
+        {
+          "reason": "native-ticket-handoff",
+          "chunks": 625,
+          "ticks": 158,
+          "offlineTicks": 154,
+          "hoppers": 0,
+          "minimumHopperTicks": 0,
+          "failures": 0
+        }
+      ],
+      "healthChecks": [
+        {
+          "health": 6.0,
+          "max": 20.0,
+          "absorption": 0.0,
+          "dead": false,
+          "threshold": 6.0,
+          "leases": 0
+        },
+        {
+          "health": 1.0,
+          "max": 20.0,
+          "absorption": 8.0,
+          "dead": false,
+          "threshold": 6.0,
+          "leases": 0
+        },
+        {
+          "health": 6.0,
+          "max": 6.0,
+          "absorption": 0.0,
+          "dead": false,
+          "threshold": 6.0,
+          "leases": 0
+        },
+        {
+          "health": 6.0,
+          "max": 20.0,
+          "absorption": 0.0,
+          "dead": false,
+          "threshold": 6.0,
+          "leases": 1
+        },
+        {
+          "health": 0.0,
+          "max": 20.0,
+          "absorption": 0.0,
+          "dead": true,
+          "threshold": 6.0,
+          "leases": 0
+        }
+      ],
+      "files": {
+        "build/traffic-profile/sleepsafety_1211_20261021_c/result_sleepsafety_1211_20261021_c.json": "9488c0a1dd89b3235e2579c06b8c211b268c7bf24a0a6be2174785e90e863730",
+        "build/traffic-profile/sleepsafety_1211_20261021_c/server_sleepsafety_1211_20261021_c.log": "647a49974341f5e52f79ea51db574efa6afa0b9304f4ec1bd32e47cd2c71f1a9",
+        "build/traffic-profile/sleepsafety_1211_20261021_c/client_sleepsafety_1211_20261021_c.log": "a5e6541b83ccfa5ab9989ae8d76c54b22608c5f7f51e2c7a836751596862f865"
+      },
+      "entryRejectedWithoutDisconnect": true
+    },
+    {
+      "kind": "expiry",
+      "version": "1.20.1",
+      "loader": "forge",
+      "session": "sleepexpiry_1201_20261020_c",
+      "result": "PASS",
+      "clientExitCode": 0,
+      "gateFailures": {
+        "DimensionGateFailures": [],
+        "ProbeGateFailures": []
+      },
+      "holdReleases": [
+        {
+          "reason": "expired",
+          "chunks": 625,
+          "ticks": 201,
+          "offlineTicks": 201,
+          "hoppers": 1,
+          "minimumHopperTicks": 201,
+          "failures": 0
+        },
+        {
+          "reason": "expired",
+          "chunks": 625,
+          "ticks": 201,
+          "offlineTicks": 200,
+          "hoppers": 1,
+          "minimumHopperTicks": 201,
+          "failures": 0
+        }
+      ],
+      "healthChecks": [],
+      "files": {
+        "build/traffic-profile/sleepexpiry_1201_20261020_c/result_sleepexpiry_1201_20261020_c.json": "3f7075ceb325956ad2e572c16528719cec8c5afcc814c0445894ff92f097ae0f",
+        "build/traffic-profile/sleepexpiry_1201_20261020_c/server_sleepexpiry_1201_20261020_c.log": "124b59f8ff220f5c9e928e525146bbfc9539c53f49847b50238b67ebd486dfb8",
+        "build/traffic-profile/sleepexpiry_1201_20261020_c/client_sleepexpiry_1201_20261020_c.log": "0544923847813e6274f31f781deee897f5ff9d87542dcfb87afb1bc582151817"
+      }
+    },
+    {
+      "kind": "expiry",
+      "version": "1.21.1",
+      "loader": "neoforge",
+      "session": "sleepexpiry_1211_20261020_a",
+      "result": "PASS",
+      "clientExitCode": 0,
+      "gateFailures": {
+        "ProbeGateFailures": [],
+        "DimensionGateFailures": []
+      },
+      "holdReleases": [
+        {
+          "reason": "expired",
+          "chunks": 625,
+          "ticks": 201,
+          "offlineTicks": 201,
+          "hoppers": 1,
+          "minimumHopperTicks": 201,
+          "failures": 0
+        },
+        {
+          "reason": "expired",
+          "chunks": 625,
+          "ticks": 201,
+          "offlineTicks": 200,
+          "hoppers": 1,
+          "minimumHopperTicks": 201,
+          "failures": 0
+        }
+      ],
+      "healthChecks": [],
+      "files": {
+        "build/traffic-profile/sleepexpiry_1211_20261020_a/result_sleepexpiry_1211_20261020_a.json": "032b193355d797fb6dcbac7a6c3522a5136bfb035cb2ec62b142525e207914d5",
+        "build/traffic-profile/sleepexpiry_1211_20261020_a/server_sleepexpiry_1211_20261020_a.log": "db55ad4666b63f04394b24b5e6c66d215c89d692c62b1fd657e5c48877e36a96",
+        "build/traffic-profile/sleepexpiry_1211_20261020_a/client_sleepexpiry_1211_20261020_a.log": "a48dd1ea30ab2de11dea28ae057214b94d0b4005dcc77626e5243b42cdbc7061"
+      }
+    },
+    {
+      "kind": "traffic_generated",
+      "version": "1.20.1",
+      "loader": "forge",
+      "session": "sleeptraffic_1201_20261020_b",
+      "result": "PASS",
+      "clientExitCode": 0,
+      "gateFailures": {
+        "ProbeGateFailures": [],
+        "DimensionGateFailures": []
+      },
+      "holdReleases": [
+        {
+          "reason": "native-ticket-handoff",
+          "chunks": 625,
+          "ticks": 138,
+          "offlineTicks": 127,
+          "hoppers": 32,
+          "minimumHopperTicks": 138,
+          "failures": 0
+        },
+        {
+          "reason": "native-ticket-handoff",
+          "chunks": 625,
+          "ticks": 145,
+          "offlineTicks": 127,
+          "hoppers": 32,
+          "minimumHopperTicks": 145,
+          "failures": 0
+        },
+        {
+          "reason": "native-ticket-handoff",
+          "chunks": 625,
+          "ticks": 135,
+          "offlineTicks": 126,
+          "hoppers": 32,
+          "minimumHopperTicks": 135,
+          "failures": 0
+        }
+      ],
+      "healthChecks": [],
+      "files": {
+        "build/traffic-profile/sleeptraffic_1201_20261020_b/result_sleeptraffic_1201_20261020_b.json": "db291f614d091dd7ed4f46dc6a822e3a9fd75bc5853e34031959ebdac1358436",
+        "build/traffic-profile/sleeptraffic_1201_20261020_b/server_sleeptraffic_1201_20261020_b.log": "d71e69ca52a01b1fa250e7e0bf32c4eaa550743df59cb56e36b756b745e857fe",
+        "build/traffic-profile/sleeptraffic_1201_20261020_b/client_sleeptraffic_1201_20261020_b.log": "f289408aa60fb99b8d53b61a478b578f3982bbc85a587b14bb3ee6e8793a77aa"
+      },
+      "traffic": {
+        "session": "sleeptraffic_1201_20261020_b",
+        "harness": "PASS",
+        "qualityProblems": [],
+        "measurement": "Successful all-protocol TCP application payload writes, including Minecraft framing; excludes TCP/IP headers, retransmissions and client upload.",
+        "windows": {
+          "idle_normal": {
+            "seconds": 30.2992869,
+            "tcpPayloadBytes": 423644,
+            "bytesPerSecond": 13981.979226052346,
+            "startMs": 1792511415530,
+            "endMs": 1792511445830,
+            "nativeBlockAcks": 0,
+            "outputItems": 1216
+          },
+          "idle_entry": {
+            "seconds": 0.2989238,
+            "tcpPayloadBytes": 2498,
+            "bytesPerSecond": 8356.644736886123,
+            "startMs": 1792511445830,
+            "endMs": 1792511446129,
+            "nativeBlockAcks": 0,
+            "outputItems": 0
+          },
+          "idle_sleep": {
+            "seconds": 30.2995042,
+            "tcpPayloadBytes": 110733,
+            "bytesPerSecond": 3654.6142560312915,
+            "startMs": 1792511446129,
+            "endMs": 1792511476428,
+            "nativeBlockAcks": 0,
+            "outputItems": 1216
+          },
+          "idle_recovery": {
+            "seconds": 17.8007745,
+            "tcpPayloadBytes": 581714,
+            "bytesPerSecond": 32679.139887986337,
+            "startMs": 1792511476428,
+            "endMs": 1792511494229,
+            "nativeBlockAcks": 0,
+            "outputItems": 720
+          },
+          "hold_attack_normal": {
+            "seconds": 30.2498715,
+            "tcpPayloadBytes": 427513,
+            "bytesPerSecond": 14132.721191890021,
+            "startMs": 1792511494229,
+            "endMs": 1792511524479,
+            "nativeBlockAcks": 2,
+            "outputItems": 1200
+          },
+          "hold_attack_entry": {
+            "seconds": 0.3503273,
+            "tcpPayloadBytes": 5504,
+            "bytesPerSecond": 15711.022235492352,
+            "startMs": 1792511524479,
+            "endMs": 1792511524829,
+            "nativeBlockAcks": 0,
+            "outputItems": 16
+          },
+          "hold_attack_sleep": {
+            "seconds": 30.2997355,
+            "tcpPayloadBytes": 110441,
+            "bytesPerSecond": 3644.949309871038,
+            "startMs": 1792511524829,
+            "endMs": 1792511555129,
+            "nativeBlockAcks": 2,
+            "outputItems": 1216
+          },
+          "hold_attack_recovery": {
+            "seconds": 17.5523666,
+            "tcpPayloadBytes": 530088,
+            "bytesPerSecond": 30200.371954400725,
+            "startMs": 1792511555129,
+            "endMs": 1792511572682,
+            "nativeBlockAcks": 0,
+            "outputItems": 704
+          },
+          "periodic_attack_normal": {
+            "seconds": 30.2974952,
+            "tcpPayloadBytes": 421006,
+            "bytesPerSecond": 13895.736172936171,
+            "startMs": 1792511572682,
+            "endMs": 1792511602979,
+            "nativeBlockAcks": 60,
+            "outputItems": 1215
+          },
+          "periodic_attack_entry": {
+            "seconds": 0.3514844,
+            "tcpPayloadBytes": 5157,
+            "bytesPerSecond": 14672.059414301177,
+            "startMs": 1792511602979,
+            "endMs": 1792511603330,
+            "nativeBlockAcks": 0,
+            "outputItems": 1
+          },
+          "periodic_attack_sleep": {
+            "seconds": 30.2487745,
+            "tcpPayloadBytes": 109697,
+            "bytesPerSecond": 3626.494025402583,
+            "startMs": 1792511603330,
+            "endMs": 1792511633579,
+            "nativeBlockAcks": 60,
+            "outputItems": 1216
+          },
+          "periodic_attack_recovery": {
+            "seconds": 17.499506,
+            "tcpPayloadBytes": 523295,
+            "bytesPerSecond": 29903.4155592735,
+            "startMs": 1792511633579,
+            "endMs": 1792511651079,
+            "nativeBlockAcks": 0,
+            "outputItems": 704
+          }
+        },
+        "cycles": {
+          "idle": {
+            "normalBytesPerSecond": 13981.979226052346,
+            "sleepBytesPerSecond": 3654.6142560312915,
+            "entryBytes": 2498,
+            "recoveryBytes": 581714,
+            "recoverySeconds": 17.8007745,
+            "measuredCycleBytes": 1118589,
+            "conservativeBreakEvenSeconds": 56.56931866898173,
+            "incrementalBreakEvenSeconds": 32.064558126186746
+          },
+          "hold_attack": {
+            "normalBytesPerSecond": 14132.721191890021,
+            "sleepBytesPerSecond": 3644.949309871038,
+            "entryBytes": 5504,
+            "recoveryBytes": 530088,
+            "recoverySeconds": 17.5523666,
+            "measuredCycleBytes": 1073546,
+            "conservativeBreakEvenSeconds": 51.068235086068064,
+            "incrementalBreakEvenSeconds": 26.9435893253955
+          },
+          "periodic_attack": {
+            "normalBytesPerSecond": 13895.736172936171,
+            "sleepBytesPerSecond": 3626.494025402583,
+            "entryBytes": 5157,
+            "recoveryBytes": 523295,
+            "recoverySeconds": 17.499506,
+            "measuredCycleBytes": 1059155,
+            "conservativeBreakEvenSeconds": 51.459688301041844,
+            "incrementalBreakEvenSeconds": 27.30477506982621
+          }
+        }
+      }
+    },
+    {
+      "kind": "traffic_factory",
+      "version": "1.21.1",
+      "loader": "neoforge",
+      "session": "sleepfactory_1211_20261020_a",
+      "result": "PASS",
+      "clientExitCode": 0,
+      "gateFailures": {
+        "DimensionGateFailures": [],
+        "ProbeGateFailures": []
+      },
+      "holdReleases": [
+        {
+          "reason": "native-ticket-handoff",
+          "chunks": 625,
+          "ticks": 113,
+          "offlineTicks": 109,
+          "hoppers": 2730,
+          "minimumHopperTicks": 113,
+          "failures": 0
+        },
+        {
+          "reason": "native-ticket-handoff",
+          "chunks": 625,
+          "ticks": 114,
+          "offlineTicks": 109,
+          "hoppers": 2730,
+          "minimumHopperTicks": 114,
+          "failures": 0
+        },
+        {
+          "reason": "native-ticket-handoff",
+          "chunks": 625,
+          "ticks": 122,
+          "offlineTicks": 108,
+          "hoppers": 2730,
+          "minimumHopperTicks": 122,
+          "failures": 0
+        }
+      ],
+      "healthChecks": [],
+      "files": {
+        "build/traffic-profile/sleepfactory_1211_20261020_a/result_sleepfactory_1211_20261020_a.json": "f2b6a94f50f5d505edd33eddbbe2d70ead35864b629d911fd959a1d0310060b4",
+        "build/traffic-profile/sleepfactory_1211_20261020_a/server_sleepfactory_1211_20261020_a.log": "edbe899fef64983002cff4aab96f208f6ea8f5b939d9e7d3fa87b9e489c1c485",
+        "build/traffic-profile/sleepfactory_1211_20261020_a/client_sleepfactory_1211_20261020_a.log": "492ade6b0eaf41a49e85c41fefa983905b8abb99e9ae14689593a15f88850ebf"
+      },
+      "traffic": {
+        "session": "sleepfactory_1211_20261020_a",
+        "harness": "PASS",
+        "qualityProblems": [],
+        "measurement": "Successful all-protocol TCP application payload writes, including Minecraft framing; excludes TCP/IP headers, retransmissions and client upload.",
+        "windows": {
+          "idle_normal": {
+            "seconds": 30.3424956,
+            "tcpPayloadBytes": 965720,
+            "bytesPerSecond": 31827.309550635644,
+            "startMs": 1792512398353,
+            "endMs": 1792512428695,
+            "nativeBlockAcks": 0,
+            "actualWorldTPS": 20.004946461951533
+          },
+          "idle_entry": {
+            "seconds": 0.3531591,
+            "tcpPayloadBytes": 9347,
+            "bytesPerSecond": 26466.82472573976,
+            "startMs": 1792512428695,
+            "endMs": 1792512429048,
+            "nativeBlockAcks": 0,
+            "actualWorldTPS": 19.821094798350092
+          },
+          "idle_sleep": {
+            "seconds": 30.2972768,
+            "tcpPayloadBytes": 82019,
+            "bytesPerSecond": 2707.140992948911,
+            "startMs": 1792512429048,
+            "endMs": 1792512459345,
+            "nativeBlockAcks": 0,
+            "actualWorldTPS": 20.001797653312526
+          },
+          "idle_recovery": {
+            "seconds": 16.9987369,
+            "tcpPayloadBytes": 556248,
+            "bytesPerSecond": 32722.901899846453,
+            "startMs": 1792512459345,
+            "endMs": 1792512476344,
+            "nativeBlockAcks": 0,
+            "actualWorldTPS": 20.001486110418004
+          },
+          "hold_attack_normal": {
+            "seconds": 30.351439,
+            "tcpPayloadBytes": 697929,
+            "bytesPerSecond": 22994.922909585934,
+            "startMs": 1792512476344,
+            "endMs": 1792512506696,
+            "nativeBlockAcks": 2,
+            "actualWorldTPS": 19.999051774777467
+          },
+          "hold_attack_entry": {
+            "seconds": 0.2984966,
+            "tcpPayloadBytes": 6447,
+            "bytesPerSecond": 21598.235959806578,
+            "startMs": 1792512506696,
+            "endMs": 1792512506994,
+            "nativeBlockAcks": 0,
+            "actualWorldTPS": 20.100731465618033
+          },
+          "hold_attack_sleep": {
+            "seconds": 30.3513188,
+            "tcpPayloadBytes": 86876,
+            "bytesPerSecond": 2862.3467919950813,
+            "startMs": 1792512506994,
+            "endMs": 1792512537345,
+            "nativeBlockAcks": 2,
+            "actualWorldTPS": 19.999130976806185
+          },
+          "hold_attack_recovery": {
+            "seconds": 16.6499085,
+            "tcpPayloadBytes": 593355,
+            "bytesPerSecond": 35637.13278063961,
+            "startMs": 1792512537345,
+            "endMs": 1792512553995,
+            "nativeBlockAcks": 0,
+            "actualWorldTPS": 20.000109910513924
+          },
+          "periodic_attack_normal": {
+            "seconds": 30.3025753,
+            "tcpPayloadBytes": 790093,
+            "bytesPerSecond": 26073.460495616688,
+            "startMs": 1792512553995,
+            "endMs": 1792512584298,
+            "nativeBlockAcks": 60,
+            "actualWorldTPS": 19.99830027647848
+          },
+          "periodic_attack_entry": {
+            "seconds": 0.2971636,
+            "tcpPayloadBytes": 8076,
+            "bytesPerSecond": 27176.948993752932,
+            "startMs": 1792512584298,
+            "endMs": 1792512584595,
+            "nativeBlockAcks": 0,
+            "actualWorldTPS": 20.19089821229787
+          },
+          "periodic_attack_sleep": {
+            "seconds": 30.3501668,
+            "tcpPayloadBytes": 84797,
+            "bytesPerSecond": 2793.9549907185356,
+            "startMs": 1792512584595,
+            "endMs": 1792512614946,
+            "nativeBlockAcks": 60,
+            "actualWorldTPS": 19.999890082976414
+          },
+          "periodic_attack_recovery": {
+            "seconds": 16.6486948,
+            "tcpPayloadBytes": 559658,
+            "bytesPerSecond": 33615.72824315333,
+            "startMs": 1792512614946,
+            "endMs": 1792512631594,
+            "nativeBlockAcks": 0,
+            "actualWorldTPS": 20.001567930718508
+          }
+        },
+        "cycles": {
+          "idle": {
+            "normalBytesPerSecond": 31827.309550635644,
+            "sleepBytesPerSecond": 2707.140992948911,
+            "entryBytes": 9347,
+            "recoveryBytes": 556248,
+            "recoverySeconds": 16.9987369,
+            "measuredCycleBytes": 1613334,
+            "conservativeBreakEvenSeconds": 19.4227927932341,
+            "incrementalBreakEvenSeconds": 0.45778700391638705
+          },
+          "hold_attack": {
+            "normalBytesPerSecond": 22994.922909585934,
+            "sleepBytesPerSecond": 2862.3467919950813,
+            "entryBytes": 6447,
+            "recoveryBytes": 593355,
+            "recoverySeconds": 16.6499085,
+            "measuredCycleBytes": 1384607,
+            "conservativeBreakEvenSeconds": 29.792610567900578,
+            "incrementalBreakEvenSeconds": 10.434567839607668
+          },
+          "periodic_attack": {
+            "normalBytesPerSecond": 26073.460495616688,
+            "sleepBytesPerSecond": 2793.9549907185356,
+            "entryBytes": 8076,
+            "recoveryBytes": 559658,
+            "recoverySeconds": 16.6486948,
+            "measuredCycleBytes": 1442624,
+            "conservativeBreakEvenSeconds": 24.3877173370605,
+            "incrementalBreakEvenSeconds": 5.408054325586782
+          }
+        }
+      }
+    }
+  ],
+  "javaTests": {
+    "1.20.1": {
+      "tests": 494,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    },
+    "1.21.1": {
+      "tests": 487,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "pythonTests": {
+    "tests": 64,
+    "failures": 0,
+    "command": "python -m unittest scripts.smoke.test_sleep_traffic scripts.smoke.test_analyzer scripts.smoke.test_entity_motion_replay scripts.smoke.test_traffic_profile"
+  },
+  "buildChecks": {
+    "boundaries": {
+      "result": "PASS",
+      "path": "build/sleep-validation/boundaries.log",
+      "sha256": "bccf4681f98187a889c174f899b7cd3a646f3fd9cde41e823c0633280af5f544"
+    },
+    "anchor-1.21.2": {
+      "result": "PASS",
+      "path": "build/sleep-validation/anchor-1.21.2.log",
+      "sha256": "22d8f1e969a667c43770ca9dc2d74439a4a43984449ca69b624621abe864f33e"
+    },
+    "anchor-1.21.5": {
+      "result": "PASS",
+      "path": "build/sleep-validation/anchor-1.21.5.log",
+      "sha256": "f56f3e6207b422d3fff568ae528d88504392f30454765afdaf5c6cb355d1142c"
+    },
+    "anchor-1.21.6": {
+      "result": "PASS",
+      "path": "build/sleep-validation/anchor-1.21.6.log",
+      "sha256": "f2aeb4400b39296617987c9c6219db157bfdd24fa5d5b06023dd2a8611970942"
+    },
+    "anchor-1.21.9": {
+      "result": "PASS",
+      "path": "build/sleep-validation/anchor-1.21.9.log",
+      "sha256": "56db8f0ab3455317e1ef86aa627ab2b23beb903831fa30e29641bb85f63ba0a3"
+    },
+    "anchor-1.21.11": {
+      "result": "PASS",
+      "path": "build/sleep-validation/anchor-1.21.11.log",
+      "sha256": "e5026902a0100bd23099d57ff2a3af8b95f4f0d0ced04dfe60e940efb587482d"
+    },
+    "forge-1.20.1-build": {
+      "result": "PASS",
+      "path": "build/sleep-validation/forge-1.20.1-build.log",
+      "sha256": "f1cf25562303376574933297cb901a9325c2774f0a4718ccab05eb8c2d2b61a6"
+    },
+    "neoforge-1.21.1-build": {
+      "result": "PASS",
+      "path": "build/sleep-validation/neoforge-1.21.1-build.log",
+      "sha256": "6ad79102e6b9b5430671954a3f8609aaeeeb31378f3d539e92d38a11a4891991"
+    }
+  },
+  "sourceFactoryZip": {
+    "version": "1.21.1",
+    "size": 7404232,
+    "sha256": "9992FDF4355287863D35D7FA680B5B1CF5528621EB290F6D3AAC1E19F6FFB61E",
+    "modified": false
+  },
+  "artifacts": [
+    {
+      "path": "forge/build/1_20_1/libs/hassium-forge-2.1.3-1.20.1.jar",
+      "size": 9794679,
+      "sha256": "330a89f83be605c83aec07b2038369c06b6e1161b61bc89807c58272a516c1e8"
+    },
+    {
+      "path": "neoforge/build/1_21_1/libs/hassium-neoforge-2.1.3-1.21.1.jar",
+      "size": 9103143,
+      "sha256": "b6599fa0a4f731e665ce999268e33057dad79efefe4b8feaf807c610f71845ed"
+    }
+  ],
+  "limitations": [
+    "Strict server mod allowlist: unadapted server mods block sleep.",
+    "Unknown runtime world dependencies cause a controlled disconnect and manual reconnect.",
+    "One adjacent normal/sleep window per input; different fixtures across versions.",
+    "Application payload bytes exclude TCP/IP headers and retransmissions.",
+    "Recovery cost includes artificial 5-second offline wait and 10-second post-recovery observation.",
+    "Some earlier Forge runs timed out in FML negotiation before Play; root cause not established.",
+    "Lethal single hits still kill; native damage and death are not cancelled.",
+    "Player-dependent spawning or machines can pause during real logout/login."
+  ]
+}

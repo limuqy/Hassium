@@ -1,0 +1,255 @@
+{
+  "date": "2026-10-21",
+  "branch": "2.0.0",
+  "scenario": "cachenbt",
+  "productionCacheChanged": false,
+  "finding": "R1 signs have correct text and wax state. Offline pure NBT mutation retains server block hash; R2 UNCHANGED replays blank text and waxed=false. Block-changed DELTA/FULL controls are correct. Cache publication / persistence / initial BE resync root cause not yet isolated or fixed.",
+  "nbtOnlyColumn": [
+    0,
+    0
+  ],
+  "controlColumn": [
+    2,
+    0
+  ],
+  "signPositions": [
+    [
+      8,
+      68,
+      3
+    ],
+    [
+      10,
+      68,
+      3
+    ],
+    [
+      40,
+      68,
+      3
+    ],
+    [
+      42,
+      68,
+      3
+    ]
+  ],
+  "earlierRuns": [
+    {
+      "session": "cachenbt_1201_20261021_a",
+      "harnessResult": "FAIL",
+      "reason": "Fixture compared initial construction hash with settled world; hash isolation failed; both R2 columns DELTA so not evidence of UNCHANGED correctness"
+    },
+    {
+      "session": "cachenbt_1201_20261021_b",
+      "harnessResult": "PASS",
+      "reason": "Offline mutation was NBT-only but distant local baseline differed; both R2 columns DELTA, so UNCHANGED defect not exercised"
+    }
+  ],
+  "runs": [
+    {
+      "version": "1.20.1",
+      "loader": "forge",
+      "session": "cachenbt_1201_20261021_c",
+      "harnessResult": "FAIL",
+      "reproduced": true,
+      "clientChecks": [
+        "[19:28:39] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R1 group=nbt_only pos=BlockPos{x=8, y=68, z=3} expected=R1_0 actual=R1_0 waxed=false correct=true",
+        "[19:28:39] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R1 group=nbt_only pos=BlockPos{x=10, y=68, z=3} expected=R1_1 actual=R1_1 waxed=false correct=true",
+        "[19:28:39] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R1 group=block_changed pos=BlockPos{x=40, y=68, z=3} expected=R1_2 actual=R1_2 waxed=false correct=true",
+        "[19:28:39] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R1 group=block_changed pos=BlockPos{x=42, y=68, z=3} expected=R1_3 actual=R1_3 waxed=false correct=true",
+        "[19:28:39] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R1 wallCorrect=true staleSigns=0",
+        "[19:29:16] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R2 group=nbt_only pos=BlockPos{x=8, y=68, z=3} expected=R2_0 actual= waxed=false correct=false",
+        "[19:29:16] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R2 group=nbt_only pos=BlockPos{x=10, y=68, z=3} expected=R2_1 actual= waxed=false correct=false",
+        "[19:29:16] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R2 group=block_changed pos=BlockPos{x=40, y=68, z=3} expected=R2_2 actual=R2_2 waxed=true correct=true",
+        "[19:29:16] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R2 group=block_changed pos=BlockPos{x=42, y=68, z=3} expected=R2_3 actual=R2_3 waxed=true correct=true",
+        "[19:29:16] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R2 wallCorrect=true staleSigns=2"
+      ],
+      "serverMutations": [
+        "[19:27:59] [Server thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT server R1 prepared signs=4 controlHash=7cb400f607716059 nbtOnlyHash=69581114a8433344",
+        "[19:28:39] [Server thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT server R2 pos=BlockPos{x=8, y=68, z=3} text=R2_0 waxed=true players=0",
+        "[19:28:39] [Server thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT server R2 pos=BlockPos{x=10, y=68, z=3} text=R2_1 waxed=true players=0",
+        "[19:28:39] [Server thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT server R2 pos=BlockPos{x=40, y=68, z=3} text=R2_2 waxed=true players=0",
+        "[19:28:39] [Server thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT server R2 pos=BlockPos{x=42, y=68, z=3} text=R2_3 waxed=true players=0",
+        "[19:28:39] [Server thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT offline controlChanged=true nbtOnlyUnchanged=true controlBefore=2cbce5854a5f7ce9 controlAfter=b2ca91b77b02e3c5 nbtBefore=69581114a8433344 nbtAfter=69581114a8433344"
+      ],
+      "pullResults": [
+        "[19:27:59] [Hassium-PullDecode/INFO] [Hassium/]: [SHADOW_PULL] result id=6 pos=(0, 0) kind=FULL hash=69581114a8433344 intercepted=false",
+        "[19:27:59] [Hassium-PullDecode/INFO] [Hassium/]: [SHADOW_PULL] result id=10 pos=(2, 0) kind=FULL hash=2cbce5854a5f7ce9 intercepted=false",
+        "[19:28:46] [Hassium-PullDecode/INFO] [Hassium/]: [SHADOW_PULL] result id=550 pos=(0, 0) kind=UNCHANGED hash=69581114a8433344 intercepted=false",
+        "[19:28:46] [Hassium-PullDecode/INFO] [Hassium/]: [SHADOW_PULL] result id=555 pos=(2, 0) kind=DELTA hash=b2ca91b77b02e3c5 intercepted=false"
+      ],
+      "failures": [
+        "[19:29:16] [Render thread/ERROR] [Hassium/SmokeTest/]: HassiumSmokeTest:FAIL step crashed: L17: nbt round=2 (CACHE_NBT R2 staleSigns=2 wallCorrect=true)"
+      ],
+      "warningCodes": [],
+      "restoreChecks": [
+        {
+          "path": "client/options.txt",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "FF0949904B47C93BC714A456CA918BACB520CD712D754C73B87A106C8D46947D"
+        },
+        {
+          "path": "client/config/hassium/hassium-client.toml",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "C4308096BEBFE91B3F716236802F02FAF22494C83F0D53AC16B86F57E8240EA0"
+        },
+        {
+          "path": "client/config/hassium/hassium-server.toml",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "BD7AE942898504F24200B4E9EB9EFA9A8F3714674EB10B7BCB8E2DD2089411DD"
+        },
+        {
+          "path": "server/server.properties",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "518540259053B63234B0D3C5235F03B0C24054F3BA03EC96131E22DB01800C6B"
+        },
+        {
+          "path": "client/config/hassium/sleep-profiles.properties",
+          "existed": false,
+          "matchesBackup": true,
+          "sha256": null
+        },
+        {
+          "path": "server/eula.txt",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "94169D86BECDFCCBB25AB7800C7FFEC69ABA470FBC1A7E4604E36833AB2EEB8F"
+        },
+        {
+          "path": "server/ops.json",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "A143A7EF0DF1FB6D4A652E6E974F98DF1182888C5371432AA8BC5F7A8EC69E1C"
+        },
+        {
+          "path": "server/config/hassium/hassium-server.toml",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "4BF1E50D2414CF0BD79F18148918BAE1B0BAC0B6423893BC20A68DAA24E22A6D"
+        },
+        {
+          "path": "server/config/hassium/hassium_aggregation_dict.bin",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "E393FA8D66693E71A5440DD01EA0C438B097B3041B70D596654304A981A7C9CA"
+        },
+        {
+          "path": "server/config/hassium/aggregation_corpus/retrain.marker",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "36353066EF7FA9D4125ECC9FE3895E2106D1008BDF1AE0F9B28363E37F32E2DF"
+        }
+      ],
+      "jar": "forge/build/1_20_1/libs/hassium-forge-2.1.3-1.20.1.jar",
+      "jarSha256": "5049C8CF25450B2123938E23359A562D25EF2C2249E067BB835BC97A69466B51",
+      "evidenceDirectory": "build/traffic-profile/cachenbt_1201_20261021_c"
+    },
+    {
+      "version": "1.21.1",
+      "loader": "neoforge",
+      "session": "cachenbt_1211_20261021_a",
+      "harnessResult": "FAIL",
+      "reproduced": true,
+      "clientChecks": [
+        "[19:31:08] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R1 group=nbt_only pos=BlockPos{x=8, y=68, z=3} expected=R1_0 actual=R1_0 waxed=false correct=true",
+        "[19:31:08] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R1 group=nbt_only pos=BlockPos{x=10, y=68, z=3} expected=R1_1 actual=R1_1 waxed=false correct=true",
+        "[19:31:08] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R1 group=block_changed pos=BlockPos{x=40, y=68, z=3} expected=R1_2 actual=R1_2 waxed=false correct=true",
+        "[19:31:08] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R1 group=block_changed pos=BlockPos{x=42, y=68, z=3} expected=R1_3 actual=R1_3 waxed=false correct=true",
+        "[19:31:08] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R1 wallCorrect=true staleSigns=0",
+        "[19:31:44] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R2 group=nbt_only pos=BlockPos{x=8, y=68, z=3} expected=R2_0 actual= waxed=false correct=false",
+        "[19:31:44] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R2 group=nbt_only pos=BlockPos{x=10, y=68, z=3} expected=R2_1 actual= waxed=false correct=false",
+        "[19:31:44] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R2 group=block_changed pos=BlockPos{x=40, y=68, z=3} expected=R2_2 actual=R2_2 waxed=true correct=true",
+        "[19:31:44] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R2 group=block_changed pos=BlockPos{x=42, y=68, z=3} expected=R2_3 actual=R2_3 waxed=true correct=true",
+        "[19:31:44] [Render thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT client R2 wallCorrect=true staleSigns=2"
+      ],
+      "serverMutations": [
+        "[19:30:31] [Server thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT server R1 prepared signs=4 controlHash=e5856b1ff640d18d nbtOnlyHash=3f7b772baea3cbdb",
+        "[19:31:08] [Server thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT server R2 pos=BlockPos{x=8, y=68, z=3} text=R2_0 waxed=true players=0",
+        "[19:31:08] [Server thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT server R2 pos=BlockPos{x=10, y=68, z=3} text=R2_1 waxed=true players=0",
+        "[19:31:08] [Server thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT server R2 pos=BlockPos{x=40, y=68, z=3} text=R2_2 waxed=true players=0",
+        "[19:31:08] [Server thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT server R2 pos=BlockPos{x=42, y=68, z=3} text=R2_3 waxed=true players=0",
+        "[19:31:08] [Server thread/INFO] [Hassium/]: HassiumSmokeTest:CACHE_NBT offline controlChanged=true nbtOnlyUnchanged=true controlBefore=780f60126a9da365 controlAfter=7a114331554001cd nbtBefore=3f7b772baea3cbdb nbtAfter=3f7b772baea3cbdb"
+      ],
+      "pullResults": [
+        "[19:30:31] [Hassium-PullDecode/INFO] [Hassium/]: [SHADOW_PULL] result id=6 pos=(0, 0) kind=FULL hash=3f7b772baea3cbdb intercepted=false",
+        "[19:30:31] [Hassium-PullDecode/INFO] [Hassium/]: [SHADOW_PULL] result id=10 pos=(2, 0) kind=FULL hash=86f57f1abfcb9a01 intercepted=false",
+        "[19:31:14] [Hassium-PullDecode/INFO] [Hassium/]: [SHADOW_PULL] result id=550 pos=(0, 0) kind=UNCHANGED hash=3f7b772baea3cbdb intercepted=false",
+        "[19:31:14] [Hassium-PullDecode/INFO] [Hassium/]: [SHADOW_PULL] result id=555 pos=(2, 0) kind=DELTA hash=293df73ad056c523 intercepted=false"
+      ],
+      "failures": [
+        "[19:31:44] [Render thread/ERROR] [Hassium/SmokeTest/]: HassiumSmokeTest:FAIL step crashed: L17: nbt round=2 (CACHE_NBT R2 staleSigns=2 wallCorrect=true)"
+      ],
+      "warningCodes": [],
+      "restoreChecks": [
+        {
+          "path": "client/options.txt",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "13728D09F29EAC6D24760253FE242BB3327AF63256E69598863FFA5CC1B80B37"
+        },
+        {
+          "path": "client/config/hassium/hassium-client.toml",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "CB1DC56A5454A5091FAEBED0C8A16103CC58D758AD78178C6372B173017DE119"
+        },
+        {
+          "path": "client/config/hassium/hassium-server.toml",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "1F250DDD98D5BCAF86CCB873DFE8BAC4FBCDB55EF9E506B71F5F88951995830E"
+        },
+        {
+          "path": "server/server.properties",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "E2F6F05F14398CB8E2AAE622B52CF8ABA11460A327F91E6387560269142EF704"
+        },
+        {
+          "path": "client/config/hassium/sleep-profiles.properties",
+          "existed": false,
+          "matchesBackup": true,
+          "sha256": null
+        },
+        {
+          "path": "server/eula.txt",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "94169D86BECDFCCBB25AB7800C7FFEC69ABA470FBC1A7E4604E36833AB2EEB8F"
+        },
+        {
+          "path": "server/ops.json",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "A143A7EF0DF1FB6D4A652E6E974F98DF1182888C5371432AA8BC5F7A8EC69E1C"
+        },
+        {
+          "path": "server/config/hassium/hassium-server.toml",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "2830D578363A0E9CBC75B09FC9AAC4A9F83E8CD57331ACF7A8959BDFDE76B025"
+        },
+        {
+          "path": "server/config/hassium/hassium_aggregation_dict.bin",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "6E84D7F9151273ADAE19D90AE101A08891513205C7D5F3AD97CB0B1A457FB17F"
+        },
+        {
+          "path": "server/config/hassium/aggregation_corpus/retrain.marker",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "9B062ABCBA4796A055BF28822B4AFC8892AA08212047802E882748D48DA59CB4"
+        }
+      ],
+      "jar": "neoforge/build/1_21_1/libs/hassium-neoforge-2.1.3-1.21.1.jar",
+      "jarSha256": "4B91CA48EE9E3BA265D73BA57BCFC72FD47CF4057B62469EFBEEFFE3CB2B5E6E",
+      "evidenceDirectory": "build/traffic-profile/cachenbt_1211_20261021_a"
+    }
+  ]
+}

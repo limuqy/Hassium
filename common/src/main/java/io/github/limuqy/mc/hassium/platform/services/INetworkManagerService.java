@@ -8,6 +8,8 @@ import net.minecraft.server.level.ServerPlayer;
  * 用于在 common 模块中访问平台特定的网络功能
  */
 public interface INetworkManagerService {
+    default void sendSleepControl(ServerPlayer player, byte[] data) { throw new UnsupportedOperationException("Sleep carrier unavailable"); }
+    default void sendSleepControlToServer(byte[] data) { throw new UnsupportedOperationException("Sleep carrier unavailable"); }
 
     /** Construct the registered carrier; the actual bound native codec encodes it on EventLoop. */
     default net.minecraft.network.protocol.Packet<?> createAggregationCarrier(byte[] data) {

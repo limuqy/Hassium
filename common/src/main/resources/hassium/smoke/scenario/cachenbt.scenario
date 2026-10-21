@@ -1,0 +1,21 @@
+join label=NBT_R1_JOIN since=start timeoutMs=${joinTimeoutMs}
+command text="gamemode creative"
+command text="gamerule doMobSpawning false"
+command text="gamerule randomTickSpeed 0"
+command text="gamerule doDaylightCycle false"
+command text="gamerule doWeatherCycle false"
+command text="tp @s 8.5 72 8.5 0 20"
+command text="tag @s add cache_nbt_setup"
+wait ms=40000
+nbt round=1
+dump label=ROUND1 round=1 world=true
+disconnect
+reconnect delayMs=5000
+join label=NBT_R2_JOIN since=disconnect timeoutMs=${joinTimeoutMs}
+wait ms=30000
+dump label=ROUND2 round=2 world=true
+nbt round=2
+nbt round=0
+wait ms=5000
+nbt round=3
+exit rounds=2

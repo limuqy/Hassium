@@ -74,6 +74,30 @@ public final class LevelChunkSectionCompat {
 #endif
     }
 
+    /** Vanilla copy() preserves the palette's resize callback to its old container on legacy anchors.
+     * Read-only snapshots may use it; a delta target must own its own callback before adding states. */
+    @SuppressWarnings("unchecked")
+    public static LevelChunkSection copyMutableDetached(LevelChunkSection live) {
+#if MC_VER < MC_1_21_9
+        var states=copyMutablePalette(live.getStates());
+        var source=live.getBiomes();
+        PalettedContainerRO<Holder<Biome>> biomes=source instanceof PalettedContainer<?> palette
+                ? (PalettedContainerRO<Holder<Biome>>)(Object)copyMutablePalette(palette) : source.recreate();
+        return new LevelChunkSection(states,biomes);
+#else
+        return copyDetached(live);
+#endif
+    }
+
+#if MC_VER < MC_1_21_9
+    public static <T> PalettedContainer<T> copyMutablePalette(PalettedContainer<T> source) {
+        PalettedContainer<T> result=source.recreate();
+        FriendlyByteBuf bytes=new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+        try { source.write(bytes); result.read(bytes); return result; }
+        finally { bytes.release(); }
+    }
+#endif
+
     /**
      * 将 section 内容写入 OutputStream 用于哈希计算。
      * <p>

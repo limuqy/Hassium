@@ -71,8 +71,11 @@ sequenceDiagram
 ```
 
 - **无超时依赖**：空应答或无共同能力位 → 服务端原版路径（`compat.requireClientMod=true` 时登录期踢出）；配置任务 fire-and-forget（发 hello 即完成，不等待应答 → 无 stall 面）
+
 - **原版零干扰**：1.20.1 只消费 `hassium:login_hello` 通道与本模组 transactionId，velocity/FML 等未知 query 原样放行；1.21.1+ 配置任务仅对声明了 hassium 通道的客户端注册（`hasChannel` / `isRemotePresent`）
 - **原版压缩层不触碰**：管线级全局包压缩已退役；通道压缩 = 聚合包内部字典 ZSTD（EventLoop 阈值翻折防与 vanilla zlib 双重压缩）+ 区块推送自有压缩
+
+缓存协议另协商 `PULL_NBT`：`UNCHANGED` 命中携带完整的客户端方块实体更新快照，方块哈希不承担 NBT 新鲜度判断。ShadowPull 的“已排队、结果列表为空”响应不是终态；客户端按请求内每一柱的最终结果消费基线/修复状态，不能在空应答或第一条分批结果时清掉整批状态。细节见 [chunk-cache.md §3.3](chunk-cache.md#33-be-nbt-与缓存回放2026-10-21)。
 
 ## 5. 模块结构
 

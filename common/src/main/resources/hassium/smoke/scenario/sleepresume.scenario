@@ -1,0 +1,48 @@
+join label=SLEEP_RESUME_JOIN since=start timeoutMs=120000
+wait ms=15000
+command text="gamemode creative"
+command text="tp @s 0.5 140 0.5 0 25"
+command text="gamerule doMobSpawning false"
+command text="fill -64 139 -64 64 139 64 bedrock"
+command text="fill 28 143 0 35 143 7 stone"
+command text="setblock 64 139 4 stone"
+command text="setblock 64 140 4 oak_sign"
+command text="summon pig 5.5 140 3 {NoAI:1b,NoGravity:1b,Invulnerable:1b}"
+command text="summon pig 40.5 140 3 {NoAI:1b,NoGravity:1b,Invulnerable:1b}"
+command text="item replace entity @s weapon.mainhand with minecraft:bow"
+command text="item replace entity @s inventory.0 with minecraft:arrow"
+wait ms=15000
+dump label=ROUND1 round=1 world=true
+sleep action=auto
+wait ms=1000
+sleep action=entity x=40.5 present=false
+command text="setblock 48 140 6 glowstone"
+command text="data merge block 64 140 4 {is_waxed:1b}"
+command text="setblock 32 140 4 glowstone"
+wait ms=3000
+sleep action=world_paused
+sleep action=resume trigger=turn using=true
+sleep action=entity x=40.5 present=true
+wait ms=15000
+sleep action=world_current
+sleep action=release
+sleep action=auto
+wait ms=1000
+sleep action=resume trigger=move using=true
+sleep action=entity x=40.5 present=true
+sleep action=release
+sleep action=auto
+sleep action=resume trigger=esc
+sleep action=release
+wait ms=15000
+command text="tp @s 0.5 140 0.5 0 90"
+command text="gamemode survival"
+command text="setblock 0 139 0 obsidian"
+command text="item replace entity @s weapon.mainhand with minecraft:diamond_pickaxe"
+wait ms=1500
+sleep action=auto
+sleep action=resume trigger=sprint mining=true
+sleep action=release
+wait ms=3000
+dump label=ROUND2 round=2 world=true
+exit rounds=2

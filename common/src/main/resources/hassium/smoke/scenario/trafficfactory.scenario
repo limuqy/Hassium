@@ -1,0 +1,24 @@
+# User's native 1.21.1 ZIP, restored fresh for every run.
+# TrafficProfileProbe freezes the world on its first server tick, before login.
+join label=WAIT_JOIN_1 since=start timeoutMs=${joinTimeoutMs} requirePositiveY=false
+wait ms=3000
+command text="gamerule sendCommandFeedback false"
+command text="gamemode spectator"
+command text="tp @s 72.5 78 79.5 0 10"
+# Preserve flight while returning to creative: a real nonspectator observer.
+command text="gamemode creative"
+input mode=hover ms=1000
+command text="tp @s 72.5 78 79.5 0 10"
+input mode=hover ms=45000
+command text="tick rate 20"
+command text="tick unfreeze"
+input mode=hover ms=2000
+command text="tag @s add traffic_real_factory"
+input mode=hover ms=60000
+command text="tag @s remove traffic_real_factory"
+command text="tick freeze"
+wait ms=2000
+command text="tag @s add traffic_done"
+assertProbe key=joined op=eq value=true
+dump label=ROUND1 round=1
+exit rounds=1

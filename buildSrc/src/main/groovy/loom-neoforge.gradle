@@ -25,6 +25,8 @@ loom {
         ideConfigGenerated = true
         if (name == 'client') {
             runDir = 'run/client'
+            def smokeRunDir = project.findProperty('hassiumSmokeClientRunDir')
+            if (smokeRunDir != null) runDir = smokeRunDir.toString()
             if (project.hasProperty('hassiumSmokeTest') && project.property('hassiumSmokeTest').toString() == 'true') {
                 def host = project.findProperty('hassiumSmokeHost') ?: '127.0.0.1:25565'
                 def delayMs = project.findProperty('hassiumSmokeDelayMs') ?: '10000'
@@ -33,6 +35,8 @@ loom {
                 def moveSeconds = project.findProperty('hassiumSmokeMoveSeconds') ?: '0'
                 def phases = project.findProperty('hassiumSmokePhases') ?: 'classic'
                 def manualLogout = project.findProperty('hassiumSmokeManualLogout')
+                def username = project.findProperty('hassiumSmokeUsername')
+                if (username != null && !username.toString().isBlank()) programArguments.addAll(['--username', username.toString()])
                 // loom 1.17+: RunConfiguration 用 ListProperty<String>；旧版裸 List getter 已 @Deprecated 且
                 // getJvmArguments().get() 在配置阶段未 finalize 抛 UnsupportedOperationException。改用
                 // ListProperty 原生 addAll/add。

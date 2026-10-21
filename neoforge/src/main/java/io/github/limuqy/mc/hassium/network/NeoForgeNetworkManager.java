@@ -41,6 +41,13 @@ import io.github.limuqy.mc.hassium.server.ServerHandshakeActivation;
  * common 聚合能力由 {@link io.github.limuqy.mc.hassium.compat.NetworkCapability} 门控。
  */
 public class NeoForgeNetworkManager implements INetworkManagerService {
+    @Override public void sendSleepControl(ServerPlayer player, byte[] data) {
+        player.connection.send(new net.minecraft.network.protocol.common.ClientboundCustomPayloadPacket(new io.github.limuqy.mc.hassium.compat.SleepPayloadCompat.ToClient(data)));
+    }
+    @Override public void sendSleepControlToServer(byte[] data) {
+        var c=net.minecraft.client.Minecraft.getInstance().getConnection();
+        if(c!=null) c.send(new net.minecraft.network.protocol.common.ServerboundCustomPayloadPacket(new io.github.limuqy.mc.hassium.compat.SleepPayloadCompat.ToServer(data)));
+    }
 
     @Override
     public net.minecraft.network.protocol.Packet<?> createAggregationCarrier(byte[] data) {
@@ -248,6 +255,10 @@ public class NeoForgeNetworkManager implements INetworkManagerService {
         //（即便 net/master 全关，SHADOW_PULL 位恒协商成功）——NeoForge checkPacket 对未注册
         // S2C payload 直接抛异常炸 tick。服务端不发送时注册无副作用。
         var registrar = event.registrar(PROTOCOL_VERSION).optional();
+        registrar.playToClient(io.github.limuqy.mc.hassium.compat.SleepPayloadCompat.ToClient.TYPE,io.github.limuqy.mc.hassium.compat.SleepPayloadCompat.ToClient.CODEC,
+                (p,c)-> { var source=c.connection(); c.enqueueWork(()->io.github.limuqy.mc.hassium.client.sleep.SleepClient.receive(source,p.bytes())); });
+        registrar.playToServer(io.github.limuqy.mc.hassium.compat.SleepPayloadCompat.ToServer.TYPE,io.github.limuqy.mc.hassium.compat.SleepPayloadCompat.ToServer.CODEC,
+                (p,c)->c.enqueueWork(()->io.github.limuqy.mc.hassium.server.sleep.SleepServer.receive((ServerPlayer)c.player(),p.bytes())));
         if (io.github.limuqy.mc.hassium.protocol.egress.EgressFixture.enabled()) {
             registrar.playToClient(io.github.limuqy.mc.hassium.compat.EgressFixtureCompat.TYPE,
                     io.github.limuqy.mc.hassium.compat.EgressFixtureCompat.CODEC,

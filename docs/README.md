@@ -15,25 +15,27 @@
 | [version-segments.md](version-segments.md) | 多版本七段适配真相源 | 当前 |
 | [mod-compat.md](mod-compat.md) | 多 Mod 兼容边界与配置逃生 | 当前 |
 | [runtime-smoke-test.md](runtime-smoke-test.md) | 运行时冒烟：L0–L2 自动分层、PROBE JSON、场景引擎、门禁与会话判定 | 当前 |
-| [config-audit.md](config-audit.md) | 配置项审计（52 键 + 退役键族清单；说明列 = ConfigSchema） | 当前 |
+| [semi-online-sleep.md](semi-online-sleep.md) | 手动休眠、残血掉线、附近同步和保载重连 | 当前，两个重点组合 |
+| [config-audit.md](config-audit.md) | 配置项审计（56 键 + 退役键族清单；说明列 = ConfigSchema） | 当前 |
 | [network-core-followups.md](network-core-followups.md) | 网络核心收尾核销（**已归档**：直连拓扑下仅存档参考） | 归档参考 |
 | [curseforge-description.md](curseforge-description.md) | CurseForge 发布描述草稿 | 当前 |
 
 ## 后续独立调研（2026-10-20）
 
-先在 **`2.0.0`** 分支开发，最重点组合为 **1.20.1 Forge / 1.21.1 NeoForge**。以下两份计划已经建立，尚未开始功能实现，后续分别深入研讨。
+先在 **`2.0.0`** 分支开发，最重点组合为 **1.20.1 Forge / 1.21.1 NeoForge**。以下两方向独立推进；方向 A 已转为用户授权的[手动半在线休眠](semi-online-sleep.md)实现，自动 AFK 识别与 R1 实体降频仍未实施。
 
 主目录现用于 2.X，master 保留独立工作区，后续统一迁移；目录、备份与验证见[工作区交接](handoff/handoff-2026-10-20-workspace-2x-primary.md)。
 
 | 计划 | 范围 | 状态 |
 |------|------|------|
-| [数据包优化与长期 AFK 节流](handoff/research-2026-10-20-packet-afk.md) | 高频包无损编码、每观察者同步、已知 Mod 状态同步、挂机识别/节流/恢复 | 待深入研讨 |
+| [数据包优化与长期 AFK 节流](handoff/research-2026-10-20-packet-afk.md) | 高频包无损编码、每观察者同步、已知 Mod 状态同步、挂机识别/节流/恢复 | 画像、设计与 R0 已完成；实现转至[手动休眠](semi-online-sleep.md) |
 | [区块增量与渐进式 LOD](handoff/research-2026-10-20-chunk-delta-lod.md) | 精确差异、附属数据增量、跨柱复用、服务端 LOD、补充数据升级精度 | 待深入研讨 |
 
 ## handoff（状态：交接/历史）
 
 | 文档 | 主题 |
 |------|------|
+| [handoff/handoff-2026-10-21-semi-online-sleep.md](handoff/handoff-2026-10-21-semi-online-sleep.md) | **2.X 手动休眠实现验收**：两重点组合、残血与保载、混合观察者、完整周期 TCP 上传量 |
 | [handoff/handoff-2026-09-04-vanilla-direct-network.md](handoff/handoff-2026-09-04-vanilla-direct-network.md) | **直连拓扑回归交接**（网络核心/UDP/迁移裁剪、全局包压缩退役——现行拓扑的决策锚点） |
 | [handoff/handoff-2026-08-25-chunk-push-batch-refactor.md](handoff/handoff-2026-08-25-chunk-push-batch-refactor.md) | 区块推送批量重构 |
 | [handoff/handoff-2026-08-24-smoke-finalize.md](handoff/handoff-2026-08-24-smoke-finalize.md) | 冒烟收尾 |

@@ -1,0 +1,21 @@
+join label=SLEEP_JOIN since=start timeoutMs=120000
+wait ms=15000
+command text="gamemode creative"
+command text="tp @s 0.5 140 0.5 0 0"
+command text="gamerule doMobSpawning false"
+command text="fill -12 139 -12 12 139 12 stone"
+command text="setblock 2 140 4 hopper"
+command text="setblock 48 140 4 hopper"
+command text="summon pig 3 140 3"
+command text="summon pig 48 140 3"
+wait ms=20000
+dump label=ROUND1 round=1 world=true
+sleep action=enter threshold=6 ui=true
+wait ms=1000
+sleep action=capture
+sleep action=panel
+wait ms=15000
+sleep action=wake offlineMs=20000
+wait ms=15000
+dump label=ROUND2 round=2 world=true
+exit rounds=2

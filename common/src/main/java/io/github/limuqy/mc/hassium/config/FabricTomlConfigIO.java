@@ -523,11 +523,15 @@ public final class FabricTomlConfigIO {
                 getString(cfg, "master.entityDensityTierFactors", d.entityDensityTierFactors()),
                 getInt(cfg, "master.entityMaxThrottleFactor", d.entityMaxThrottleFactor()),
                 getInt(cfg, "master.entityFrameBudgetPerPlayer", d.entityFrameBudgetPerPlayer()),
-                getBool(cfg, "master.entitySmoothPushEnabled", d.entitySmoothPushEnabled())
+                getBool(cfg, "master.entitySmoothPushEnabled", d.entitySmoothPushEnabled()),
+                getBool(cfg, "master.sleepEnabled", d.sleepEnabled()),
+                getInt(cfg, "master.sleepWakeHoldSeconds", d.sleepWakeHoldSeconds())
         );
     }
 
     private static void writeMasterCore(CommentedConfig cfg, HassiumConfig.MasterCoreConfig n) {
+        set(cfg, "master.sleepEnabled", n.sleepEnabled(), "允许手动半在线休眠", ConfigScope.SERVER);
+        set(cfg, "master.sleepWakeHoldSeconds", n.sleepWakeHoldSeconds(), "主动恢复重连保载宽限（秒）", ConfigScope.SERVER);
         set(cfg, "master.enabled", n.enabled(), "是否启用服务端网络通道（压缩/聚合/区块推送/实体优化）", ConfigScope.SERVER);
         set(cfg, "master.enabledOnLan", n.enabledOnLan(),
                 "局域网主机是否对远程玩家启用 Hassium 网络面（本机 memory 恒原版；storage 仍仅专用服）",

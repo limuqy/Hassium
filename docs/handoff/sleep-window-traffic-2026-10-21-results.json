@@ -1,0 +1,530 @@
+{
+  "date": "2026-10-21",
+  "branch": "2.0.0",
+  "purpose": "Measured baseline before restoring cache comparison in sleep-window recovery",
+  "cacheFinding": "Recovery forces includeLocalBaseline=false; all observed recovery Pull results FULL, no UNCHANGED or DELTA. This is a policy bypass, not proof that local disk cache is absent.",
+  "consistencyFinding": "Ordinary UNCHANGED has no BE NBT payload or independent initial BE snapshot in the inspected path. Pure NBT changes while unobserved can leave stale cache; code-confirmed gap, ordinary login/TP runtime reproduction still outstanding.",
+  "limits": [
+    "One adjacent 30-second normal/sleep pair per input mode, not repeated statistical samples",
+    "Both runs use generated vanilla factory layouts on separate fresh worlds, not the historical 1.21.1 factory ZIP",
+    "Machines lie within retained 5x5 synchronization area; distant terrain-heavy workloads are not represented",
+    "No CPU/GPU or client-upload measurement; application-byte meter excludes TCP/IP headers and retransmissions",
+    "Recovery observation has no attack actions; separate sleepresume acceptance verifies continuous native held input"
+  ],
+  "runs": [
+    {
+      "session": "sleepwindowtraffic_1201_20261021_a",
+      "harness": "PASS",
+      "qualityProblems": [],
+      "measurement": "Successful all-protocol TCP application payload writes, including Minecraft framing; excludes TCP/IP headers, retransmissions and client upload.",
+      "windows": {
+        "idle_normal": {
+          "seconds": 30.299724,
+          "tcpPayloadBytes": 423844,
+          "bytesPerSecond": 13988.378243973442,
+          "startMs": 1792580570550,
+          "endMs": 1792580600849,
+          "nativeBlockAcks": 0,
+          "outputItems": 1200,
+          "actualWorldTPS": 20.00018217987728
+        },
+        "idle_entry": {
+          "seconds": 0.3012601,
+          "tcpPayloadBytes": 4725,
+          "bytesPerSecond": 15684.12146181987,
+          "startMs": 1792580600849,
+          "endMs": 1792580601151,
+          "nativeBlockAcks": 0,
+          "outputItems": 16,
+          "actualWorldTPS": 19.916344713422056
+        },
+        "idle_sleep": {
+          "seconds": 30.3495695,
+          "tcpPayloadBytes": 119235,
+          "bytesPerSecond": 3928.721295371257,
+          "startMs": 1792580601151,
+          "endMs": 1792580631500,
+          "nativeBlockAcks": 0,
+          "outputItems": 1216,
+          "actualWorldTPS": 20.00028369430413
+        },
+        "idle_recovery": {
+          "seconds": 30.2506446,
+          "tcpPayloadBytes": 3889901,
+          "bytesPerSecond": 128589.02847974353,
+          "startMs": 1792580631500,
+          "endMs": 1792580661751,
+          "nativeBlockAcks": 0,
+          "outputItems": 1216,
+          "actualWorldTPS": 19.99957382726317
+        },
+        "hold_attack_normal": {
+          "seconds": 30.2983988,
+          "tcpPayloadBytes": 425910,
+          "bytesPerSecond": 14057.17849353808,
+          "startMs": 1792580661751,
+          "endMs": 1792580692050,
+          "nativeBlockAcks": 2,
+          "outputItems": 1200,
+          "actualWorldTPS": 20.001056953544357
+        },
+        "hold_attack_entry": {
+          "seconds": 0.3507628,
+          "tcpPayloadBytes": 5466,
+          "bytesPerSecond": 15583.180428483294,
+          "startMs": 1792580692050,
+          "endMs": 1792580692400,
+          "nativeBlockAcks": 0,
+          "outputItems": 16,
+          "actualWorldTPS": 19.956506220157898
+        },
+        "hold_attack_sleep": {
+          "seconds": 30.3001522,
+          "tcpPayloadBytes": 122167,
+          "bytesPerSecond": 4031.893938803383,
+          "startMs": 1792580692400,
+          "endMs": 1792580722700,
+          "nativeBlockAcks": 2,
+          "outputItems": 1216,
+          "actualWorldTPS": 19.999899538458425
+        },
+        "hold_attack_recovery": {
+          "seconds": 30.2486971,
+          "tcpPayloadBytes": 3892440,
+          "bytesPerSecond": 128681.24491881007,
+          "startMs": 1792580722700,
+          "endMs": 1792580752949,
+          "nativeBlockAcks": 0,
+          "outputItems": 1216,
+          "actualWorldTPS": 20.00086145859155
+        },
+        "periodic_attack_normal": {
+          "seconds": 30.2999883,
+          "tcpPayloadBytes": 428669,
+          "bytesPerSecond": 14147.49721206988,
+          "startMs": 1792580752949,
+          "endMs": 1792580783249,
+          "nativeBlockAcks": 60,
+          "outputItems": 1200,
+          "actualWorldTPS": 20.00000772277526
+        },
+        "periodic_attack_entry": {
+          "seconds": 0.2998655,
+          "tcpPayloadBytes": 5054,
+          "bytesPerSecond": 16854.222976634523,
+          "startMs": 1792580783249,
+          "endMs": 1792580783549,
+          "nativeBlockAcks": 0,
+          "outputItems": 16,
+          "actualWorldTPS": 20.008970688525356
+        },
+        "periodic_attack_sleep": {
+          "seconds": 30.2991887,
+          "tcpPayloadBytes": 118336,
+          "bytesPerSecond": 3905.5831220985797,
+          "startMs": 1792580783549,
+          "endMs": 1792580813848,
+          "nativeBlockAcks": 60,
+          "outputItems": 1216,
+          "actualWorldTPS": 20.00053552589017
+        },
+        "periodic_attack_recovery": {
+          "seconds": 30.3001689,
+          "tcpPayloadBytes": 3878526,
+          "bytesPerSecond": 128003.44489168838,
+          "startMs": 1792580813848,
+          "endMs": 1792580844148,
+          "nativeBlockAcks": 0,
+          "outputItems": 1216,
+          "actualWorldTPS": 19.99988851547293
+        }
+      },
+      "cycles": {
+        "idle": {
+          "normalBytesPerSecond": 13988.378243973442,
+          "sleepBytesPerSecond": 3928.721295371257,
+          "entryBytes": 4725,
+          "recoveryBytes": 3889901,
+          "recoverySeconds": 30.2506446,
+          "measuredCycleBytes": 4437705,
+          "conservativeBreakEvenSeconds": 387.15296355520036,
+          "incrementalBreakEvenSeconds": 344.6692485338035,
+          "reductionPercent": 71.91439045434839,
+          "recoveryBytesPerSecond": 128589.02847974353,
+          "recoveryPullResults": {
+            "FULL": 524
+          },
+          "visibleWindowReadyMs": 4954,
+          "recoveryObservationMs": 30002
+        },
+        "hold_attack": {
+          "normalBytesPerSecond": 14057.17849353808,
+          "sleepBytesPerSecond": 4031.893938803383,
+          "entryBytes": 5466,
+          "recoveryBytes": 3892440,
+          "recoverySeconds": 30.2486971,
+          "measuredCycleBytes": 4445983,
+          "conservativeBreakEvenSeconds": 388.80751750424025,
+          "incrementalBreakEvenSeconds": 345.9017957492388,
+          "reductionPercent": 71.31790038337496,
+          "recoveryBytesPerSecond": 128681.24491881007,
+          "recoveryPullResults": {
+            "FULL": 524
+          },
+          "visibleWindowReadyMs": 5049,
+          "recoveryObservationMs": 30003
+        },
+        "periodic_attack": {
+          "normalBytesPerSecond": 14147.49721206988,
+          "sleepBytesPerSecond": 3905.5831220985797,
+          "entryBytes": 5054,
+          "recoveryBytes": 3878526,
+          "recoverySeconds": 30.3001689,
+          "measuredCycleBytes": 4430585,
+          "conservativeBreakEvenSeconds": 379.18498103813744,
+          "incrementalBreakEvenSeconds": 336.91613387145946,
+          "reductionPercent": 72.39382299530304,
+          "recoveryBytesPerSecond": 128003.44489168838,
+          "recoveryPullResults": {
+            "FULL": 524
+          },
+          "visibleWindowReadyMs": 4995,
+          "recoveryObservationMs": 30049
+        }
+      },
+      "capability": "SLEEP_WINDOW",
+      "visibleColumns": 9,
+      "lightColumns": 25,
+      "fixture": "Same generated 16-lane vanilla factory layout on separate fresh worlds; VD=10; fixed dictionary",
+      "sampling": "One adjacent 30-second normal/sleep pair per input mode; recovery >=30 seconds and all paused visible columns ready; no injected offline wait",
+      "recoveryInput": "No attack actions during recovery observation; normal and sleep windows use matching scripted native interactions",
+      "serverResumeCount": 3,
+      "version": "1.20.1",
+      "loader": "forge",
+      "restoreChecks": [
+        {
+          "path": "client/options.txt",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "FF0949904B47C93BC714A456CA918BACB520CD712D754C73B87A106C8D46947D"
+        },
+        {
+          "path": "client/config/hassium/hassium-client.toml",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "C4308096BEBFE91B3F716236802F02FAF22494C83F0D53AC16B86F57E8240EA0"
+        },
+        {
+          "path": "client/config/hassium/hassium-server.toml",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "BD7AE942898504F24200B4E9EB9EFA9A8F3714674EB10B7BCB8E2DD2089411DD"
+        },
+        {
+          "path": "server/server.properties",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "518540259053B63234B0D3C5235F03B0C24054F3BA03EC96131E22DB01800C6B"
+        },
+        {
+          "path": "client/config/hassium/sleep-profiles.properties",
+          "existed": false,
+          "matchesBackup": true,
+          "sha256": null
+        },
+        {
+          "path": "server/eula.txt",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "94169D86BECDFCCBB25AB7800C7FFEC69ABA470FBC1A7E4604E36833AB2EEB8F"
+        },
+        {
+          "path": "server/ops.json",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "A143A7EF0DF1FB6D4A652E6E974F98DF1182888C5371432AA8BC5F7A8EC69E1C"
+        },
+        {
+          "path": "server/config/hassium/hassium-server.toml",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "4BF1E50D2414CF0BD79F18148918BAE1B0BAC0B6423893BC20A68DAA24E22A6D"
+        },
+        {
+          "path": "server/config/hassium/hassium_aggregation_dict.bin",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "E393FA8D66693E71A5440DD01EA0C438B097B3041B70D596654304A981A7C9CA"
+        },
+        {
+          "path": "server/config/hassium/aggregation_corpus/retrain.marker",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "36353066EF7FA9D4125ECC9FE3895E2106D1008BDF1AE0F9B28363E37F32E2DF"
+        }
+      ],
+      "dictionarySha256": "E393FA8D66693E71A5440DD01EA0C438B097B3041B70D596654304A981A7C9CA",
+      "jar": "forge/build/1_20_1/libs/hassium-forge-2.1.3-1.20.1.jar",
+      "jarSha256": "8B2A838E5B272E949E1F6371C12890B6497BCB707A6E32C1B6C82E6C33D58BE9",
+      "evidenceDirectory": "build/traffic-profile/sleepwindowtraffic_1201_20261021_a",
+      "warningCodes": []
+    },
+    {
+      "session": "sleepwindowtraffic_1211_20261021_a",
+      "harness": "PASS",
+      "qualityProblems": [],
+      "measurement": "Successful all-protocol TCP application payload writes, including Minecraft framing; excludes TCP/IP headers, retransmissions and client upload.",
+      "windows": {
+        "idle_normal": {
+          "seconds": 30.2992641,
+          "tcpPayloadBytes": 522132,
+          "bytesPerSecond": 17232.497735811347,
+          "startMs": 1792580976794,
+          "endMs": 1792581007093,
+          "nativeBlockAcks": 0,
+          "outputItems": 1215,
+          "actualWorldTPS": 20.000485754371837
+        },
+        "idle_entry": {
+          "seconds": 0.35113,
+          "tcpPayloadBytes": 6401,
+          "bytesPerSecond": 18229.715489989463,
+          "startMs": 1792581007093,
+          "endMs": 1792581007445,
+          "nativeBlockAcks": 0,
+          "outputItems": 1,
+          "actualWorldTPS": 19.935636373992537
+        },
+        "idle_sleep": {
+          "seconds": 30.298073,
+          "tcpPayloadBytes": 139627,
+          "bytesPerSecond": 4608.444900109654,
+          "startMs": 1792581007445,
+          "endMs": 1792581037743,
+          "nativeBlockAcks": 0,
+          "outputItems": 1216,
+          "actualWorldTPS": 20.001272028092348
+        },
+        "idle_recovery": {
+          "seconds": 30.2499863,
+          "tcpPayloadBytes": 4025170,
+          "bytesPerSecond": 133063.5313378638,
+          "startMs": 1792581037743,
+          "endMs": 1792581067992,
+          "nativeBlockAcks": 0,
+          "outputItems": 1216,
+          "actualWorldTPS": 20.00000905785534
+        },
+        "hold_attack_normal": {
+          "seconds": 30.2997768,
+          "tcpPayloadBytes": 523757,
+          "bytesPerSecond": 17285.836904250726,
+          "startMs": 1792581067992,
+          "endMs": 1792581098292,
+          "nativeBlockAcks": 2,
+          "outputItems": 1215,
+          "actualWorldTPS": 20.00014732781794
+        },
+        "hold_attack_entry": {
+          "seconds": 0.3498909,
+          "tcpPayloadBytes": 6873,
+          "bytesPerSecond": 19643.26594375561,
+          "startMs": 1792581098292,
+          "endMs": 1792581098643,
+          "nativeBlockAcks": 0,
+          "outputItems": 1,
+          "actualWorldTPS": 20.00623622963615
+        },
+        "hold_attack_sleep": {
+          "seconds": 30.2502855,
+          "tcpPayloadBytes": 138559,
+          "bytesPerSecond": 4580.419579841651,
+          "startMs": 1792581098643,
+          "endMs": 1792581128893,
+          "nativeBlockAcks": 2,
+          "outputItems": 1216,
+          "actualWorldTPS": 19.999811241450928
+        },
+        "hold_attack_recovery": {
+          "seconds": 30.2998798,
+          "tcpPayloadBytes": 4023100,
+          "bytesPerSecond": 132776.10428012325,
+          "startMs": 1792581128893,
+          "endMs": 1792581159193,
+          "nativeBlockAcks": 0,
+          "outputItems": 1216,
+          "actualWorldTPS": 20.000079340248735
+        },
+        "periodic_attack_normal": {
+          "seconds": 30.2492764,
+          "tcpPayloadBytes": 521394,
+          "bytesPerSecond": 17236.577599588465,
+          "startMs": 1792581159193,
+          "endMs": 1792581189442,
+          "nativeBlockAcks": 60,
+          "outputItems": 1200,
+          "actualWorldTPS": 20.000478424667374
+        },
+        "periodic_attack_entry": {
+          "seconds": 0.30048,
+          "tcpPayloadBytes": 6015,
+          "bytesPerSecond": 20017.97124600639,
+          "startMs": 1792581189442,
+          "endMs": 1792581189743,
+          "nativeBlockAcks": 0,
+          "outputItems": 16,
+          "actualWorldTPS": 19.968051118210862
+        },
+        "periodic_attack_sleep": {
+          "seconds": 30.2997812,
+          "tcpPayloadBytes": 138727,
+          "bytesPerSecond": 4578.481906661425,
+          "startMs": 1792581189743,
+          "endMs": 1792581220042,
+          "nativeBlockAcks": 60,
+          "outputItems": 1216,
+          "actualWorldTPS": 20.000144423485143
+        },
+        "periodic_attack_recovery": {
+          "seconds": 30.2996783,
+          "tcpPayloadBytes": 4021372,
+          "bytesPerSecond": 132719.95696403153,
+          "startMs": 1792581220042,
+          "endMs": 1792581250342,
+          "nativeBlockAcks": 0,
+          "outputItems": 1216,
+          "actualWorldTPS": 20.00021234548883
+        }
+      },
+      "cycles": {
+        "idle": {
+          "normalBytesPerSecond": 17232.497735811347,
+          "sleepBytesPerSecond": 4608.444900109654,
+          "entryBytes": 6401,
+          "recoveryBytes": 4025170,
+          "recoverySeconds": 30.2499863,
+          "measuredCycleBytes": 4693330,
+          "conservativeBreakEvenSeconds": 319.3563154772641,
+          "incrementalBreakEvenSeconds": 277.5841782550787,
+          "reductionPercent": 73.2572435478537,
+          "recoveryBytesPerSecond": 133063.5313378638,
+          "recoveryPullResults": {
+            "FULL": 524
+          },
+          "visibleWindowReadyMs": 5097,
+          "recoveryObservationMs": 30002
+        },
+        "hold_attack": {
+          "normalBytesPerSecond": 17285.836904250726,
+          "sleepBytesPerSecond": 4580.419579841651,
+          "entryBytes": 6873,
+          "recoveryBytes": 4023100,
+          "recoverySeconds": 30.2998798,
+          "measuredCycleBytes": 4692289,
+          "conservativeBreakEvenSeconds": 317.1854097431178,
+          "incrementalBreakEvenSeconds": 275.4861153441026,
+          "reductionPercent": 73.5018928778896,
+          "recoveryBytesPerSecond": 132776.10428012325,
+          "recoveryPullResults": {
+            "FULL": 524
+          },
+          "visibleWindowReadyMs": 5002,
+          "recoveryObservationMs": 30000
+        },
+        "periodic_attack": {
+          "normalBytesPerSecond": 17236.577599588465,
+          "sleepBytesPerSecond": 4578.481906661425,
+          "entryBytes": 6015,
+          "recoveryBytes": 4021372,
+          "recoverySeconds": 30.2996783,
+          "measuredCycleBytes": 4687508,
+          "conservativeBreakEvenSeconds": 318.1668947447112,
+          "incrementalBreakEvenSeconds": 276.49854147160715,
+          "reductionPercent": 73.43740727990723,
+          "recoveryBytesPerSecond": 132719.95696403153,
+          "recoveryPullResults": {
+            "FULL": 524
+          },
+          "visibleWindowReadyMs": 4949,
+          "recoveryObservationMs": 30002
+        }
+      },
+      "capability": "SLEEP_WINDOW",
+      "visibleColumns": 9,
+      "lightColumns": 25,
+      "fixture": "Same generated 16-lane vanilla factory layout on separate fresh worlds; VD=10; fixed dictionary",
+      "sampling": "One adjacent 30-second normal/sleep pair per input mode; recovery >=30 seconds and all paused visible columns ready; no injected offline wait",
+      "recoveryInput": "No attack actions during recovery observation; normal and sleep windows use matching scripted native interactions",
+      "serverResumeCount": 3,
+      "version": "1.21.1",
+      "loader": "neoforge",
+      "restoreChecks": [
+        {
+          "path": "client/options.txt",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "13728D09F29EAC6D24760253FE242BB3327AF63256E69598863FFA5CC1B80B37"
+        },
+        {
+          "path": "client/config/hassium/hassium-client.toml",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "CB1DC56A5454A5091FAEBED0C8A16103CC58D758AD78178C6372B173017DE119"
+        },
+        {
+          "path": "client/config/hassium/hassium-server.toml",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "1F250DDD98D5BCAF86CCB873DFE8BAC4FBCDB55EF9E506B71F5F88951995830E"
+        },
+        {
+          "path": "server/server.properties",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "E2F6F05F14398CB8E2AAE622B52CF8ABA11460A327F91E6387560269142EF704"
+        },
+        {
+          "path": "client/config/hassium/sleep-profiles.properties",
+          "existed": false,
+          "matchesBackup": true,
+          "sha256": null
+        },
+        {
+          "path": "server/eula.txt",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "94169D86BECDFCCBB25AB7800C7FFEC69ABA470FBC1A7E4604E36833AB2EEB8F"
+        },
+        {
+          "path": "server/ops.json",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "A143A7EF0DF1FB6D4A652E6E974F98DF1182888C5371432AA8BC5F7A8EC69E1C"
+        },
+        {
+          "path": "server/config/hassium/hassium-server.toml",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "2830D578363A0E9CBC75B09FC9AAC4A9F83E8CD57331ACF7A8959BDFDE76B025"
+        },
+        {
+          "path": "server/config/hassium/hassium_aggregation_dict.bin",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "6E84D7F9151273ADAE19D90AE101A08891513205C7D5F3AD97CB0B1A457FB17F"
+        },
+        {
+          "path": "server/config/hassium/aggregation_corpus/retrain.marker",
+          "existed": true,
+          "matchesBackup": true,
+          "sha256": "9B062ABCBA4796A055BF28822B4AFC8892AA08212047802E882748D48DA59CB4"
+        }
+      ],
+      "dictionarySha256": "E393FA8D66693E71A5440DD01EA0C438B097B3041B70D596654304A981A7C9CA",
+      "jar": "neoforge/build/1_21_1/libs/hassium-neoforge-2.1.3-1.21.1.jar",
+      "jarSha256": "CC1F69FD57346ED5ABA54303A5976FD7B494E9587C67440FDF3C334799C4E552",
+      "evidenceDirectory": "build/traffic-profile/sleepwindowtraffic_1211_20261021_a",
+      "warningCodes": []
+    }
+  ]
+}

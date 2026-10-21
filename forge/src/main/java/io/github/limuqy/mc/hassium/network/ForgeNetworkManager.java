@@ -63,6 +63,28 @@ import java.util.function.Function;
  * 不再存在网关帧协议 / UDP 数据面 / 续流票据（2.0.0 直连裁剪）。
  */
 public class ForgeNetworkManager implements INetworkManagerService {
+    public record SleepToClient(byte[] data) {
+        static void encode(SleepToClient p, FriendlyByteBuf b) { b.writeByteArray(p.data()); }
+        static SleepToClient decode(FriendlyByteBuf b) { return new SleepToClient(b.readByteArray(1024)); }
+    }
+    public record SleepToServer(byte[] data) {
+        static void encode(SleepToServer p, FriendlyByteBuf b) { b.writeByteArray(p.data()); }
+        static SleepToServer decode(FriendlyByteBuf b) { return new SleepToServer(b.readByteArray(1024)); }
+    }
+    @Override public void sendSleepControl(ServerPlayer player, byte[] data) {
+#if MC_VER < MC_1_21_1
+        player.connection.send(CHANNEL.toVanillaPacket(new SleepToClient(data),NetworkDirection.PLAY_TO_CLIENT));
+#else
+        throw new UnsupportedOperationException("Sleep requires a validated loader anchor");
+#endif
+    }
+    @Override public void sendSleepControlToServer(byte[] data) {
+#if MC_VER < MC_1_21_1
+        CHANNEL.sendToServer(new SleepToServer(data));
+#else
+        throw new UnsupportedOperationException("Sleep requires a validated loader anchor");
+#endif
+    }
 
     private static final Logger LOGGER = LoggerFactory.getLogger("Hassium/Network");
     private static final String PROTOCOL_VERSION = "3";
@@ -75,6 +97,9 @@ public class ForgeNetworkManager implements INetworkManagerService {
         registerControlName(types, prefixes, new DictionarySyncWrapper(new byte[0]), io.github.limuqy.mc.hassium.protocol.HassiumPacketIds.DICTIONARY_SYNC_S2C);
         registerControlName(types, prefixes, new IndexSyncWrapper(new byte[0]), io.github.limuqy.mc.hassium.protocol.HassiumPacketIds.INDEX_SYNC_S2C);
         registerControlName(types, prefixes, new AggregationWrapper(new byte[0]), io.github.limuqy.mc.hassium.protocol.HassiumPacketIds.AGGREGATION_S2C);
+#if MC_VER < MC_1_21_1
+        registerControlName(types,prefixes,new SleepToClient(new byte[0]),HassiumChannels.SLEEP_S2C.fullId());
+#endif
         controlTypes = java.util.Map.copyOf(types); controlPrefixes = java.util.Map.copyOf(prefixes);
     }
     private static void registerControlName(java.util.Map<Integer, String> types, java.util.Map<String, Integer> prefixes, Object message, String type) {
@@ -276,6 +301,10 @@ public class ForgeNetworkManager implements INetworkManagerService {
                 }, java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT)
         );
 
+        CHANNEL.registerMessage(packetId++,SleepToClient.class,SleepToClient::encode,SleepToClient::decode,
+                (msg,ctx)-> { var source=ctx.get().getNetworkManager(); ctx.get().enqueueWork(()->io.github.limuqy.mc.hassium.client.sleep.SleepClient.receive(source,msg.data())); ctx.get().setPacketHandled(true); },java.util.Optional.of(NetworkDirection.PLAY_TO_CLIENT));
+        CHANNEL.registerMessage(packetId++,SleepToServer.class,SleepToServer::encode,SleepToServer::decode,
+                (msg,ctx)-> { ctx.get().enqueueWork(()->io.github.limuqy.mc.hassium.server.sleep.SleepServer.receive(ctx.get().getSender(),msg.data())); ctx.get().setPacketHandled(true); },java.util.Optional.of(NetworkDirection.PLAY_TO_SERVER));
         LOGGER.info("Hassium: Registered {} network packets", packetId);
     }
 #else

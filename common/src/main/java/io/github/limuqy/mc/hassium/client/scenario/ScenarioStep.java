@@ -28,6 +28,10 @@ public final class ScenarioStep {
         WAIT,
         /** 发送客户端命令。 */
         COMMAND,
+        /** Dev profiling input: a walking square, held attack, or periodic attack. */
+        INPUT,
+        /** Dev-only semi-online sleep / real reconnect validation. */
+        SLEEP,
         /** 非阻塞飞行注入：爬升 2s + 平飞 Ns。 */
         FLY,
         /** 切换维度（/execute in）。 */
@@ -40,6 +44,8 @@ public final class ScenarioStep {
         DUMP,
         /** 场景内门禁断言：assertProbe key=<path> op=<gt|ge|lt|le|eq> value=<N>|vs=<path>。 */
         ASSERT_PROBE,
+        /** Dev-only wall fixture: assert client-visible block entity NBT in R1 / R2. */
+        NBT,
         /** 收尾：PASS/FAIL marker + 影子保存等待 + 退出（rounds=1 只看 round1Pass）。 */
         EXIT
     }

@@ -229,9 +229,11 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 | `wait` | `ms` | 定长等待（`execWait` 仅支持 `ms`；`until`/`settleMs` 为网关时代遗留参数，现无场景使用） |
 | `fly` | `seconds`、`tag` | 注入飞行移动（先爬升 2s 再平飞），驱动区块补给顺序 |
 | `command` | `text` | 发送任意客户端命令（`conn.sendCommand(text)`） |
+| `input` | `mode=walk\|idle\|hover\|hold_attack\|periodic_attack`、`ms` | 流量画像的开发环境输入：普通四向步行、无操作、原版飞行悬停、持续/间隔攻击固定基岩目标；释放鼠标以避免后台窗口暂停或鼠标移动污染样本，不直接构造网络包 |
+| `sleep` | `action`、`threshold`、`ui`、`offlineMs` | 休眠协议与实际 UI、实体兴趣范围和基线、装备、残血断连、单次重连与到期故障验证，仅开发冒烟使用 |
 | `dimension` | `to=nether\|end\|overworld` | `/execute in <dim> run tp @s ~ ~ ~` 切维（需 OP，服务端场景注入自动 op） |
 | `disconnect` | — | 主动断开（`manualLogout=true` 时走真实手动登出路径） |
-| `reconnect` | `delayMs` | 延迟后反射重连（跨版本 `startConnecting` 签名适配） |
+| `reconnect` | `delayMs`、`sleep=true` | 延迟后通过 compat 原生连接；休眠故障测试复用保存的 ServerData，模拟明确手动重试 |
 | `dump` | `label`、`round`、`gate=true\|false` | 输出一轮统计 + 写 probe roundN.json；`gate=false` 跳过 validateStats 的 ROUND2 缓存命中口径（切维后全新区块无缓存命中属预期） |
 | `assertProbe` | `key`、`op=gt\|ge\|lt\|eq`、`value` / `vs=<key>` | 对 probe 字段做活体断言，失败即退出码 2 |
 | `exit` | `rounds` | 结束并退出；`rounds=1` 表示单轮场景（跳过 classic 两轮判定口径） |
@@ -249,11 +251,24 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 | `dictionary.scenario` | **字典热更 rollout 专项**（单轮，**1.21.1+ 专用**——场景内 `/tick rate 200` 依赖 1.20.3+ 的 `/tick` 命令）：join → `/tick rate 200`（十倍速 tick；聚合帧按 tick 尾冲刷，采样帧频率 ∝ tick 频率，把「4000 样本 → 首训 → offer 推送 → 客户端 hash 校验安装 → `aggregation_ready(epoch,id)` ACK → 全连接确认 → 激活 epoch 1」整链压进窗口）→ wait 120s → dump → exit。服务端以 **SMOKE 模式**运行（`hassium.serverSmokeScenario=dictionary` 自动启用）：harness 前置**删除服务端字典文件**（强制首训）+ 语料**攒批**高频采集（8KB 合并落盘），语料 ≥256KB（最低数据集）时**主动触发一次重训练** → offer epoch 2 → ACK → 切换，完整验证「语料 → 重训练 → ACK 门控切换」更新链路；重训练后语料自动清空 | analyzer `dictionary_rollout`：服务端日志出现 `Aggregation dictionary activated (epoch=2,`——epoch 1 是删档后首训，epoch 2 才是更新链路的证据；probe 基本面同 seedgen |
 **黑块判据（`flyroundtrip` 门禁口径）**：门禁主锚 `clientDarkRegressionChunks` = 「曾亮过的柱在诊断时刻仍黑」（用户报的症状原文）。探针采样「`topY`」——列内最高方块之上第一格，该点按定义无遮挡，正确光必 >0。**判定值一律取光包落地后下一帧复检的 post-apply 采样**（`ClientChunkHandler.runProbeRecheck`，`drainReady` 帧首执行）：vanilla `handleLightUpdatePacket` 只入队、后续 client tick 才落地，即时读数是旧值，首落地柱必然先采到一次 0（曾造成 flyrt11 门禁假阳性 FAIL）。观测口径：`clientDarkLightProbeSamples`（全部即时 0 采样，含首落地瞬态）、`clientDarkLightProbeChunks`（复检后仍黑的柱数，含从未亮过的）。三个计数器由 `ClientChunkHandler` 在 `debug.lightVerify` 开启时统计，故该场景必须有 profile 打开 `debug.lightVerify`（见 `scripts/smoke/profiles/flyroundtrip.profile.properties`），否则拿到恒 0 的假 PASS。
 
-单轮场景（`seedgen` / `modcompat` / `modcompat_strict` / `flyroundtrip` / `dictionary`）必须在 `scripts/smoke/analyzer.py` 的 `single_round_scenarios` 登记，否则 analyzer 按两轮判定 → `PROBE_MISSING` P0（harness 自己那条 `-Scenario` 白名单不参与该判定，只影响 ROUND2 统计提取）。
+单轮场景（`seedgen` / `modcompat` / `modcompat_strict` / `flyroundtrip` / `dictionary` / `trafficprofile` / `trafficfactory`）必须在 `scripts/smoke/analyzer.py` 的 `single_round_scenarios` 登记，否则 analyzer 按两轮判定 → `PROBE_MISSING` P0（harness 自己那条 `-Scenario` 白名单不参与该判定，只影响 ROUND2 统计提取）。
 
 存在 `scripts/smoke/profiles/<name>.profile.properties` 时，单会话脚本按键值对 patch 双端 hassium toml（客户端 `run/client/config/hassium/hassium-client.toml`、服务端 `run/server/config/hassium/hassium-server.toml`）。行式 `key=value`、`#` 注释；value 须为合法 TOML 字面量（字符串自带引号）。profile 文件不存在时整体 no-op。
 
 例：seedgen 场景需要 `seedgen` 档案提供双端 `chunk.seedGenEnabled=true`；dimension 场景无 toml 改动需求，无档案文件。
+
+### 流量画像
+
+通过 `scripts/traffic-profile.ps1` 串行运行，不加入通用 batch 矩阵。包装脚本备份并恢复原配置、字典、options 和客户端缓存；每次使用新的 SessionId，证据保存在 `build/traffic-profile/<SessionId>/`。
+
+| 场景 | 支持组合 | 内容与额外检查 |
+|---|---|---|
+| `trafficprofile` | 1.20.1 Forge、1.21.1 NeoForge | 创建独立新世界，普通活动、静止观察、16 组原版工厂各三段 60 秒，长按/间隔攻击各 60 秒；检查移动实际执行、静止位置/视角、机器产出和余料 |
+| `trafficfactory` | 1.21.1 NeoForge | 对指定真实工厂 ZIP 的独立副本冻结预热，解冻后按 20 TPS 测 60 秒；检查固定位置/视角、未冻结模拟和末尾方块活动。测点针对本次存档，不能把任意 ZIP 的结果直接视为有效样本 |
+
+普通冒烟 PASS 之外，还必须运行 `python scripts/smoke/analyze-traffic-profile.py build/traffic-profile/<SessionId>`。分析脚本校验窗口完整性、TPS、协议错误、原始包导出与计数器差异，并分别输出成功写出的 TCP 载荷和压缩前类型统计。真实工厂存档禁止传给 1.20.1；控制场景不使用 `/tick`。
+
+完整命令、字典口径、有效场次及限制见[流量画像报告](handoff/traffic-profile-2026-10-20.md)。全新 run 目录需先生成双端默认 TOML；未被 profile 显式固定的配置应结合保存的 `effective/` 文件复核。
 
 ## 外部 Mod 手动冒烟（C2ME / Starlight / ScalableLux）
 
@@ -648,6 +663,45 @@ build/smoke-test/
 ## 退役说明（UdpFailover / Nginx harness）
 
 1.1.2 的 UDP 控制面 failover 冒烟（`udp-failover` phase + nginx stream 反代 harness）已随 2.0.0 客户端 failover 套件退役并**全链删除**：脚本层 `-Phase UdpFailover` / `-NginxExePath` / `-ProxyPort` / `-DryRun` / `-InjectTcpClose` / `-SeamlessMode` 参数、`scripts/smoke/UdpFailoverSmoke.psm1`、`runtime-smoke-test.Tests.ps1`（Pester）、Java 侧 `udp-failover` / `dataplane` / `all` 死分支均已不存在；`network.dataPlane.recoveryFreeze` / `controlStallMs` / `failoverExpiryMs` 配置键亦已删。当前 `-SmokePhases` 仅剩 `classic` / `pregen`。历史拓扑与设计决策见 `docs/archive/multi-channel_network_research.md` 与 `docs/handoff/handoff-2026-08-09-network-core.md`。
+
+## 半在线休眠专项（2.X）
+
+当前只启用 1.20.1 Forge 和 1.21.1 NeoForge；入口及限制见 [休眠说明](semi-online-sleep.md)，已执行场次及测量见[验收记录](handoff/handoff-2026-10-21-semi-online-sleep.md)。同一 checkout 内各版本构建和游戏运行必须串行。
+
+推荐用包装脚本复跑；它在 finally 恢复字典、配置、options 和客户端缓存，并将临时世界与日志保留在 `build/traffic-profile/<SessionId>/`。每次使用新 SessionId。Dictionary 指向事先保存的聚合字典，不覆盖原始基线：
+
+```powershell
+.\scripts\traffic-profile.ps1 -Ver 1.20.1 -Loader forge -SessionId sleep_1201_new -Dictionary <dictionary.bin> -ScenarioOverride sleep
+.\scripts\traffic-profile.ps1 -Ver 1.21.1 -Loader neoforge -SessionId sleepmixed_1211_new -Dictionary <dictionary.bin> -ScenarioOverride sleepmixed
+```
+
+| 场景 | 关键断言 |
+|---|---|
+| `sleep` | 最后一名玩家离线 20 秒，受保护柱对象和卸载回调，两个漏斗的实际 ticker，正常票据交接 |
+| `sleepauto` | 开界面不自动进入，站桩自动进入且攻击/使用跨握手保持，松开不重放，世界可见，20 秒保载恢复；开发测试期限 1–1.5 秒 |
+| `sleepresume` | 新能力下仅渲染 3×3，同步/计算保留 5×5 光照邻柱；转向/移动/Esc/疾跑输入同连接恢复；直到远处测试柱恢复可见，每 tick 检查拉弓计时、攻击/使用按键及真实挖掘进度；连接/世界/玩家/附近实体对象不变；远处方块、纯 BE NBT、快照后的更新尾部及屋檐边界光照；不创建保载 |
+| `sleepmixed` | 另启真实普通观察者客户端；远近实体出入、原生位置基线、共享 dirty 不变、目标替换与耐久、Esc 和原长按 |
+| `sleepsafety` | 低血量拒绝进入且连接保留；相等阈值、吸收生命、图腾、改血、恢复中伤害与真实死亡 |
+| `sleepexpiry` | 10 秒测试期限、错误代次及重复请求、过期不再自动连接、注入一次恢复连接失败后等待手动操作 |
+| `sleeptraffic` | 独立原版工厂，站桩/长按/间隔攻击各正常约 30 秒与休眠约 30 秒，并计完整恢复成本 |
+| `sleepfactory` | 仅原生 1.21.1 工厂 ZIP 副本；预热后解除冻结，真实 tick 及同样的完整流量周期 |
+| `sleepwindowtraffic` | 独立原版工厂，三个输入模式分别正常/3×3 休眠约 30 秒；逐 tick 核对状态及 9/25 柱；同连接恢复至少观察 30 秒且原可见范围已补齐；成功 TCP 写入计量、工厂产量及 TPS |
+
+`sleeptraffic` / `sleepfactory` 保留旧重连测量；窗口方案使用 `-ScenarioOverride sleepwindowtraffic`，两端均生成自己的隔离工厂世界，无需 WorldZip。用 `python scripts/smoke/analyze-sleep-window-traffic.py build/traffic-profile/<SessionId>` 分析。恢复窗口包含实际加载和至少 30 秒背景流量，没有注入离线等待；同时报告全部进入/恢复字节的保守回本时间及扣除同期正常流量的增量回本时间。每输入模式仅一个相邻样本，不能当成多次重复统计。
+
+`-ScenarioOverride cachenbt` 单独验证普通缓存的 R1/R2 方块实体 NBT 一致性，不进入休眠。R1 建立原规格石墙和八块告示牌；离线后检查点覆盖文字/涂蜡修改、完全不变、清空文字、删除 BE、替换为箱子。其中 `(0,0)` 柱只改 NBT，`(2,0)` 柱另改墙体和 BE 方块类型。服务端打印前后方块哈希与离线玩家数，客户端记录磁盘 NBT、postLoad 后的 R1 值与 R2 实际值。R2 验收后，开发夹具故意破坏客户端/影子缓存中的涂蜡状态，保持方块哈希不变，再请求权威 FULL；`nbt round=3` 验证回退真正替换 NBT。它是同一 R2 连接内的附加检查，不是第三次登录。运行 `python scripts/smoke/analyze-cache-nbt.py build/traffic-profile/<SessionId>` 检查 24 项状态、磁盘恢复、UNCHANGED 和 FULL 回退证据。诊断保留真实 FAIL，不能将缺陷复现改标 PASS。
+
+`sleepmixed` 的普通观察者使用独立 run 目录和 `SleepObserver` 身份，在主玩家加入后启动，避免并发 FML 初始协商扰动。故障场景缩短期限不改变生产默认的 300 秒。安全场景关闭测试世界自然回血，避免 6 HP 的进入拒绝夹具先被饱食回血改变。
+
+这些场景在 `dump world=true` 时要求真实世界已驻留并有非空气区块，继续要求原生握手、聚合及各场景探针通过；不以旧显示统计四舍五入后的节省比例作流量门禁。真实成功 TCP 写入单独计量，登录和重连也计入，输出 `sleep-traffic.json`：
+
+```powershell
+python scripts/smoke/analyze-sleep-traffic.py build/traffic-profile/<SessionId>
+```
+
+`qualityProblems` 必须为空。阶段标签异步延迟、窗口过短、冻结或慢速世界、无工厂产出均不能作为有效收益。确认包数量应按同一输入的正常/休眠成对核对，不能把普通长按当作连点。
+
+用户的 1.21.1 ZIP 仅供 `-Ver 1.21.1 -Loader neoforge -ScenarioOverride sleepfactory -WorldZip <原生1.21.1.zip>` 使用；脚本解压到副本并记录源 SHA256，不迁移到 1.20.1。
 
 ## 聚合 v3 迁移专项
 

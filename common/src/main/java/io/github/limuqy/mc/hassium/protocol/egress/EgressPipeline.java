@@ -64,7 +64,7 @@ public final class EgressPipeline {
         catch (Exception ignored) { /* Unknown metadata is a direct barrier, never a speculative decode. */ }
         boolean barrier = EgressProtocol.terminal(packet) || Boolean.TRUE.equals(ctx.channel().attr(CALLBACK).get())
                 || key == null || key.contains("bundle_delimiter") || key.contains("disconnect")
-                || key.contains("keep_alive") || key.contains("start_configuration")
+                || key.contains("keep_alive") || key.contains("start_configuration") || key.contains("sleep_control_")
                 || Services.NETWORK_MANAGER.isEgressControlChannel(key) || !PacketCompressionBlacklist.shouldAggregate(key);
         if (map.size() >= EgressFrameCodec.MAX_PACKETS) map.clear();
         map.put(bytes, new Metadata(key, protocol, barrier));

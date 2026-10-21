@@ -93,6 +93,8 @@ public final class ConfigSnapshotAdapter {
                 .with(ConfigSchema.MASTER_ENTITY_MAX_THROTTLE_FACTOR, master.entityMaxThrottleFactor())
                 .with(ConfigSchema.MASTER_ENTITY_FRAME_BUDGET_PER_PLAYER, master.entityFrameBudgetPerPlayer())
                 .with(ConfigSchema.MASTER_ENTITY_SMOOTH_PUSH, master.entitySmoothPushEnabled())
+                .with(ConfigSchema.MASTER_SLEEP_ENABLED, master.sleepEnabled())
+                .with(ConfigSchema.MASTER_SLEEP_WAKE_HOLD_SECONDS, master.sleepWakeHoldSeconds())
                 .with(ConfigSchema.SERVER_CHUNK_SEED_GEN_ENABLED, config.serverSeedGenEnabled());
 
         HassiumConfig.CompatConfig compat = config.compat();
@@ -142,7 +144,8 @@ public final class ConfigSnapshotAdapter {
                 values.get(ConfigSchema.MASTER_ENTITY_DENSITY_TIER_FACTORS),
                 values.get(ConfigSchema.MASTER_ENTITY_MAX_THROTTLE_FACTOR),
                 values.get(ConfigSchema.MASTER_ENTITY_FRAME_BUDGET_PER_PLAYER),
-                values.get(ConfigSchema.MASTER_ENTITY_SMOOTH_PUSH));
+                values.get(ConfigSchema.MASTER_ENTITY_SMOOTH_PUSH),
+                values.get(ConfigSchema.MASTER_SLEEP_ENABLED), values.get(ConfigSchema.MASTER_SLEEP_WAKE_HOLD_SECONDS));
         HassiumConfig.CompatConfig compat = new HassiumConfig.CompatConfig(
                 values.get(ConfigSchema.COMPAT_REQUIRE_CLIENT_MOD), values.get(ConfigSchema.COMPAT_AUTO_DOWNGRADE));
         HassiumConfig.DebugConfig debug = new HassiumConfig.DebugConfig(

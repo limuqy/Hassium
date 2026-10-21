@@ -127,6 +127,14 @@ if ($WorldZip) {
     if ($SessionId -notmatch '^[a-zA-Z0-9_.-]+$') { throw 'Fixture SessionId must use letters, digits, dots, hyphens or underscores' }
     $serverLevelName = "smoke_fixture_${Loader}_" + ($Ver -replace '\.', '_') + "_${SessionId}"
 }
+if ($Scenario -in @('trafficprofile','sleep','sleepauto','sleepresume','sleepsafety','sleepexpiry','sleepmixed','sleeptraffic','sleepwindowtraffic','cachenbt')) {
+    if ($WorldZip -or $CleanWorld) { throw 'trafficprofile creates its own fresh world; do not pass WorldZip or CleanWorld' }
+    if ($SessionId -notmatch '^[a-zA-Z0-9_.-]+$') { throw 'Invalid traffic profile SessionId' }
+    $serverLevelName = "smoke_profile_${Loader}_" + ($Ver -replace '\.', '_') + "_${SessionId}"
+    if (Test-Path -LiteralPath (Join-Path $serverRunDir $serverLevelName)) {
+        throw 'Traffic profile world already exists; use a new SessionId to preserve previous evidence'
+    }
+}
 $serverLevelDir = Join-Path $serverRunDir $serverLevelName
 
 # Loader × MC 版本支持校验：真相源是 versionProperties/{Ver}.properties 的 builds_for
@@ -778,6 +786,18 @@ $clientProc = Start-Process -FilePath $gradlew `
     -RedirectStandardError $clientErr `
     -PassThru -WindowStyle Hidden
 
+$observerProc = $null
+if ($Scenario -eq 'sleepmixed') {
+    $observerDir = Join-Path $logRoot "observer/$SessionId"
+    New-Item -ItemType Directory -Force -Path "$observerDir/config/hassium" | Out-Null
+    Copy-Item -LiteralPath (Join-Path $clientRunDir 'options.txt') -Destination "$observerDir/options.txt"
+    Copy-Item -LiteralPath (Join-Path $clientRunDir 'config/hassium/hassium-client.toml') -Destination "$observerDir/config/hassium/hassium-client.toml"
+    $observerArgs = @('--no-daemon', "-Dorg.gradle.jvmargs=-Xmx2G -DsmokeSession=${SessionId}_observer",
+        ":${Loader}:runClient", "-Pmc_ver=$Ver", '-PhassiumSmokeTest=true', "-PhassiumSmokeHost=$effectiveHost",
+        '-PhassiumSmokeScenario=sleepobserver', '-PhassiumSmokeUsername=SleepObserver',
+        "-PhassiumSmokeClientRunDir=$observerDir", '-PhassiumSmokePhases=classic')
+}
+
 # 8. 等待客户端退出（最长 ClientTimeoutSec 秒）
 Write-Host "[$SessionId] [7/9] 等待客户端退出 (超时 ${ClientTimeoutSec}s)..."
 $clientDeadline = (Get-Date).AddSeconds($ClientTimeoutSec)
@@ -788,6 +808,11 @@ $stallSec = 0
 $lastLogBytes = -1
 while (-not $clientProc.HasExited -and (Get-Date) -lt $clientDeadline) {
     Start-Sleep -Seconds 1
+    if ($Scenario -eq 'sleepmixed' -and -not $observerProc -and
+            (Select-String -LiteralPath $clientLog -Pattern 'MIXED_JOIN player entered world' -Quiet -ErrorAction SilentlyContinue)) {
+        $observerProc = Start-Process -FilePath $gradlew -ArgumentList $observerArgs -WindowStyle Hidden -PassThru `
+            -RedirectStandardOutput (Join-Path $logDir "observer_$SessionId.log") -RedirectStandardError (Join-Path $logDir "observer_$SessionId.err.log")
+    }
     $logBytes = if (Test-Path $clientLog) { (Get-Item $clientLog).Length } else { 0 }
     if ($logBytes -ne $lastLogBytes) {
         $lastLogBytes = $logBytes
@@ -810,13 +835,17 @@ if (-not $clientProc.HasExited) {
     Stop-Process -Id $clientProc.Id -Force -ErrorAction SilentlyContinue
 }
 $clientExit = if ($clientProc.ExitCode) { $clientProc.ExitCode } else { 0 }
+if ($observerProc -and ($observerProc.HasExited -eq $false -or $observerProc.ExitCode -ne 0)) {
+    Write-Host "[$SessionId] Mixed observer did not complete successfully"
+    $clientExit = 2
+}
 
 # 9. 解析结果 + 提取统计
 Write-Host "[$SessionId] [8/9] 解析结果 (客户端退出码: $clientExit)..."
 # 单轮场景没有 ROUND2；不得把未运行的轮次写成 stats=false / pass=false。
 # flyroundtrip：单轮往返飞行黑块专项（join → 飞出去 → 掉头飞回 → dump ROUND1 → assertProbe → exit rounds=1）。
 # dictionary：单轮字典热更 rollout（join → /tick rate 200 → 等训练+offer+ACK 切换 → dump ROUND1 → exit rounds=1）。
-$requiresRound2 = $Scenario -notin @("seedgen", "ovdgen", "modcompat", "modcompat_strict", "flyroundtrip", "dictionary")
+$requiresRound2 = $Scenario -notin @("seedgen", "ovdgen", "modcompat", "modcompat_strict", "flyroundtrip", "dictionary", "trafficprofile", "trafficfactory", "sleepsafety", "sleepexpiry")
 $clientContent = if (Test-Path $clientLog) { Get-Content $clientLog -Raw } else { "" }
 
 # F17：Gradle 会把 fork 出的游戏 JVM 的真实退出码写进自己的失败信息（在 client 的 stderr 日志里）。挂起被系统关闭时是
