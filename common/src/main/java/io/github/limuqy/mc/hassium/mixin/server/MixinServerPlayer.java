@@ -19,13 +19,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  */
 @Mixin(ServerPlayer.class)
 public abstract class MixinServerPlayer extends Player {
-#if MC_VER < MC_1_21_2
-    @Inject(method = "hurt", at = @At("RETURN"))
-    private void hassium$sleepAfterDamage(net.minecraft.world.damagesource.DamageSource source, float damage, org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable<Boolean> ci) {
-        io.github.limuqy.mc.hassium.server.sleep.SleepServer.checkHealth((ServerPlayer)(Object)this);
-    }
-#endif
-
     public MixinServerPlayer(Level level, BlockPos pos, float yRot, GameProfile gameProfile) {
 #if MC_VER < MC_1_21_6
         super(level, pos, yRot, gameProfile);

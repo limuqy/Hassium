@@ -421,7 +421,16 @@ public final class ScenarioEngine {
         String action=step.param("action");
         if(sleepInputStep!=index) {
             sleepInputStep=index;
-            if("auto_menu".equals(action)) {
+            if("disabled".equals(action)) {
+                io.github.limuqy.mc.hassium.client.sleep.SleepClient.testAutoDelay(1000);
+                io.github.limuqy.mc.hassium.client.sleep.SleepClient.enter();
+                mc.pauseGame(false);
+                for(var child:mc.screen.children()) if(child instanceof net.minecraft.client.gui.components.Button button
+                        && button.getMessage().getString().equals(net.minecraft.network.chat.Component.translatable("hassium.sleep.enter").getString()))
+                    throw new IllegalStateException("Disabled sleep still has a menu entry");
+                mc.setScreen(null);
+            }
+            else if("auto_menu".equals(action)) {
                 io.github.limuqy.mc.hassium.client.sleep.SleepClient.testAutoDelay(1000);
                 mc.setScreen(new io.github.limuqy.mc.hassium.client.sleep.SleepSetupScreen(null));
             }
@@ -439,22 +448,7 @@ public final class ScenarioEngine {
                     mc.pauseGame(false);
                     pressSleepButton(mc,"hassium.sleep.enter");
                     pressSleepButton(mc,"hassium.sleep.enter");
-                } else io.github.limuqy.mc.hassium.client.sleep.SleepClient.enter(Float.parseFloat(step.param("threshold")==null?"6":step.param("threshold")));
-            }
-            else if("panel".equals(action)) {
-                io.github.limuqy.mc.hassium.client.sleep.SleepClient.showPanel();
-                if(!(mc.screen instanceof io.github.limuqy.mc.hassium.client.sleep.SleepPanelScreen)) throw new IllegalStateException("Sleep legacy panel missing");
-                pressSleepButton(mc,"hassium.sleep.continue");
-                LOGGER.info("HassiumSmokeTest:SLEEP panel buttons verified"); return Outcome.DONE;
-            }
-            else if("disconnected".equals(action)) { }
-            else if("reject".equals(action)) {
-                if(mc.getConnection()==null) throw new IllegalStateException("Sleep rejection lost normal connection");
-                io.github.limuqy.mc.hassium.client.sleep.SleepClient.enter(Float.parseFloat(step.param("threshold")==null?"6":step.param("threshold")));
-            }
-            else if("manual".equals(action)) {
-                io.github.limuqy.mc.hassium.client.sleep.SleepClient.allowManualConnection();
-                disconnectAtMs=now; return Outcome.DONE;
+                } else io.github.limuqy.mc.hassium.client.sleep.SleepClient.enter();
             }
             else if("observer".equals(action)) { io.github.limuqy.mc.hassium.compat.SleepProbeCompat.assertObserver(); return Outcome.DONE; }
             else if("afk_baseline".equals(action)) { io.github.limuqy.mc.hassium.compat.SleepProbeCompat.assertAfk(); return Outcome.DONE; }
@@ -486,7 +480,7 @@ public final class ScenarioEngine {
             }
             else if("resume".equals(action)) {
                 io.github.limuqy.mc.hassium.client.sleep.SleepClient.testAutoDelay(0);
-                if(!io.github.limuqy.mc.hassium.client.sleep.SleepClient.inPlaceSupported()
+                if(!io.github.limuqy.mc.hassium.client.sleep.SleepClient.supported()
                         || io.github.limuqy.mc.hassium.client.sleep.SleepClient.state()!=io.github.limuqy.mc.hassium.client.sleep.SleepClient.State.SLEEPING)
                     throw new IllegalStateException("In-place sleep capability/state missing");
                 sleepResumeConnection=mc.getConnection().getConnection(); sleepResumeLevel=mc.level; sleepResumePlayer=mc.player;
@@ -510,21 +504,19 @@ public final class ScenarioEngine {
                 if(damage<step.longParam("minimumDamage",1)) throw new IllegalStateException("Sleep inventory durability not synchronized: "+damage);
                 LOGGER.info("HassiumSmokeTest:SLEEP inventory damage={}",damage); return Outcome.DONE;
             }
-            else if("expire".equals(action)) {
-                io.github.limuqy.mc.hassium.client.sleep.SleepClient.testReconnectDelay(30_000);
-                io.github.limuqy.mc.hassium.client.sleep.SleepClient.testLegacyWake();
-                io.github.limuqy.mc.hassium.client.sleep.SleepClient.testDuplicateWake();
-            }
-            else if("wake_safety".equals(action) || "wake_failure".equals(action)) {
-                io.github.limuqy.mc.hassium.client.sleep.SleepClient.testReconnectDelay(1000);
-                io.github.limuqy.mc.hassium.client.sleep.SleepClient.testLegacyWake();
-            }
             else if("wake".equals(action)) {
-                io.github.limuqy.mc.hassium.client.sleep.SleepClient.testReconnectDelay(step.longParam("offlineMs",5000));
-                io.github.limuqy.mc.hassium.client.sleep.SleepClient.testLegacyWake();
+                io.github.limuqy.mc.hassium.client.sleep.SleepClient.wake();
             } else throw new IllegalArgumentException("Unknown sleep action "+action);
         }
         var state=io.github.limuqy.mc.hassium.client.sleep.SleepClient.state();
+        if("disabled".equals(action)) {
+            if(io.github.limuqy.mc.hassium.client.sleep.SleepClient.supported()
+                    || state!=io.github.limuqy.mc.hassium.client.sleep.SleepClient.State.IDLE)
+                throw new IllegalStateException("Disabled sleep negotiated or entered");
+            if(now-stepStartMs<2500) return Outcome.RUNNING;
+            io.github.limuqy.mc.hassium.client.sleep.SleepClient.testAutoDelay(0);
+            LOGGER.info("HassiumSmokeTest:SLEEP disabled capability/menu/manual/automatic verified"); return Outcome.DONE;
+        }
         if("traffic_wake".equals(action)) {
             if(mc.getConnection()==null || mc.getConnection().getConnection()!=sleepResumeConnection || mc.level!=sleepResumeLevel || mc.player!=sleepResumePlayer)
                 throw new IllegalStateException("Traffic recovery recreated connection/world/player");
@@ -549,7 +541,7 @@ public final class ScenarioEngine {
             boolean escape="esc".equals(step.param("trigger"));
             if(mc.getConnection()==null || mc.getConnection().getConnection()!=sleepResumeConnection || mc.level!=sleepResumeLevel || mc.player!=sleepResumePlayer)
                 throw new IllegalStateException("In-place resume recreated connection/world/player");
-            if(!escape && (!mc.options.keyAttack.isDown() || !mc.options.keyUse.isDown() || io.github.limuqy.mc.hassium.client.sleep.SleepClient.blocksInput()))
+            if(!escape && (!mc.options.keyAttack.isDown() || !mc.options.keyUse.isDown()))
                 throw new IllegalStateException("In-place resume interrupted held input");
             if(!escape && step.boolParam("using",false) && !mc.player.isUsingItem()) throw new IllegalStateException("In-place resume interrupted bow use");
             if(!escape && step.boolParam("using",false)) {
@@ -591,8 +583,11 @@ public final class ScenarioEngine {
                 throw new IllegalStateException("Auto sleep stole an open screen");
             if(now-stepStartMs<2500) return Outcome.RUNNING;
             io.github.limuqy.mc.hassium.compat.SleepProbeCompat.capture("sleep-settings");
+            for(var child:mc.screen.children()) if(child instanceof net.minecraft.client.gui.components.EditBox input) input.setValue("15");
             pressSleepButton(mc,"hassium.sleep.save");
             if(mc.screen!=null) throw new IllegalStateException("Sleep settings did not return to game");
+            if(io.github.limuqy.mc.hassium.client.sleep.SleepProfiles.autoSeconds()!=900)
+                throw new IllegalStateException("Configured 15-minute sleep delay was not saved");
             LOGGER.info("HassiumSmokeTest:SLEEP auto menu gate and settings save verified"); return Outcome.DONE;
         }
         if("release".equals(action)) {
@@ -601,8 +596,7 @@ public final class ScenarioEngine {
             LOGGER.info("HassiumSmokeTest:SLEEP released input remained released"); return Outcome.DONE;
         }
         if("auto".equals(action)) {
-            if(mc.screen!=null || mc.options.keyAttack.isDown()==sleepAutoReleased || !mc.options.keyUse.isDown()
-                    || io.github.limuqy.mc.hassium.client.sleep.SleepClient.blocksInput())
+            if(mc.screen!=null || mc.options.keyAttack.isDown()==sleepAutoReleased || !mc.options.keyUse.isDown())
                 throw new IllegalStateException("Auto sleep interrupted held input or focus");
             if(state==io.github.limuqy.mc.hassium.client.sleep.SleepClient.State.ENTERING) {
                 sleepAutoEntering=true;
@@ -613,22 +607,6 @@ public final class ScenarioEngine {
                 LOGGER.info("HassiumSmokeTest:SLEEP automatic entry input uninterrupted; attackReleasedDuringEntry={}",sleepAutoReleased); return Outcome.DONE;
             }
             if(now-stepStartMs>10_000) throw new IllegalStateException("Auto sleep did not enter");
-            return Outcome.RUNNING;
-        }
-        if("reject".equals(action)) {
-            if(state==io.github.limuqy.mc.hassium.client.sleep.SleepClient.State.IDLE && mc.player!=null && mc.getConnection()!=null
-                    && mc.screen instanceof io.github.limuqy.mc.hassium.client.sleep.SleepPanelScreen) {
-                pressSleepButton(mc,"menu.returnToGame");
-                LOGGER.info("HassiumSmokeTest:SLEEP rejected entry, normal connection retained"); return Outcome.DONE;
-            }
-            if(now-stepStartMs>10_000) { fail("SLEEP expected entry rejection without disconnect",3); return Outcome.DONE; }
-            return Outcome.RUNNING;
-        }
-        if("disconnected".equals(action) || "expire".equals(action) || "wake_safety".equals(action) || "wake_failure".equals(action)) {
-            if(state==io.github.limuqy.mc.hassium.client.sleep.SleepClient.State.IDLE && mc.getConnection()==null && mc.player==null) {
-                LOGGER.info("HassiumSmokeTest:SLEEP action={} noAutomaticReconnect=true",action); return Outcome.DONE;
-            }
-            if(now-stepStartMs>60_000) { fail("SLEEP expected disconnect/expiry: "+action,3); return Outcome.DONE; }
             return Outcome.RUNNING;
         }
         boolean done="enter".equals(action) ? state==io.github.limuqy.mc.hassium.client.sleep.SleepClient.State.SLEEPING
@@ -648,6 +626,8 @@ public final class ScenarioEngine {
 
     private static Outcome execInput(ScenarioStep step, Minecraft mc, long now) {
         if (mc.player == null) return Outcome.RUNNING;
+        if(step.param("maxHealth")!=null && mc.player.getHealth()>Float.parseFloat(step.param("maxHealth")))
+            throw new IllegalStateException("Health fixture did not reach the requested value: "+mc.player.getHealth());
         String expectedSleep=step.param("sleepState");
         if(expectedSleep!=null) {
             var sleep=io.github.limuqy.mc.hassium.client.sleep.SleepClient.state();
@@ -803,8 +783,7 @@ public final class ScenarioEngine {
             return Outcome.DONE;
         }
         LOGGER.info("HassiumSmokeTest: reconnecting to {}", host);
-        if(step.boolParam("sleep",false)) io.github.limuqy.mc.hassium.client.sleep.SleepClient.reconnectManually();
-        else triggerReconnect(mc);
+        triggerReconnect(mc);
         return Outcome.DONE;
     }
 

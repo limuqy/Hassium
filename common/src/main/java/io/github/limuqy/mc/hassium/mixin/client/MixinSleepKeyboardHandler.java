@@ -13,7 +13,7 @@ public abstract class MixinSleepKeyboardHandler {
     @Inject(method="keyPress",at=@At("HEAD"))
     private void hassium$sleepEscape(long window,int key,int scanCode,int action,int modifiers,CallbackInfo ci) {
         if(window==Minecraft.getInstance().getWindow().getWindow() && key==org.lwjgl.glfw.GLFW.GLFW_KEY_ESCAPE
-                && action==org.lwjgl.glfw.GLFW.GLFW_PRESS && SleepClient.inPlaceSupported()) SleepClient.wake();
+                && action==org.lwjgl.glfw.GLFW.GLFW_PRESS) SleepClient.wake();
     }
 #endif
 }

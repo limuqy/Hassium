@@ -32,7 +32,7 @@ public final class SleepTerrainClient {
     private static final java.util.Set<Long> testDrawn=new java.util.HashSet<>();
     private static int testCulled;
     private SleepTerrainClient() {}
-    public static boolean supported() { return LoginCaps.has(ClientLoginNegotiation.current(),LoginCaps.SLEEP_WINDOW); }
+    public static boolean supported() { return LoginCaps.has(ClientLoginNegotiation.current(),LoginCaps.SLEEP); }
     public static boolean restricted() { return sleeping && window!=null; }
     public static boolean moved(int x,int z) { var w=window; return sleeping && w!=null && (w.x()!=x || w.z()!=z); }
     public static boolean canEnter(int x,int z) {
@@ -103,9 +103,7 @@ public final class SleepTerrainClient {
         c.retryAt=System.nanoTime()+30_000_000_000L;
         invalidate(DimensionKey.key(dim,pos.x,pos.z));
         send(SleepControl.Op.COLUMN_REQUEST,DimensionKey.key(dim,pos.x,pos.z),0);
-        if(LoginCaps.has(ClientLoginNegotiation.current(),LoginCaps.PULL_NBT))
-            ShadowPullClient.requestFull(dim,java.util.List.of(pos));
-        else ShadowPullClient.requestAuthoritativeFull(dim,java.util.List.of(pos));
+        ShadowPullClient.requestFull(dim,java.util.List.of(pos));
         return true;
     }
     public static boolean acceptResponse(String dim,int x,int z,long request) {
@@ -187,7 +185,7 @@ public final class SleepTerrainClient {
         if(c!=null) restart(key,c);
     }
     private static synchronized void send(SleepControl.Op op,long key,long request) {
-        Services.NETWORK_MANAGER.sendSleepControlToServer(SleepControl.encode(new SleepControl.Message(op,generation,sequence.incrementAndGet(),0,0,
+        Services.NETWORK_MANAGER.sendSleepControlToServer(SleepControl.encode(new SleepControl.Message(op,generation,sequence.incrementAndGet(),
                 DimensionKey.chunkXOf(key)+","+DimensionKey.chunkZOf(key)+","+request)));
     }
     public static void reset() { sleeping=false; window=null; dimension=null; columns.clear(); generation=0; sequence.set(0); }

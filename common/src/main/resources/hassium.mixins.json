@@ -17,10 +17,6 @@
         "server.SleepServerEntityAccess",
         "server.SleepVecDeltaAccess",
         "server.SleepTrackedEntityAccess",
-        "server.MixinSleepChunkProbe",
-        "server.MixinSleepBlockEntityProbe",
-        "server.SleepDistanceManagerAccess",
-        "server.SleepTickingTrackerAccess",
         "shadow.SimpleRegionStorageAccessor",
         "shadow.IOWorkerAccessor",
         "shadow.SectionStorageAccessor",
@@ -50,7 +46,6 @@
     "client": [
         "client.MixinMinecraft",
         "client.MixinSleepPauseScreen",
-        "client.MixinSleepConnectScreen",
         "client.MixinSleepMinecraft",
         "client.MixinSleepKeyboardHandler",
         "client.MixinSleepGameRenderer",

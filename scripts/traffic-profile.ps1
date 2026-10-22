@@ -5,7 +5,7 @@ param(
     # Use the same saved dictionary for both runs; the original is restored afterwards.
     [Parameter(Mandatory=$true)][string]$Dictionary,
     [string]$WorldZip = "",
-    [ValidateSet('','sleep','sleepauto','sleepresume','sleepsafety','sleepexpiry','sleepmixed','sleeptraffic','sleepfactory','sleepwindowtraffic','cachenbt')][string]$ScenarioOverride = "",
+    [ValidateSet('','sleepdisabled','sleepauto','sleepresume','sleepmixed','sleepfactory','sleepwindowtraffic','cachenbt')][string]$ScenarioOverride = "",
     [switch]$Offline
 )
 $ErrorActionPreference = 'Stop'

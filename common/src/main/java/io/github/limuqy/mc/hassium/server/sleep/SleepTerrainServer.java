@@ -53,7 +53,7 @@ public final class SleepTerrainServer {
         return w;
     }
     public static void enter(ServerPlayer player,long generation) {
-        if(ServerHandshakeActivation.hasCaps(player.getUUID(),LoginCaps.SLEEP_WINDOW)
+        if(ServerHandshakeActivation.hasCaps(player.getUUID(),LoginCaps.SLEEP)
                 && io.github.limuqy.mc.hassium.utils.DimensionKey.isCacheableDimension(LevelCompat.getDimensionId(PlayerCompat.getServerLevel(player))))
             windows.put(PlayerCompat.getConnection(player),new Window(player,generation));
     }
@@ -66,7 +66,7 @@ public final class SleepTerrainServer {
         Connection connection=PlayerCompat.getConnection(player);
         Window w=connection==null?null:windows.get(connection); return w==null || !w.sleeping || w.area.light(x,z);
     }
-    /** Called in the same server tick that captured the FULL snapshot, before any later mutation. */
+    /** Called in the same server tick that captured the current snapshot, before any later mutation. */
     public static void snapshot(ServerPlayer player,int x,int z,long request) {
         Window w=current(player);
         if(w==null || w.sleeping || !w.dirty(x,z)) return;
@@ -134,9 +134,9 @@ public final class SleepTerrainServer {
                 if(Math.abs((long)x-w.area.x())<=w.radius && Math.abs((long)z-w.area.z())<=w.radius) w.ready.add(key);
                 for(var packet:p.updates.values()) SleepServer.emit(connection,packet.restore(PlayerCompat.getServerLevel(player).registryAccess()));
             }
-            // On overflow request another current FULL; never replay a truncated history.
+            // On overflow request another current snapshot; never replay a truncated history.
             Services.NETWORK_MANAGER.sendSleepControl(player,SleepControl.encode(new SleepControl.Message(
-                    p.updates.overflowed()?SleepControl.Op.COLUMN_RETRY:SleepControl.Op.COLUMN_READY,w.generation,++w.sequence,0,0,m.detail())));
+                    p.updates.overflowed()?SleepControl.Op.COLUMN_RETRY:SleepControl.Op.COLUMN_READY,w.generation,++w.sequence,m.detail())));
         } catch(NumberFormatException ignored) { }
     }
     public static void disconnected(Connection connection) { windows.remove(connection); }

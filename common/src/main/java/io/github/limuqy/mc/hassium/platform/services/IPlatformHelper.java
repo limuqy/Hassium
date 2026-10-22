@@ -7,12 +7,6 @@ public interface IPlatformHelper {
     /** Null means this server's installed mod set has a reviewed sleep policy. */
     default String sleepCompatibilityIssue() { return "Sleep is not validated on this loader"; }
 
-    /** An in-memory, radius-zero force-tick marker; exact load/tick levels are pinned separately. */
-    default void setSleepForceTick(net.minecraft.server.level.ServerLevel level, net.minecraft.world.level.ChunkPos pos,
-                                   java.util.UUID lease, boolean add) {
-        throw new UnsupportedOperationException("Sleep force ticking is not supported on this loader");
-    }
-
     /**
      * Gets the name of the current platform
      *

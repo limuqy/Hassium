@@ -105,10 +105,8 @@ public final class ConfigSchema {
     public static final ConfigKey<Integer> MASTER_ENTITY_FRAME_BUDGET_PER_PLAYER = integer("master.entityFrameBudgetPerPlayer", ConfigScope.SERVER, Domain.MASTER_CORE, 256, 0, 100000,
             "每个玩家每 tick 期望收到的实体更新包数（默认 256）。某个玩家持续超过这个量时，他视野内的实体更新会自动变稀，避免卡顿；0 = 不做这个自动限制",
             "Expected entity update packets per player per tick (default 256). When a player keeps exceeding it, entities in their view are updated less often to avoid lag; 0 = no automatic limit");
-    public static final ConfigKey<Boolean> MASTER_SLEEP_ENABLED = bool("master.sleepEnabled", ConfigScope.SERVER, Domain.MASTER_CORE, true,
-            "允许双端协商后的手动半在线休眠", "Allow negotiated manual semi-online sleep");
-    public static final ConfigKey<Integer> MASTER_SLEEP_WAKE_HOLD_SECONDS = integer("master.sleepWakeHoldSeconds", ConfigScope.SERVER, Domain.MASTER_CORE, 300, 10, 3600,
-            "主动恢复重连的临时保载宽限（秒）；到期释放，不因重试延长", "Reconnect chunk hold lifetime in seconds; retries never extend it");
+    public static final ConfigKey<Boolean> MASTER_SLEEP_ENABLED = bool("master.sleepEnabled", ConfigScope.SERVER, Domain.MASTER_CORE, false,
+            "允许双端协商后的手动或自动半在线休眠（默认关闭）", "Allow negotiated manual or automatic semi-online sleep (disabled by default)");
     public static final ConfigKey<Boolean> MASTER_ENTITY_SMOOTH_PUSH = bool("master.entitySmoothPushEnabled", ConfigScope.SERVER, Domain.MASTER_CORE, true,
             "实体错峰推送：同一更新间隔的实体按 UUID 稳定错开发送时刻，3 刻总量不变但不再齐发尖峰。默认开；关闭后退回原版齐发",
             "Entity smooth push: entities sharing the same update interval are phase-staggered by UUID so total volume over an interval is unchanged but the per-tick spike is flattened. Enabled by default");

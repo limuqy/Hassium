@@ -437,9 +437,7 @@ public final class ShadowTrackingSession {
             }
         }
         drainAuthorityAcquires(shadow, now);
-        if (!io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.restricted()
-                && (!io.github.limuqy.mc.hassium.client.sleep.SleepClient.sleeping()
-                || io.github.limuqy.mc.hassium.client.sleep.SleepClient.inPlaceSupported())) sweepOvdRing(shadow, now);
+        if (!io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.restricted()) sweepOvdRing(shadow, now);
         VanillaAlignedChunkProvider.drainPendingPulls();
     }
 

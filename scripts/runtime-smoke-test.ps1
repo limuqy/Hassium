@@ -127,7 +127,7 @@ if ($WorldZip) {
     if ($SessionId -notmatch '^[a-zA-Z0-9_.-]+$') { throw 'Fixture SessionId must use letters, digits, dots, hyphens or underscores' }
     $serverLevelName = "smoke_fixture_${Loader}_" + ($Ver -replace '\.', '_') + "_${SessionId}"
 }
-if ($Scenario -in @('trafficprofile','sleep','sleepauto','sleepresume','sleepsafety','sleepexpiry','sleepmixed','sleeptraffic','sleepwindowtraffic','cachenbt')) {
+if ($Scenario -in @('trafficprofile','sleepdisabled','sleepauto','sleepresume','sleepmixed','sleepwindowtraffic','cachenbt')) {
     if ($WorldZip -or $CleanWorld) { throw 'trafficprofile creates its own fresh world; do not pass WorldZip or CleanWorld' }
     if ($SessionId -notmatch '^[a-zA-Z0-9_.-]+$') { throw 'Invalid traffic profile SessionId' }
     $serverLevelName = "smoke_profile_${Loader}_" + ($Ver -replace '\.', '_') + "_${SessionId}"
@@ -845,7 +845,7 @@ Write-Host "[$SessionId] [8/9] 解析结果 (客户端退出码: $clientExit)...
 # 单轮场景没有 ROUND2；不得把未运行的轮次写成 stats=false / pass=false。
 # flyroundtrip：单轮往返飞行黑块专项（join → 飞出去 → 掉头飞回 → dump ROUND1 → assertProbe → exit rounds=1）。
 # dictionary：单轮字典热更 rollout（join → /tick rate 200 → 等训练+offer+ACK 切换 → dump ROUND1 → exit rounds=1）。
-$requiresRound2 = $Scenario -notin @("seedgen", "ovdgen", "modcompat", "modcompat_strict", "flyroundtrip", "dictionary", "trafficprofile", "trafficfactory", "sleepsafety", "sleepexpiry")
+$requiresRound2 = $Scenario -notin @("seedgen", "ovdgen", "modcompat", "modcompat_strict", "flyroundtrip", "dictionary", "trafficprofile", "trafficfactory")
 $clientContent = if (Test-Path $clientLog) { Get-Content $clientLog -Raw } else { "" }
 
 # F17：Gradle 会把 fork 出的游戏 JVM 的真实退出码写进自己的失败信息（在 client 的 stderr 日志里）。挂起被系统关闭时是

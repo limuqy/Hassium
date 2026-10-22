@@ -44,5 +44,12 @@ sleep action=auto
 sleep action=resume trigger=sprint mining=true
 sleep action=release
 wait ms=3000
+command text="gamerule naturalRegeneration false"
+command text="effect give @s instant_health 1 10 true"
+sleep action=enter
+command text="damage @s 14 minecraft:generic"
+wait ms=1000
+input mode=idle ms=2000 sleepState=SLEEPING maxHealth=6
+sleep action=wake
 dump label=ROUND2 round=2 world=true
 exit rounds=2

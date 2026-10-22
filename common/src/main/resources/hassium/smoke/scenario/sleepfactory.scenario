@@ -17,54 +17,51 @@ wait ms=5000
 dump label=ROUND1 round=1 world=true
 command text="tag @s add sleep_traffic_idle_normal"
 wait ms=250
-input mode=idle ms=30000 targetX=72 targetY=77 targetZ=79
+input mode=idle ms=30000 sleepState=IDLE targetX=72 targetY=77 targetZ=79
 command text="tag @s remove sleep_traffic_idle_normal"
 command text="tag @s add sleep_traffic_idle_entry"
 wait ms=250
-sleep action=enter threshold=6
+sleep action=enter
 command text="tag @s remove sleep_traffic_idle_entry"
 command text="tag @s add sleep_traffic_idle_sleep"
 wait ms=250
-input mode=idle ms=30000 targetX=72 targetY=77 targetZ=79
+input mode=idle ms=30000 sleepState=SLEEPING targetX=72 targetY=77 targetZ=79
 command text="tag @s remove sleep_traffic_idle_sleep"
 command text="tag @s add sleep_traffic_idle_recovery"
 wait ms=250
-sleep action=wake offlineMs=5000
-wait ms=10000
+sleep action=traffic_wake
 command text="tag @s remove sleep_traffic_idle_recovery"
 command text="tag @s add sleep_traffic_hold_attack_normal"
 wait ms=250
-input mode=hold_attack ms=30000 targetX=72 targetY=77 targetZ=79
+input mode=hold_attack ms=30000 sleepState=IDLE targetX=72 targetY=77 targetZ=79
 command text="tag @s remove sleep_traffic_hold_attack_normal"
 command text="tag @s add sleep_traffic_hold_attack_entry"
 wait ms=250
-sleep action=enter threshold=6
+sleep action=enter
 command text="tag @s remove sleep_traffic_hold_attack_entry"
 command text="tag @s add sleep_traffic_hold_attack_sleep"
 wait ms=250
-input mode=hold_attack ms=30000 targetX=72 targetY=77 targetZ=79
+input mode=hold_attack ms=30000 sleepState=SLEEPING targetX=72 targetY=77 targetZ=79
 command text="tag @s remove sleep_traffic_hold_attack_sleep"
 command text="tag @s add sleep_traffic_hold_attack_recovery"
 wait ms=250
-sleep action=wake offlineMs=5000
-wait ms=10000
+sleep action=traffic_wake
 command text="tag @s remove sleep_traffic_hold_attack_recovery"
 command text="tag @s add sleep_traffic_periodic_attack_normal"
 wait ms=250
-input mode=periodic_attack ms=30000 targetX=72 targetY=77 targetZ=79
+input mode=periodic_attack ms=30000 sleepState=IDLE targetX=72 targetY=77 targetZ=79
 command text="tag @s remove sleep_traffic_periodic_attack_normal"
 command text="tag @s add sleep_traffic_periodic_attack_entry"
 wait ms=250
-sleep action=enter threshold=6
+sleep action=enter
 command text="tag @s remove sleep_traffic_periodic_attack_entry"
 command text="tag @s add sleep_traffic_periodic_attack_sleep"
 wait ms=250
-input mode=periodic_attack ms=30000 targetX=72 targetY=77 targetZ=79
+input mode=periodic_attack ms=30000 sleepState=SLEEPING targetX=72 targetY=77 targetZ=79
 command text="tag @s remove sleep_traffic_periodic_attack_sleep"
 command text="tag @s add sleep_traffic_periodic_attack_recovery"
 wait ms=250
-sleep action=wake offlineMs=5000
-wait ms=10000
+sleep action=traffic_wake
 command text="tag @s remove sleep_traffic_periodic_attack_recovery"
 command text="tag @s add sleep_traffic_done"
 wait ms=250

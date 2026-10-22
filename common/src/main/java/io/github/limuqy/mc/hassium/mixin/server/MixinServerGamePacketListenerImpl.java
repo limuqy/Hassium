@@ -21,14 +21,6 @@ public class MixinServerGamePacketListenerImpl {
     @Shadow
     public ServerPlayer player;
 
-#if MC_VER < MC_1_21_2
-    @Inject(method = {"handleInteract", "handleUseItem", "handleUseItemOn", "handlePlayerAction"},
-            at = @At(value = "INVOKE", target = "Lnet/minecraft/network/protocol/PacketUtils;ensureRunningOnSameThread(Lnet/minecraft/network/protocol/Packet;Lnet/minecraft/network/PacketListener;Lnet/minecraft/server/level/ServerLevel;)V", shift = At.Shift.AFTER), cancellable = true)
-    private void hassium$sleepInteractionBarrier(CallbackInfo ci) {
-        if (io.github.limuqy.mc.hassium.server.sleep.SleepServer.blocksInteraction(player)) ci.cancel();
-    }
-#endif
-
     // review-fix: T7-59: handler 统一加 hassium$ 前缀
     @Inject(method = "onDisconnect", at = @At("HEAD"))
     private void hassium$onPlayerDisconnect(

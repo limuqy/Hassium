@@ -13,7 +13,7 @@ Minecraft 1.20.1 / 1.21.1–1.21.11 多加载器模组（Fabric / Forge / NeoFor
 - [数据包优化与长期 AFK 节流](docs/handoff/research-2026-10-20-packet-afk.md)
 - [区块增量与渐进式 LOD](docs/handoff/research-2026-10-20-chunk-delta-lod.md)
 
-方向 A 已完成首轮流量画像、AFK 实体同步设计与[R0 离线运动流回放](docs/handoff/r0-entity-motion-replay-2026-10-20.md)。用户随后授权实现[半在线休眠](docs/semi-online-sleep.md)；首批仅 1.20.1 Forge / 1.21.1 NeoForge 协商启用。2026-10-21 追加授权取消遮罩、站桩自动进入（允许攻击/使用，默认 3 分钟，可关闭）、Esc/移动输入/大幅转向同连接恢复。新增 `SLEEP_WINDOW`（依赖 `SLEEP_IN_PLACE` + `PULL_MODE`）休眠只渲染脚下 3×3 柱，保留 5×5 光照邻柱范围并暂停远处同步；唤醒局部失效后复用 tracking/ShadowPull/LIGHT 加载，逐柱快照尾部确认后恢复显示，不重连。仅有 `SLEEP_IN_PLACE` 的旧对端保持地形连续同步。移动/转向不得清空输入或停止使用，Esc 允许原版释放。旧能力保留深度休眠和独立保载重连。**不增加自动点击或服务端动作托管**；R1 实体降频未实施。休眠快照不得改共享运动基线或 dirty 状态，原生光照邻柱门禁保留。
+方向 A 已完成首轮流量画像、AFK 实体同步设计与[R0 离线运动流回放](docs/handoff/r0-entity-motion-replay-2026-10-20.md)。用户随后授权实现[半在线休眠](docs/semi-online-sleep.md)；首批仅 1.20.1 Forge / 1.21.1 NeoForge 协商启用。**当前唯一设计（2026-10-22）**：`master.sleepEnabled` 默认 false；开启后允许手动或站桩自动进入，自动等待默认 **15 分钟**，客户端可配置 1–60 分钟，0 关闭。允许攻击/使用，只渲染脚下 3×3 柱，保留 5×5 光照邻柱并暂停远处同步；Esc/移动输入/大幅转向在同一连接恢复，复用 tracking/ShadowPull/LIGHT 和缓存比较，逐柱快照尾部确认后恢复显示。`SLEEP` 依赖 `PULL_MODE` + `SHADOW_PULL` + `PULL_NBT`。**未发布中间设计不兼容**：删除深度休眠、保载重连、旧能力位及地形持续同步分支；不提供残血保护、保护断线或自动重连。移动/转向不得清空输入或停止使用，Esc 允许原版释放。**不增加自动点击或服务端动作托管**；R1 实体降频未实施。休眠快照不得改共享运动基线或 dirty 状态，原生光照邻柱门禁保留。
 
 两方向独立推进；其他已支持版本不因此退役，扩展回归范围按修改面与 `docs/version-segments.md` 决定。
 

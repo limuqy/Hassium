@@ -230,10 +230,9 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 | `fly` | `seconds`、`tag` | 注入飞行移动（先爬升 2s 再平飞），驱动区块补给顺序 |
 | `command` | `text` | 发送任意客户端命令（`conn.sendCommand(text)`） |
 | `input` | `mode=walk\|idle\|hover\|hold_attack\|periodic_attack`、`ms` | 流量画像的开发环境输入：普通四向步行、无操作、原版飞行悬停、持续/间隔攻击固定基岩目标；释放鼠标以避免后台窗口暂停或鼠标移动污染样本，不直接构造网络包 |
-| `sleep` | `action`、`threshold`、`ui`、`offlineMs` | 休眠协议与实际 UI、实体兴趣范围和基线、装备、残血断连、单次重连与到期故障验证，仅开发冒烟使用 |
 | `dimension` | `to=nether\|end\|overworld` | `/execute in <dim> run tp @s ~ ~ ~` 切维（需 OP，服务端场景注入自动 op） |
 | `disconnect` | — | 主动断开（`manualLogout=true` 时走真实手动登出路径） |
-| `reconnect` | `delayMs`、`sleep=true` | 延迟后通过 compat 原生连接；休眠故障测试复用保存的 ServerData，模拟明确手动重试 |
+| `reconnect` | `delayMs` | 延迟后通过原生连接入口重连 |
 | `dump` | `label`、`round`、`gate=true\|false` | 输出一轮统计 + 写 probe roundN.json；`gate=false` 跳过 validateStats 的 ROUND2 缓存命中口径（切维后全新区块无缓存命中属预期） |
 | `assertProbe` | `key`、`op=gt\|ge\|lt\|eq`、`value` / `vs=<key>` | 对 probe 字段做活体断言，失败即退出码 2 |
 | `exit` | `rounds` | 结束并退出；`rounds=1` 表示单轮场景（跳过 classic 两轮判定口径） |
@@ -666,32 +665,29 @@ build/smoke-test/
 
 ## 半在线休眠专项（2.X）
 
-当前只启用 1.20.1 Forge 和 1.21.1 NeoForge；入口及限制见 [休眠说明](semi-online-sleep.md)，已执行场次及测量见[验收记录](handoff/handoff-2026-10-21-semi-online-sleep.md)。同一 checkout 内各版本构建和游戏运行必须串行。
+总开关默认关闭，各启用场景的 profile 显式开启。当前只启用 1.20.1 Forge 和 1.21.1 NeoForge；入口及限制见 [休眠说明](semi-online-sleep.md)，已执行场次及测量见[验收记录](handoff/handoff-2026-10-21-semi-online-sleep.md)。同一 checkout 内各版本构建和游戏运行必须串行。
 
 推荐用包装脚本复跑；它在 finally 恢复字典、配置、options 和客户端缓存，并将临时世界与日志保留在 `build/traffic-profile/<SessionId>/`。每次使用新 SessionId。Dictionary 指向事先保存的聚合字典，不覆盖原始基线：
 
 ```powershell
-.\scripts\traffic-profile.ps1 -Ver 1.20.1 -Loader forge -SessionId sleep_1201_new -Dictionary <dictionary.bin> -ScenarioOverride sleep
+.\scripts\traffic-profile.ps1 -Ver 1.20.1 -Loader forge -SessionId sleepresume_1201_new -Dictionary <dictionary.bin> -ScenarioOverride sleepresume
 .\scripts\traffic-profile.ps1 -Ver 1.21.1 -Loader neoforge -SessionId sleepmixed_1211_new -Dictionary <dictionary.bin> -ScenarioOverride sleepmixed
 ```
 
 | 场景 | 关键断言 |
 |---|---|
-| `sleep` | 最后一名玩家离线 20 秒，受保护柱对象和卸载回调，两个漏斗的实际 ticker，正常票据交接 |
-| `sleepauto` | 开界面不自动进入，站桩自动进入且攻击/使用跨握手保持，松开不重放，世界可见，20 秒保载恢复；开发测试期限 1–1.5 秒 |
-| `sleepresume` | 新能力下仅渲染 3×3，同步/计算保留 5×5 光照邻柱；转向/移动/Esc/疾跑输入同连接恢复；直到远处测试柱恢复可见，每 tick 检查拉弓计时、攻击/使用按键及真实挖掘进度；连接/世界/玩家/附近实体对象不变；远处方块、纯 BE NBT、快照后的更新尾部及屋檐边界光照；不创建保载 |
+| `sleepdisabled` | 配置关闭时不协商能力、不显示菜单入口、手动和自动均不能进入 |
+| `sleepauto` | 开界面不自动进入，站桩自动进入且攻击/使用跨握手保持，松开不重放，世界可见，同连接恢复；开发测试期限 1–1.5 秒 |
+| `sleepresume` | 仅渲染 3×3，同步/计算保留 5×5 光照邻柱；转向/移动/Esc/疾跑输入同连接恢复；直到远处测试柱恢复可见，每 tick 检查拉弓计时、攻击/使用按键及真实挖掘进度；连接/世界/玩家/附近实体对象不变；远处方块、纯 BE NBT、快照后的更新尾部及屋檐边界光照；不创建保载 |
 | `sleepmixed` | 另启真实普通观察者客户端；远近实体出入、原生位置基线、共享 dirty 不变、目标替换与耐久、Esc 和原长按 |
-| `sleepsafety` | 低血量拒绝进入且连接保留；相等阈值、吸收生命、图腾、改血、恢复中伤害与真实死亡 |
-| `sleepexpiry` | 10 秒测试期限、错误代次及重复请求、过期不再自动连接、注入一次恢复连接失败后等待手动操作 |
-| `sleeptraffic` | 独立原版工厂，站桩/长按/间隔攻击各正常约 30 秒与休眠约 30 秒，并计完整恢复成本 |
 | `sleepfactory` | 仅原生 1.21.1 工厂 ZIP 副本；预热后解除冻结，真实 tick 及同样的完整流量周期 |
 | `sleepwindowtraffic` | 独立原版工厂，三个输入模式分别正常/3×3 休眠约 30 秒；逐 tick 核对状态及 9/25 柱；同连接恢复至少观察 30 秒且原可见范围已补齐；成功 TCP 写入计量、工厂产量及 TPS |
 
-`sleeptraffic` / `sleepfactory` 保留旧重连测量；窗口方案使用 `-ScenarioOverride sleepwindowtraffic`，两端均生成自己的隔离工厂世界，无需 WorldZip。用 `python scripts/smoke/analyze-sleep-window-traffic.py build/traffic-profile/<SessionId>` 分析。恢复窗口包含实际加载和至少 30 秒背景流量，没有注入离线等待；同时报告全部进入/恢复字节的保守回本时间及扣除同期正常流量的增量回本时间。每输入模式仅一个相邻样本，不能当成多次重复统计。
+当前均使用同连接恢复；生成工厂使用 `-ScenarioOverride sleepwindowtraffic`，两端均生成自己的隔离工厂世界，无需 WorldZip。用 `python scripts/smoke/analyze-sleep-window-traffic.py build/traffic-profile/<SessionId>` 分析。恢复窗口包含实际加载和至少 30 秒背景流量，没有注入离线等待；同时报告全部进入/恢复字节的保守回本时间及扣除同期正常流量的增量回本时间。每输入模式仅一个相邻样本，不能当成多次重复统计。
 
 `-ScenarioOverride cachenbt` 单独验证普通缓存的 R1/R2 方块实体 NBT 一致性，不进入休眠。R1 建立原规格石墙和八块告示牌；离线后检查点覆盖文字/涂蜡修改、完全不变、清空文字、删除 BE、替换为箱子。其中 `(0,0)` 柱只改 NBT，`(2,0)` 柱另改墙体和 BE 方块类型。服务端打印前后方块哈希与离线玩家数，客户端记录磁盘 NBT、postLoad 后的 R1 值与 R2 实际值。R2 验收后，开发夹具故意破坏客户端/影子缓存中的涂蜡状态，保持方块哈希不变，再请求权威 FULL；`nbt round=3` 验证回退真正替换 NBT。它是同一 R2 连接内的附加检查，不是第三次登录。运行 `python scripts/smoke/analyze-cache-nbt.py build/traffic-profile/<SessionId>` 检查 24 项状态、磁盘恢复、UNCHANGED 和 FULL 回退证据。诊断保留真实 FAIL，不能将缺陷复现改标 PASS。
 
-`sleepmixed` 的普通观察者使用独立 run 目录和 `SleepObserver` 身份，在主玩家加入后启动，避免并发 FML 初始协商扰动。故障场景缩短期限不改变生产默认的 300 秒。安全场景关闭测试世界自然回血，避免 6 HP 的进入拒绝夹具先被饱食回血改变。
+`sleepmixed` 的普通观察者使用独立 run 目录和 `SleepObserver` 身份，在主玩家加入后启动，避免并发 FML 初始协商扰动。自动进入场景使用开发专用 1–1.5 秒期限，生产默认仍为 15 分钟；不提供残血保护或保载重连场景。
 
 这些场景在 `dump world=true` 时要求真实世界已驻留并有非空气区块，继续要求原生握手、聚合及各场景探针通过；不以旧显示统计四舍五入后的节省比例作流量门禁。真实成功 TCP 写入单独计量，登录和重连也计入，输出 `sleep-traffic.json`：
 

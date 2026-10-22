@@ -21,19 +21,6 @@ public class ForgePlatformHelper implements IPlatformHelper {
                 ModList.get().getMods().stream().map(info->info.getModId()).toList());
     }
 
-    @Override public void setSleepForceTick(net.minecraft.server.level.ServerLevel level, net.minecraft.world.level.ChunkPos pos, java.util.UUID lease, boolean add) {
-#if MC_VER < MC_1_21_1
-        if (add) level.getChunkSource().addRegionTicket(io.github.limuqy.mc.hassium.compat.SleepLeaseCompat.FORCE, pos, 0, lease, true);
-        else level.getChunkSource().removeRegionTicket(io.github.limuqy.mc.hassium.compat.SleepLeaseCompat.FORCE, pos, 0, lease, true);
-        if(!add) {
-            var map=((io.github.limuqy.mc.hassium.mixin.ForgeSleepForceAccess)level.getChunkSource().chunkMap.getDistanceManager()).hassium$sleepForcedTickets();
-            var remaining=map.get(pos.toLong()); if(remaining!=null && remaining.isEmpty()) map.remove(pos.toLong());
-        }
-#else
-        IPlatformHelper.super.setSleepForceTick(level,pos,lease,add);
-#endif
-    }
-
     @Override
     public java.util.List<net.minecraft.resources.ResourceKey<? extends net.minecraft.core.Registry<?>>> cacheDataPackRegistryKeys() {
 #if MC_VER < MC_1_21_1

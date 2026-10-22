@@ -8,9 +8,9 @@ import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.*;
 
-/** A per-server/player preference, never a server-authoritative health value. */
+/** Per-server/player automatic sleep preferences. */
 public final class SleepProfiles {
-    public static final int DEFAULT_AUTO_SECONDS=180;
+    public static final int DEFAULT_AUTO_SECONDS=900;
     private SleepProfiles() {}
     private static Path path() { return Services.PLATFORM.getConfigDirectory().resolve("hassium/sleep-profiles.properties"); }
     private static String key() {
@@ -27,23 +27,15 @@ public final class SleepProfiles {
         catch(Exception e) { Constants.LOG.warn("Cannot read sleep preferences",e); }
         return properties;
     }
-    public static float threshold() {
-        try { float f=Float.parseFloat(load().getProperty(key(),"6")); return Float.isFinite(f)&&f>=0?f:6; }
-        catch(NumberFormatException ignored) { return 6; }
-    }
-    public static void save(float threshold) {
-        Properties properties=load(); properties.setProperty(key(),Float.toString(threshold));
-        write(properties);
-    }
     public static int autoSeconds() {
         try {
             int value=Integer.parseInt(load().getProperty(key()+".autoSeconds",Integer.toString(DEFAULT_AUTO_SECONDS)));
             return value==0 || value>=60 && value<=3600 ? value : DEFAULT_AUTO_SECONDS;
         } catch(NumberFormatException ignored) { return DEFAULT_AUTO_SECONDS; }
     }
-    public static void save(float threshold,int autoSeconds) {
+    public static void save(int autoSeconds) {
         if(autoSeconds!=0 && (autoSeconds<60 || autoSeconds>3600)) throw new IllegalArgumentException("Invalid auto sleep delay");
-        Properties properties=load(); properties.setProperty(key(),Float.toString(threshold));
+        Properties properties=load();
         properties.setProperty(key()+".autoSeconds",Integer.toString(autoSeconds));
         write(properties);
     }

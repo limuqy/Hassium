@@ -31,11 +31,9 @@ def analyze(directory):
     recoveries = re.findall(r'SLEEP traffic recovery sameConnection=true visiblePending=0 readyMs=(\d+) observationMs=(\d+)', client)
     if len(recoveries) != 3:
         report['qualityProblems'].append('Expected three completed same-connection, full visible-window recoveries')
-    resumes = re.findall(r'\[SLEEP\] resumed inPlace[^\n]*leases=0', server)
+    resumes = re.findall(r'\[SLEEP\] resumed player=', server)
     if len(resumes) != 3:
-        report['qualityProblems'].append('Expected three server resumes without reconnect leases')
-    if '[SLEEP_PROBE] acquired' in server:
-        report['qualityProblems'].append('Unexpected reconnect lease acquisition')
+        report['qualityProblems'].append('Expected three same-connection server resumes')
     for i, mode in enumerate(('idle', 'hold_attack', 'periodic_attack')):
         cycle = report['cycles'][mode]
         normal, asleep = cycle['normalBytesPerSecond'], cycle['sleepBytesPerSecond']
@@ -47,7 +45,7 @@ def analyze(directory):
             cycle.update(visibleWindowReadyMs=ready, recoveryObservationMs=observed)
             if observed < 30_000:
                 report['qualityProblems'].append(f'{mode}: recovery observation shorter than 30 seconds')
-    report.update(capability='SLEEP_WINDOW', visibleColumns=9, lightColumns=25,
+    report.update(capability='SLEEP', visibleColumns=9, lightColumns=25,
                   fixture='Same generated 16-lane vanilla factory layout on separate fresh worlds; VD=10; fixed dictionary',
                   sampling='One adjacent 30-second normal/sleep pair per input mode; recovery >=30 seconds and all paused visible columns ready; no injected offline wait',
                   recoveryInput='No attack actions during recovery observation; normal and sleep windows use matching scripted native interactions',

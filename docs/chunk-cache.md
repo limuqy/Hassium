@@ -101,7 +101,7 @@ ClientPacketListener.handleLevelChunkWithLight
 
 缓存读盘必须区分 `ImposterProtoChunk` 与真正的 `ProtoChunk`：前者解包后执行原版 `LevelChunk.runPostLoad()`，让存档 BE 完成加载；转换和 postLoad 都调度到影子主循环。随后恢复保存的客户端 NBT 快照。此前直接把包装层重新构造为 `LevelChunk` 丢掉了延迟加载回调，造成磁盘中有文字而 R2 回放成空告示牌。
 
-休眠恢复使用同一比较入口。`UNCHANGED` / `DELTA` / `FULL` 均建立快照后更新缓冲，并在实际应用确认后补放更新、开放显示；普通缓存不依赖休眠控制协议。未协商 `PULL_NBT` 的休眠连接仍强制 FULL；新服务端对旧客户端的含 BE 命中不发送新载荷，走已有 DELTA/FULL 路径。双方更新后才能完整启用新的 NBT 命中语义。
+休眠恢复使用同一比较入口。`UNCHANGED` / `DELTA` / `FULL` 均建立快照后更新缓冲，并在实际应用确认后补放更新、开放显示；普通缓存不依赖休眠控制协议。休眠要求双方协商 `PULL_NBT`，缺少此能力时不启用休眠；普通缓存对未协商此位的连接仍走已有 DELTA/FULL 路径。
 
 ## 4. 主线程限流
 

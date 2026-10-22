@@ -20,7 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * T4 config-restructure 一次性 round-trip 验证（.omp/workflows/config-restructure）。
  * <p>
  * 验证点（对照 work/key-mapping.md；网关拓扑退役波后更新）：
- * 1. defaults 生成 54 键，前缀分布 chunk=16/master=17/debug=17/storage=2/compat=2
+ * 1. defaults 生成 55 键，前缀分布 chunk=16/master=18/debug=17/storage=2/compat=2
  * 2. client/server toml 写读 round-trip（含全部新键组）
  * 3. 新键可加载抽查（chunk.seedGenEnabled 双端 / master.* 聚合键族）
  * 4. 删键（recoveryFreeze / controlStallMs / failoverExpiryMs / storage.mode / chunk.loadThreads /
@@ -41,7 +41,7 @@ class ConfigRestructureRoundTripTest {
                     "bindHost", "authToken", "controlReachableEndpoints", "udpListeners",
                     "seedGenThreads", "serverChunkPushThreads", "lightHaloRadius");
 
-    // === 1. defaults 生成：54 键齐全 ===
+    // === 1. defaults 生成：55 键齐全 ===
 
     @Test
     void defaultsCoverAllSchemaKeys() {
@@ -49,13 +49,13 @@ class ConfigRestructureRoundTripTest {
         Map<String, ConfigEntry<?>> byPath = ConfigSchema.entries().stream()
                 .collect(Collectors.toMap(e -> e.scope() + "/" + e.path(), Function.identity()));
 
-        assertEquals(56, ConfigSchema.entries().size(), "schema 留存键数");
-        assertEquals(56, values.asMap().size(), "defaults 键数");
+        assertEquals(55, ConfigSchema.entries().size(), "schema 留存键数");
+        assertEquals(55, values.asMap().size(), "defaults 键数");
 
         Map<String, Long> prefixCounts = ConfigSchema.entries().stream()
                 .collect(Collectors.groupingBy(e -> e.path().substring(0, e.path().indexOf('.') + 1),
                         Collectors.counting()));
-        assertEquals(Map.of("chunk.", 16L, "master.", 19L, "debug.", 17L,
+        assertEquals(Map.of("chunk.", 16L, "master.", 18L, "debug.", 17L,
                 "storage.", 2L, "compat.", 2L), prefixCounts);
 
         // 双端同名键 chunk.seedGenEnabled 各一
@@ -124,11 +124,23 @@ class ConfigRestructureRoundTripTest {
     // === 2+3. server toml round-trip（master./storage./compat./chunk.lightStrip）===
 
     @Test
+    void sleepSwitchIsOptInAndServerTomlPreservesBothValues(@TempDir Path root) throws IOException {
+        assertFalse(FabricTomlConfigIO.loadServer(root).master().sleepEnabled());
+        ConfigValues defaults=ConfigValues.defaults(ConfigSchema.entries());
+        for(boolean enabled:new boolean[]{true,false}) {
+            HassiumConfig config=ConfigSnapshotAdapter.fromValues(defaults.with(ConfigSchema.MASTER_SLEEP_ENABLED,enabled),false);
+            FabricTomlConfigIO.saveServer(root,config);
+            assertEquals(enabled,FabricTomlConfigIO.loadServer(root).master().sleepEnabled());
+        }
+        assertEquals(900,io.github.limuqy.mc.hassium.client.sleep.SleepProfiles.DEFAULT_AUTO_SECONDS);
+    }
+
+    @Test
     void serverTomlRoundTripsNewKeys(@TempDir Path root) throws IOException {
         HassiumConfig.MasterCoreConfig master = new HassiumConfig.MasterCoreConfig(
                 true, true, 9, false, 50L, 131072,
                 Set.of("MAIN_CHANNEL"), 7,
-                false, "4,8,16,32", "1,2,4,8", false, "40,30,20,10", "1.5,2.0,2.5,3.0", 8, 128, false, false, 120);
+                false, "4,8,16,32", "1,2,4,8", false, "40,30,20,10", "1.5,2.0,2.5,3.0", 8, 128, false, true);
         HassiumConfig.StorageConfig storage = new HassiumConfig.StorageConfig(true, 9);
         // server toml 只写 chunk.lightStrip/chunk.seedGenEnabled 两键，其余键读回默认 → 仅改这两键
         HassiumConfig.ChunkCoreConfig chunk = new HassiumConfig.ChunkCoreConfig(
@@ -281,8 +293,7 @@ class ConfigRestructureRoundTripTest {
         assertEquals(5, values.get(ConfigSchema.MASTER_ENTITY_MAX_THROTTLE_FACTOR));
         assertEquals(256, values.get(ConfigSchema.MASTER_ENTITY_FRAME_BUDGET_PER_PLAYER));
         assertEquals(true, values.get(ConfigSchema.MASTER_ENTITY_SMOOTH_PUSH));
-        assertEquals(true, values.get(ConfigSchema.MASTER_SLEEP_ENABLED));
-        assertEquals(300, values.get(ConfigSchema.MASTER_SLEEP_WAKE_HOLD_SECONDS));
+        assertEquals(false, values.get(ConfigSchema.MASTER_SLEEP_ENABLED));
         // storage.enabled 默认 false（REQ 决策 6 修正 lang 错误）
         assertEquals(false, values.get(ConfigSchema.STORAGE_ENABLED));
         // debug.* 客户端网络指标默认关闭，退出自动复位默认开启

@@ -78,14 +78,6 @@ public final class SleepProbeCompat {
         } catch(java.io.IOException e) { throw new IllegalStateException("Sleep screenshot failed",e); }
 #endif
     }
-    public static void hurtOnReady(net.minecraft.server.level.ServerPlayer player) {
-#if MC_VER < MC_1_21_2
-        if(io.github.limuqy.mc.hassium.server.ServerSmokeTest.isEnabled() && player.removeTag("sleep_probe_hurt_recovery"))
-            player.hurt(player.damageSources().fellOutOfWorld(),14); // bypass native join invulnerability in this fault fixture
-        if(io.github.limuqy.mc.hassium.server.ServerSmokeTest.isEnabled() && player.removeTag("sleep_probe_fail_recovery"))
-            player.connection.disconnect(net.minecraft.network.chat.Component.literal("Injected sleep reconnect failure"));
-#endif
-    }
     public static void beforeTick(MinecraftServer server) {
 #if MC_VER < MC_1_21_2
         if(!io.github.limuqy.mc.hassium.server.ServerSmokeTest.isEnabled()
@@ -127,7 +119,7 @@ public final class SleepProbeCompat {
                 if(codec==null) continue;
                 var base=((SleepVecDeltaAccess)codec).hassium$sleepBase();
                 String detail=e.getId()+","+base.x+","+base.y+","+base.z;
-                Services.NETWORK_MANAGER.sendSleepControl(p,SleepControl.encode(new SleepControl.Message(SleepControl.Op.PROBE,0,++sequence,0,0,detail)));
+                Services.NETWORK_MANAGER.sendSleepControl(p,SleepControl.encode(new SleepControl.Message(SleepControl.Op.PROBE,0,++sequence,detail)));
             }
         }
 #endif

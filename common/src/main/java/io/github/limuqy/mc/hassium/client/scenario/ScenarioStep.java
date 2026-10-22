@@ -30,7 +30,7 @@ public final class ScenarioStep {
         COMMAND,
         /** Dev profiling input: a walking square, held attack, or periodic attack. */
         INPUT,
-        /** Dev-only semi-online sleep / real reconnect validation. */
+        /** Dev-only 3x3 sleep / same-connection recovery validation. */
         SLEEP,
         /** 非阻塞飞行注入：爬升 2s + 平飞 Ns。 */
         FLY,

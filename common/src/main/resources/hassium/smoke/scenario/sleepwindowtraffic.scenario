@@ -788,7 +788,7 @@ input mode=idle ms=30000 sleepState=IDLE
 command text="tag @s remove sleep_traffic_idle_normal"
 command text="tag @s add sleep_traffic_idle_entry"
 wait ms=250
-sleep action=enter threshold=6
+sleep action=enter
 command text="tag @s remove sleep_traffic_idle_entry"
 command text="tag @s add sleep_traffic_idle_sleep"
 wait ms=250
@@ -804,7 +804,7 @@ input mode=hold_attack ms=30000 sleepState=IDLE
 command text="tag @s remove sleep_traffic_hold_attack_normal"
 command text="tag @s add sleep_traffic_hold_attack_entry"
 wait ms=250
-sleep action=enter threshold=6
+sleep action=enter
 command text="tag @s remove sleep_traffic_hold_attack_entry"
 command text="tag @s add sleep_traffic_hold_attack_sleep"
 wait ms=250
@@ -820,7 +820,7 @@ input mode=periodic_attack ms=30000 sleepState=IDLE
 command text="tag @s remove sleep_traffic_periodic_attack_normal"
 command text="tag @s add sleep_traffic_periodic_attack_entry"
 wait ms=250
-sleep action=enter threshold=6
+sleep action=enter
 command text="tag @s remove sleep_traffic_periodic_attack_entry"
 command text="tag @s add sleep_traffic_periodic_attack_sleep"
 wait ms=250

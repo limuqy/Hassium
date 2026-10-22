@@ -146,8 +146,7 @@ public record HassiumConfig(
             int entityMaxThrottleFactor,
             int entityFrameBudgetPerPlayer,
             boolean entitySmoothPushEnabled,
-            boolean sleepEnabled,
-            int sleepWakeHoldSeconds
+            boolean sleepEnabled
     ) {
         public MasterCoreConfig {
             compressionBlacklist = Set.copyOf(compressionBlacklist);
@@ -182,7 +181,7 @@ public record HassiumConfig(
                 5,                 // entityMaxThrottleFactor（密度×压力倍率总上限）
                 256,               // entityFrameBudgetPerPlayer（每玩家每 tick 实体包预算；0=不限）
                 true,              // entitySmoothPushEnabled（UUID 相位错峰，总量不变）
-                true, 300          // sleepEnabled / sleepWakeHoldSeconds
+                false              // sleepEnabled (opt-in)
         );
     }
 

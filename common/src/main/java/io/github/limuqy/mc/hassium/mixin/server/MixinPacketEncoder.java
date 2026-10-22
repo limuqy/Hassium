@@ -49,10 +49,6 @@ public abstract class MixinPacketEncoder implements io.github.limuqy.mc.hassium.
     }
     @Inject(method = "encode(Lio/netty/channel/ChannelHandlerContext;Lnet/minecraft/network/protocol/Packet;Lio/netty/buffer/ByteBuf;)V", at = @At("RETURN"))
     private void hassium$capture(ChannelHandlerContext ctx, Packet<?> packet, ByteBuf bytes, CallbackInfo ci) {
-#if MC_VER < MC_1_21_1
-        if(io.github.limuqy.mc.hassium.server.ServerSmokeTest.isEnabled() && packet instanceof net.minecraft.network.protocol.login.ClientboundCustomQueryPacket q)
-            io.github.limuqy.mc.hassium.Constants.LOG.info("[SLEEP_LOGIN_PROBE] encoded channel={} id={} bytes={}",ctx.channel().id(),q.getTransactionId(),bytes.readableBytes());
-#endif
         EgressProtocol protocol = hassium$captures.remove(bytes);
         if (protocol != null && protocol.flow() == PacketFlow.CLIENTBOUND) EgressPipeline.encoded(ctx, packet, bytes, protocol);
     }

@@ -45,21 +45,8 @@ public class MixinConnection {
     }
 #endif
 #if MC_VER < MC_1_21_1
-    @Unique private long hassium$sleepLoginProbeAt;
-    @Inject(method="tick",at=@At("HEAD"))
-    private void hassium$sleepLoginProbe(CallbackInfo ci) {
-        if(receiving==PacketFlow.CLIENTBOUND && io.github.limuqy.mc.hassium.client.ClientSmokeTest.isEnabled()
-                && packetListener instanceof net.minecraft.network.protocol.login.ClientLoginPacketListener
-                && System.nanoTime()-hassium$sleepLoginProbeAt>2_000_000_000L) {
-            hassium$sleepLoginProbeAt=System.nanoTime();
-            io.github.limuqy.mc.hassium.Constants.LOG.info("[SLEEP_LOGIN_PROBE] tick channel={} autoRead={} handlers={}",channel.id(),channel.config().isAutoRead(),channel.pipeline().names());
-        }
-    }
     @Inject(method = "channelRead0", at = @At("HEAD"), cancellable = true)
     private void hassium$consumeLoginQueryAnswer(ChannelHandlerContext ctx, Packet<?> packet, CallbackInfo ci) {
-        if(receiving==PacketFlow.CLIENTBOUND && io.github.limuqy.mc.hassium.client.ClientSmokeTest.isEnabled()
-                && packet instanceof net.minecraft.network.protocol.login.ClientboundCustomQueryPacket q)
-            io.github.limuqy.mc.hassium.Constants.LOG.info("[SLEEP_LOGIN_PROBE] query channel={} id={} transaction={}",ctx.channel().id(),q.getIdentifier(),q.getTransactionId());
         if (receiving != PacketFlow.SERVERBOUND || !(packet instanceof net.minecraft.network.protocol.login.ServerboundCustomQueryPacket query)) return;
         if (query.getTransactionId() != io.github.limuqy.mc.hassium.protocol.handshake.LoginHandshake.TRANSACTION_ID) return;
         if (LoginHandshakeManager.consumeQueryAnswerAtChannel((Connection)(Object)this, query.getData())) ci.cancel();
@@ -82,10 +69,6 @@ public class MixinConnection {
     private void hassium$beginWrite(Packet<?> packet, io.netty.channel.ChannelFutureListener listener, boolean flush, CallbackInfo ci) {
 #endif
         if (receiving == PacketFlow.SERVERBOUND) {
-#if MC_VER < MC_1_21_1
-            if(io.github.limuqy.mc.hassium.server.ServerSmokeTest.isEnabled() && packet instanceof net.minecraft.network.protocol.login.ClientboundCustomQueryPacket q)
-                io.github.limuqy.mc.hassium.Constants.LOG.info("[SLEEP_LOGIN_PROBE] write channel={} id={} handlers={}",channel.id(),q.getTransactionId(),channel.pipeline().names());
-#endif
             io.github.limuqy.mc.hassium.protocol.egress.EgressPipeline.callback(channel, listener != null);
         }
     }

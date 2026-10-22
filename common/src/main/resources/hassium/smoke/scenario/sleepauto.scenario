@@ -13,8 +13,7 @@ sleep action=auto_menu
 sleep action=auto releaseDuringEntry=true
 sleep action=capture
 sleep action=release
-sleep action=panel
-sleep action=wake offlineMs=20000
+sleep action=wake
 wait ms=15000
 dump label=ROUND2 round=2 world=true
 exit rounds=2
