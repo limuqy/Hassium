@@ -56,6 +56,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
 public class ServerChunkPushManager {
 
     private static final ServerChunkPushManager INSTANCE = new ServerChunkPushManager();
+    private static final int MAX_ENCODE_WORK = 128;
+    private final io.github.limuqy.mc.hassium.concurrent.WorkBudget<UUID> encodeBudget =
+            new io.github.limuqy.mc.hassium.concurrent.WorkBudget<>(MAX_ENCODE_WORK, 16,
+                    128L << 20, 32L << 20);
 
     /**
      * 每玩家光照计算能力（握手 C2S 上报 lightComputeSupported = 客户端 chunk.enabled）。
@@ -90,6 +94,7 @@ public class ServerChunkPushManager {
         final long enqueueNanos;
         boolean ticketed;
         long ticketNanos;
+        volatile io.github.limuqy.mc.hassium.concurrent.WorkBudget<UUID>.Lease work;
 
         PendingPull(ServerPlayer player, ServerLevel level, String dimension,
                     ShadowPullRequestC2SPacket.Entry entry, long requestId, long epoch) {
@@ -395,6 +400,13 @@ public class ServerChunkPushManager {
         if (chunk == null) {
             return false;
         }
+        // Reserve before allocating detached sections, packet data or NBT. Count and estimated
+        // bytes cover the worker AND the main-thread response mailbox until send/discard.
+        long estimate = Math.min(32L << 20, (64L << 10) + chunk.getSections().length * (32L << 10)
+                + chunk.getBlockEntitiesPos().size() * (8L << 10));
+        pending.work = encodeBudget.tryAcquire(pending.player().getUUID(), estimate);
+        if (pending.work == null) { count(true, Counter.BACKPRESSURE_DEFERRED); return false; }
+        boolean handedOff = false;
         try {
             boolean nbtSupported = ServerHandshakeActivation.hasCaps(pending.player().getUUID(),
                     io.github.limuqy.mc.hassium.protocol.handshake.LoginCaps.PULL_NBT);
@@ -424,6 +436,7 @@ public class ServerChunkPushManager {
             io.github.limuqy.mc.hassium.server.sleep.SleepTerrainServer.snapshot(pending.player(),
                     pending.entry().chunkX(),pending.entry().chunkZ(),pending.requestId());
             submitEncodedPull(pending, classified, level.registryAccess());
+            handedOff = true;
             return true;
         } catch (Throwable t) {
             Constants.LOG.warn("Hassium: pending pull push failed for ({}, {})",
@@ -432,6 +445,8 @@ public class ServerChunkPushManager {
             unqueuePull(pending);
             sendPullFailure(pending, "push");
             return true;
+        } finally {
+            if (!handedOff) releaseWork(pending);
         }
     }
 
@@ -567,15 +582,36 @@ public class ServerChunkPushManager {
 
     private void submitEncodedPull(PendingPull pending, ClassifiedPull classified, RegistryAccess registryAccess) {
         ensureInitialized();
-        ShadowPullRequestC2SPacket.Entry entry = pending.entry();
-        long encodeQueued = now();
-        pushPool.submit(() -> {
+        pushPool.execute(new PushJob(pending, classified, registryAccess));
+    }
+
+    private static void releaseWork(PendingPull pending) {
+        if (pending.work != null) pending.work.close();
+    }
+
+    private final class PushJob implements Runnable {
+        private final PendingPull pending;
+        private final ClassifiedPull classified;
+        private final RegistryAccess registryAccess;
+        private final long encodeQueued = now();
+        private PushJob(PendingPull pending, ClassifiedPull classified, RegistryAccess registryAccess) {
+            this.pending = pending; this.classified = classified; this.registryAccess = registryAccess;
+        }
+        @Override public void run() {
+            var entry = pending.entry();
+            if (!pending.work.active()
+                    || !io.github.limuqy.mc.hassium.protocol.ShadowPullServer.isCurrentSession(pending.player(), pending.connection)
+                    || PlayerCompat.getServerLevel(pending.player()) != pending.level()) {
+                releaseWork(pending);
+                return;
+            }
             elapsed(Source.SERVER, Stage.ENCODE_WAIT, encodeQueued);
             long encodeStart = now();
             try {
                 ShadowPullResponseS2CPacket.Result result = encodeClassifiedPull(pending, classified, entry, registryAccess);
                 elapsed(Source.SERVER, Stage.ENCODE_WALL, encodeStart);
                 if (pending.player() == null || pending.player().hasDisconnected()) {
+                    releaseWork(pending);
                     return;
                 }
                 sendPullResponse(pending.player(), pending, result);
@@ -584,7 +620,7 @@ public class ServerChunkPushManager {
                         entry.chunkX(), entry.chunkZ(), t);
                 sendPullFailure(pending, "encode");
             }
-        });
+        }
     }
 
     private ShadowPullResponseS2CPacket.Result encodeClassifiedPull(PendingPull pending, ClassifiedPull classified,
@@ -627,40 +663,44 @@ public class ServerChunkPushManager {
     private void sendPullResponse(ServerPlayer player, PendingPull pending,
                                   ShadowPullResponseS2CPacket.Result result) {
         var owner = PlayerCompat.getMinecraftServer(player);
-        if (owner == null) return;
+        if (owner == null) { releaseWork(pending); return; }
         if (!owner.isSameThread()) {
             long sendQueued = now();
-            owner.execute(() -> {
+            try { owner.execute(() -> {
                 elapsed(Source.SERVER, Stage.SEND_WAIT, sendQueued);
                 sendPullResponse(player, pending, result);
-            });
+            }); } catch (Throwable rejected) { releaseWork(pending); throw rejected; }
             return;
         }
-        if (!io.github.limuqy.mc.hassium.protocol.ShadowPullServer.isCurrentSession(player, pending.connection)
-                || PlayerCompat.getServerLevel(player) != pending.level()) return;
-        if(!io.github.limuqy.mc.hassium.server.sleep.SleepTerrainServer.responseAllowed(player,
-                pending.entry().chunkX(),pending.entry().chunkZ(),pending.requestId())) return;
-        ShadowPullResponseS2CPacket response = new ShadowPullResponseS2CPacket(
-                pending.dimension(), pending.epoch(), pending.requestId(), List.of(result));
-        FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-        boolean handedOff = false;
         try {
-            count(true, Counter.valueOf(result.kind().name()));
-            response.encode(buf);
-            io.github.limuqy.mc.hassium.platform.Services.NETWORK_MANAGER.sendShadowPullResponse(player, buf);
-            // 所有权已转移：fabric send 直接持有 buf（不在此释放），
-            // forge/neoforge 实现内部已拷贝并释放。
-            handedOff = true;
-        } finally {
-            if (!handedOff && buf.refCnt() > 0) {
-                buf.release();
+            if (pending.work != null && !pending.work.active()) return;
+            if (!io.github.limuqy.mc.hassium.protocol.ShadowPullServer.isCurrentSession(player, pending.connection)
+                    || PlayerCompat.getServerLevel(player) != pending.level()) return;
+            if(!io.github.limuqy.mc.hassium.server.sleep.SleepTerrainServer.responseAllowed(player,
+                    pending.entry().chunkX(),pending.entry().chunkZ(),pending.requestId())) return;
+            ShadowPullResponseS2CPacket response = new ShadowPullResponseS2CPacket(
+                    pending.dimension(), pending.epoch(), pending.requestId(), List.of(result));
+            FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+            boolean handedOff = false;
+            try {
+                count(true, Counter.valueOf(result.kind().name()));
+                response.encode(buf);
+                io.github.limuqy.mc.hassium.platform.Services.NETWORK_MANAGER.sendShadowPullResponse(player, buf);
+                // 所有权已转移：fabric send 直接持有 buf（不在此释放），
+                // forge/neoforge 实现内部已拷贝并释放。
+                handedOff = true;
+            } finally {
+                if (!handedOff && buf.refCnt() > 0) {
+                    buf.release();
+                }
             }
-        }
+        } finally { releaseWork(pending); }
     }
 
     /** 待推送柱终态失败（超时/卸载/溢出）：客户端不重试。 */
     private void sendPullFailure(PendingPull pending, String reason) {
         if (pending.player() == null || pending.player().hasDisconnected()) {
+            releaseWork(pending);
             return;
         }
         sendPullResponse(pending.player(), pending, ShadowPullResponseS2CPacket.Result.error(
@@ -730,7 +770,7 @@ public class ServerChunkPushManager {
                     threads,
                     threads,
                     60L, TimeUnit.SECONDS,
-                    new LinkedBlockingQueue<>(),
+                    new LinkedBlockingQueue<>(MAX_ENCODE_WORK),
                     r -> {
                         Thread t = new Thread(r, "Hassium-ChunkPush");
                         t.setDaemon(true);
@@ -1017,6 +1057,12 @@ public class ServerChunkPushManager {
     }
 
     public void removePlayer(UUID playerId) {
+        if (pushPool != null) {
+            for (Runnable task : pushPool.getQueue()) {
+                if (task instanceof PushJob job && job.pending.player().getUUID().equals(playerId)
+                        && pushPool.getQueue().remove(task)) releaseWork(job.pending);
+            }
+        }
         ArrayDeque<PendingPull> pulls = pullQueues.remove(playerId);
         if (pulls != null) {
             for (PendingPull pending : pulls) {
@@ -1044,8 +1090,11 @@ public class ServerChunkPushManager {
         initialPlayerChunkPos.clear();
         playerLightComputeSupported.clear();
         if (pushPool != null) {
-            pushPool.shutdownNow();
+            for (Runnable task : pushPool.shutdownNow()) {
+                if (task instanceof PushJob job) releaseWork(job.pending);
+            }
         }
+        encodeBudget.reset();
         initialized.set(false);
     }
 

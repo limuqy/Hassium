@@ -560,17 +560,22 @@ public final class ScenarioEngine {
             boolean sameNear=false;
             for(var e:mc.level.entitiesForRendering()) if(e==sleepResumeNear) sameNear=true;
             if(!sameNear) throw new IllegalStateException("In-place resume replaced nearby entity");
-            if(now-stepStartMs>10_000) throw new IllegalStateException("In-place resume timed out");
             // Movement only triggers wake; attack/use stay held until the entire visible
             // selection is restored (including the separate NBT-only tail fixture).
             if(now-stepStartMs>=200) mc.options.keyUp.setDown(false);
             int pendingVisible=0;
+            java.util.List<String> pendingColumns=new java.util.ArrayList<>();
             int vd=io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession.serverViewDistance();
             int radius=io.github.limuqy.mc.hassium.compat.ChunkShapeCompat.boundingRadius(vd);
             var center=mc.player.chunkPosition();
             for(int x=center.x-radius;x<=center.x+radius;x++) for(int z=center.z-radius;z<=center.z+radius;z++)
                 if(io.github.limuqy.mc.hassium.compat.ChunkShapeCompat.contains(center.x,center.z,vd,x,z)
-                        && !io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.visible(x,z)) pendingVisible++;
+                        && !io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.visible(x,z)) {
+                    pendingVisible++;
+                    if(pendingColumns.size()<16) pendingColumns.add(x+","+z);
+                }
+            if(now-stepStartMs>10_000) throw new IllegalStateException("In-place resume timed out: state="+state
+                    +" pending="+pendingVisible+" sample="+pendingColumns);
             if(state!=io.github.limuqy.mc.hassium.client.sleep.SleepClient.State.IDLE || now-stepStartMs<1000
                     || pendingVisible!=0) return Outcome.RUNNING;
             if(escape && !(mc.screen instanceof net.minecraft.client.gui.screens.PauseScreen)) throw new IllegalStateException("Resume ACK stole Esc menu");

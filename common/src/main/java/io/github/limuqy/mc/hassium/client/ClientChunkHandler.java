@@ -97,25 +97,38 @@ public class ClientChunkHandler {
     }
 
     public static boolean applyShadowPullFull(byte[] payload, boolean nbtRepair) {
+        return applyShadowPullFull(payload, nbtRepair, () -> {});
+    }
+
+    public static boolean applyShadowPullFull(byte[] payload, boolean nbtRepair, Runnable ingested) {
+        return applyShadowPullFull(payload, nbtRepair, () -> true, () -> {}, ingested);
+    }
+
+    public static boolean applyShadowPullFull(byte[] payload, boolean nbtRepair,
+            java.util.function.BooleanSupplier current, Runnable beforeApply, Runnable ingested) {
         net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket packet = decodeChunkPacket(payload);
         if (packet == null) {
             return false;
         }
         net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
         net.minecraft.client.multiplayer.ClientPacketListener listener = mc.getConnection();
+        var sourceLevel = mc.level;
         if (listener == null) {
             return false;
         }
         mc.execute(() -> {
-            if (mc.getConnection() != listener) return;
-            if (nbtRepair && io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.shouldInterceptVanillaChunks()) {
-                io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.submitVisible(
-                        io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.currentDimension(),
-                        new ChunkPos(packet.getX(), packet.getZ()), packet, TraceOrigin.REMOTE_PULL, true);
-            } else {
-                markPullApply(packet.getX(), packet.getZ());
-                listener.handleLevelChunkWithLight(packet);
-            }
+            try {
+                if (mc.getConnection() != listener || mc.level != sourceLevel || !current.getAsBoolean()) return;
+                beforeApply.run();
+                if (nbtRepair && io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.shouldInterceptVanillaChunks()) {
+                    io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.submitVisible(
+                            io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.currentDimension(),
+                            new ChunkPos(packet.getX(), packet.getZ()), packet, TraceOrigin.REMOTE_PULL, true);
+                } else {
+                    markPullApply(packet.getX(), packet.getZ());
+                    listener.handleLevelChunkWithLight(packet);
+                }
+            } finally { ingested.run(); }
         });
         return true;
     }

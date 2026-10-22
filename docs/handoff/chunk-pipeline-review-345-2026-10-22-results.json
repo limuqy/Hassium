@@ -1,0 +1,353 @@
+{
+  "date": "2026-10-22",
+  "branch": "2.0.0",
+  "baseCommit": "76549cffc2f0edb720895862dd8cb140c28f371a",
+  "implementationOrder": [
+    4,
+    3,
+    5
+  ],
+  "changes": [
+    {
+      "finding": 4,
+      "change": "Reuse SectionDeltaSnapshot section hashes for FULL injection, DELTA verification and loaded chunks; align padded all-air array hash with the canonical empty map."
+    },
+    {
+      "finding": 3,
+      "change": "Apply visible NBT inline in packet order; commit shadow NBT on its main loop, then confirm/publish/ACK on the client. Cancel stale work and repair failures without Render waiting."
+    },
+    {
+      "finding": 5,
+      "change": "Bound server preparation/encoding through final send, client decode bytes/jobs and outstanding pull requests. Defer lightweight requests, explicitly retry decode failures, and isolate old connections/dimensions."
+    }
+  ],
+  "limits": {
+    "serverJobs": 128,
+    "serverJobsPerPlayer": 16,
+    "serverEstimatedBytes": 134217728,
+    "serverEstimatedBytesPerPlayer": 33554432,
+    "clientDecodeJobs": 128,
+    "clientDecodeWireBytes": 67108864,
+    "clientOutstandingColumns": 128,
+    "clientDeferredIntents": 8192,
+    "unreceivedTimeoutSeconds": 30,
+    "scope": "Transport/preparation work only; not a bound on total Minecraft or shadow-world heap. Server bytes are estimated before detached snapshots are allocated."
+  },
+  "validation": {
+    "unitAndCompile": [
+      {
+        "version": "1.20.1",
+        "tests": 549,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 2,
+        "tasks": [
+          "common:test",
+          "scanVersionBoundaries",
+          "fabric:compileJava",
+          "forge:compileJava"
+        ],
+        "log": "build/review345_matrix_1.20.1.log"
+      },
+      {
+        "version": "1.21.1",
+        "tests": 542,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 2,
+        "tasks": [
+          "common:test",
+          "scanVersionBoundaries",
+          "fabric:compileJava",
+          "neoforge:compileJava",
+          "forge:compileJava"
+        ],
+        "log": "build/review345_matrix_1.21.1.log"
+      },
+      {
+        "version": "1.21.2",
+        "tests": 542,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 2,
+        "tasks": [
+          "common:test",
+          "scanVersionBoundaries",
+          "fabric:compileJava",
+          "neoforge:compileJava"
+        ],
+        "log": "build/review345_matrix_1.21.2.log"
+      },
+      {
+        "version": "1.21.5",
+        "tests": 542,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 2,
+        "tasks": [
+          "common:test",
+          "scanVersionBoundaries",
+          "fabric:compileJava",
+          "neoforge:compileJava",
+          "forge:compileJava"
+        ],
+        "log": "build/review345_matrix_1.21.5.log"
+      },
+      {
+        "version": "1.21.6",
+        "tests": 542,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 2,
+        "tasks": [
+          "common:test",
+          "scanVersionBoundaries",
+          "fabric:compileJava",
+          "neoforge:compileJava",
+          "forge:compileJava"
+        ],
+        "log": "build/review345_matrix_1.21.6.log"
+      },
+      {
+        "version": "1.21.9",
+        "tests": 540,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 2,
+        "tasks": [
+          "common:test",
+          "scanVersionBoundaries",
+          "fabric:compileJava",
+          "neoforge:compileJava",
+          "forge:compileJava"
+        ],
+        "log": "build/review345_matrix_1.21.9.log"
+      },
+      {
+        "version": "1.21.11",
+        "tests": 540,
+        "failures": 0,
+        "errors": 0,
+        "skipped": 2,
+        "tasks": [
+          "common:test",
+          "scanVersionBoundaries",
+          "fabric:compileJava",
+          "neoforge:compileJava"
+        ],
+        "log": "build/review345_matrix_1.21.11.log"
+      }
+    ],
+    "runtime": [
+      {
+        "session": "review345_1201f_nbt_final",
+        "version": "1.20.1",
+        "loader": "forge",
+        "scenario": "cachenbt",
+        "result": "PASS",
+        "vd1": 20,
+        "vd2": 10,
+        "clientExitCode": 0,
+        "probeGateFailures": [],
+        "logAuditFailures": [],
+        "resultFile": "build/smoke-test/results/result_review345_1201f_nbt_final.json",
+        "log": "build/review345_1201f_nbt_final.log"
+      },
+      {
+        "session": "review345_1211n_nbt_final",
+        "version": "1.21.1",
+        "loader": "neoforge",
+        "scenario": "cachenbt",
+        "result": "PASS",
+        "vd1": 20,
+        "vd2": 10,
+        "clientExitCode": 0,
+        "probeGateFailures": [],
+        "logAuditFailures": [],
+        "resultFile": "build/smoke-test/results/result_review345_1211n_nbt_final.json",
+        "log": "build/review345_1211n_nbt_final.log"
+      },
+      {
+        "session": "review345_1201f_sleepresume_2",
+        "version": "1.20.1",
+        "loader": "forge",
+        "scenario": "sleepresume",
+        "result": "PASS",
+        "vd1": 10,
+        "vd2": 10,
+        "clientExitCode": 0,
+        "probeGateFailures": [],
+        "logAuditFailures": [],
+        "resultFile": "build/smoke-test/results/result_review345_1201f_sleepresume_2.json",
+        "log": "build/review345_1201f_sleepresume_2.log"
+      },
+      {
+        "session": "review345_1211n_sleepresume_1",
+        "version": "1.21.1",
+        "loader": "neoforge",
+        "scenario": "sleepresume",
+        "result": "PASS",
+        "vd1": 10,
+        "vd2": 10,
+        "clientExitCode": 0,
+        "probeGateFailures": [],
+        "logAuditFailures": [],
+        "resultFile": "build/smoke-test/results/result_review345_1211n_sleepresume_1.json",
+        "log": "build/review345_1211n_sleepresume_1.log"
+      },
+      {
+        "session": "review345_1201f_lightacceptance_1",
+        "version": "1.20.1",
+        "loader": "forge",
+        "scenario": "lightacceptance",
+        "result": "PASS",
+        "vd1": 20,
+        "vd2": 10,
+        "clientExitCode": 0,
+        "probeGateFailures": [],
+        "logAuditFailures": [],
+        "resultFile": "build/smoke-test/results/result_review345_1201f_lightacceptance_1.json",
+        "log": "build/review345_1201f_lightacceptance_1.log"
+      },
+      {
+        "session": "review345_1211n_lightacceptance_1",
+        "version": "1.21.1",
+        "loader": "neoforge",
+        "scenario": "lightacceptance",
+        "result": "PASS",
+        "vd1": 20,
+        "vd2": 10,
+        "clientExitCode": 0,
+        "probeGateFailures": [],
+        "logAuditFailures": [],
+        "resultFile": "build/smoke-test/results/result_review345_1211n_lightacceptance_1.json",
+        "log": "build/review345_1211n_lightacceptance_1.log"
+      },
+      {
+        "session": "review345_1201f_dimension_1",
+        "version": "1.20.1",
+        "loader": "forge",
+        "scenario": "dimension",
+        "result": "PASS",
+        "vd1": 20,
+        "vd2": 10,
+        "clientExitCode": 0,
+        "probeGateFailures": [],
+        "logAuditFailures": [],
+        "resultFile": "build/smoke-test/results/result_review345_1201f_dimension_1.json",
+        "log": "build/review345_1201f_dimension_1.log"
+      },
+      {
+        "session": "review345_1211n_dimension_1",
+        "version": "1.21.1",
+        "loader": "neoforge",
+        "scenario": "dimension",
+        "result": "PASS",
+        "vd1": 20,
+        "vd2": 10,
+        "clientExitCode": 0,
+        "probeGateFailures": [],
+        "logAuditFailures": [],
+        "resultFile": "build/smoke-test/results/result_review345_1211n_dimension_1.json",
+        "log": "build/review345_1211n_dimension_1.log"
+      }
+    ],
+    "sleepResumeMs": {
+      "forge1201": [
+        4224,
+        4045,
+        4052,
+        4196
+      ],
+      "neoforge1211": [
+        4115,
+        4198,
+        4100,
+        4149
+      ]
+    },
+    "lightDarkRegressionChunks": 0,
+    "dimensionCoverage": "Overworld -> Nether -> End -> Overworld; 1529 visible columns at each checkpoint on both focus combinations.",
+    "nbt": "Final runs: R1/R2/R3 fixtures correct; staleSigns=0 and invalidEntities=0.",
+    "earlierFailures": {
+      "sessions": [
+        "review345_1201f_sleepresume_1",
+        "review345_1201f_sleepresume_diag"
+      ],
+      "result": "FAIL retained",
+      "cause": "The generic harness default VD20 was used for a sleep scenario whose documented traffic-profile wrapper uses VD10. Its existing 24-column / 200ms recovery budget cannot restore all VD20 columns within the unchanged 10-second assertion.",
+      "evidence": "Diagnostic run: ACTIVE arrived; steady ~120 columns/s; 328 outer columns remained at timeout. VD10 reruns passed on both focus combinations.",
+      "reference": "scripts/traffic-profile.ps1:88"
+    },
+    "limits": [
+      "Automated runtime and light probes; no claim of human visual acceptance or quantified FPS/throughput improvement.",
+      "Runtime checks were performed during implementation; final stale-response and decode-retry refinements were followed by both final NBT runs and the full seven-anchor matrix."
+    ]
+  },
+  "sourceSha256AtReport": [
+    {
+      "path": "common/src/main/java/io/github/limuqy/mc/hassium/cache/ChunkContentHashUtil.java",
+      "sha256": "c0f16ae237f276d87f4a2635350908dd07dda13dc6fd8c94fc6fd08bc0796242"
+    },
+    {
+      "path": "common/src/main/java/io/github/limuqy/mc/hassium/client/ClientChunkHandler.java",
+      "sha256": "4c56129cd213c949ccecb2d058e24e2a6ffcf49abda32ffb09afb2099491594f"
+    },
+    {
+      "path": "common/src/main/java/io/github/limuqy/mc/hassium/client/scenario/ScenarioEngine.java",
+      "sha256": "93200e46d0a5ff376299c33a66e1bbb69b45cfcba5d9d6eadf3f96bc5213ca87"
+    },
+    {
+      "path": "common/src/main/java/io/github/limuqy/mc/hassium/concurrent/AsyncSnapshotCommit.java",
+      "sha256": "280bfd8b4b0fca2e3cbb034430789ca8168eb9bdaed2cbd12d864bd9e2b76ebf"
+    },
+    {
+      "path": "common/src/main/java/io/github/limuqy/mc/hassium/concurrent/WorkBudget.java",
+      "sha256": "f6074c84b3de7ff4d964fbec0c798bc88fb06047759ebb8654796ddee4dc47f3"
+    },
+    {
+      "path": "common/src/main/java/io/github/limuqy/mc/hassium/protocol/PayloadHandlers.java",
+      "sha256": "dd7957f9b1e43def2822c71fb6293f86e7a799f48dfe7b5298348fb44c8392e0"
+    },
+    {
+      "path": "common/src/main/java/io/github/limuqy/mc/hassium/protocol/PullReceiveWindow.java",
+      "sha256": "56b24385e6f4e5d250ba3ed8a414d554e7b58891614b68947579d58ce4e4e616"
+    },
+    {
+      "path": "common/src/main/java/io/github/limuqy/mc/hassium/protocol/PullResponseDecodeQueue.java",
+      "sha256": "8b81456e4d986bcd1ae26de8698ab18cd8ccec811115222ea45423b8584d348a"
+    },
+    {
+      "path": "common/src/main/java/io/github/limuqy/mc/hassium/protocol/ShadowPullClient.java",
+      "sha256": "f48efb76a59a4a6257512682a17ee882d8e5b55d1f2b3532dc6a0f2387cd5955"
+    },
+    {
+      "path": "common/src/main/java/io/github/limuqy/mc/hassium/server/ServerChunkPushManager.java",
+      "sha256": "16229008932fd9684fd40af5b5c10f7bfa93a2e99199d9a4c4d8dbedd95a4b8c"
+    },
+    {
+      "path": "common/src/main/java/io/github/limuqy/mc/hassium/shadow/server/ShadowSeedServer.java",
+      "sha256": "0c00fffe63ffb69f59f1ca667c4488bf9bc88c612f09c1752d2643e78def5a66"
+    },
+    {
+      "path": "common/src/main/java/io/github/limuqy/mc/hassium/utils/ChunkPipelineProfile.java",
+      "sha256": "2c2ecc191a62e6a8127e2cd4b0d1b65dfa8bb6e3a47fcc63db6f83b91da47746"
+    },
+    {
+      "path": "common/src/test/java/io/github/limuqy/mc/hassium/cache/ChunkContentHashReuseTest.java",
+      "sha256": "23c78b23f1617c3f786b1bacdf533129ad8d2577089402d5d50d6369ac636fe0"
+    },
+    {
+      "path": "common/src/test/java/io/github/limuqy/mc/hassium/concurrent/AsyncSnapshotCommitTest.java",
+      "sha256": "12ad8648ae0fcff70d78dd425762132a2eb4c9ff5361f19ea08e9b7bfcbce334"
+    },
+    {
+      "path": "common/src/test/java/io/github/limuqy/mc/hassium/concurrent/WorkBudgetTest.java",
+      "sha256": "37da4690171d93b0532ca81b47541e32df558f7ecb41f5e0621b14f403728a68"
+    },
+    {
+      "path": "common/src/test/java/io/github/limuqy/mc/hassium/protocol/PullReceiveWindowTest.java",
+      "sha256": "f3f504fbb1072a423bb6e18dadb87d0f3347e7ae7042b585df3c9a37895fdae5"
+    }
+  ]
+}

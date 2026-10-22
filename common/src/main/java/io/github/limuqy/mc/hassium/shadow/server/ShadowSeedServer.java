@@ -581,15 +581,15 @@ public class ShadowSeedServer extends MinecraftServer {
         io.github.limuqy.mc.hassium.compat.ShadowBlockEntityCompat.capture(chunk, data);
         // 网络注入：packet 内容可能与磁盘表 hash 不同，必须现算并覆盖。
         // 读盘柱走 injectLoadedChunk，hash 已由 MixinRegionFile 回填，禁止在此重复现算。
+        SectionDeltaSnapshot snapshot = SectionDeltaSnapshot.capture(chunk);
         try {
             long contentHash = io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil
-                    .combineSectionHashes(io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil
-                            .computeSectionHashes(chunk));
+                    .combineSectionHashesFromArray(snapshot.sectionHashes());
             io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes.put(dimension, pos, contentHash);
         } catch (Throwable hashError) {
             LOGGER.debug("Hassium: Shadow contentHash compute failed for {}, skip hash write", pos);
         }
-        SectionDeltaSnapshots.put(dimension, pos, SectionDeltaSnapshot.capture(chunk));
+        SectionDeltaSnapshots.put(dimension, pos, snapshot);
         return chunk;
     }
 
@@ -995,9 +995,9 @@ public class ShadowSeedServer extends MinecraftServer {
             io.github.limuqy.mc.hassium.compat.ShadowBlockEntityCompat.applySnapshot(chunk, entry.blockEntities());
             // 5) 重算 contentHash 写存储桥（R2 比对 / 断连落盘复用），并校验 expectedChunkHash
             try {
+                SectionDeltaSnapshot snapshot = SectionDeltaSnapshot.capture(chunk);
                 long contentHash = io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil
-                        .combineSectionHashes(io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil
-                                .computeSectionHashes(chunk));
+                        .combineSectionHashesFromArray(snapshot.sectionHashes());
                 if (contentHash != entry.expectedChunkHash()) {
                     LOGGER.debug("Hassium: Shadow applySectionDelta hash mismatch ({}, {}): got={} expected={}",
                             pos.x, pos.z, Long.toHexString(contentHash),
@@ -1006,7 +1006,7 @@ public class ShadowSeedServer extends MinecraftServer {
                     return false;
                 }
                 io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes.put(dimension, pos, contentHash);
-                SectionDeltaSnapshots.put(dimension, pos, SectionDeltaSnapshot.capture(chunk));
+                SectionDeltaSnapshots.put(dimension, pos, snapshot);
             } catch (Throwable hashError) {
                 LOGGER.debug("Hassium: Shadow contentHash recompute failed for {}, skip hash write", pos);
                 SectionDeltaSnapshots.invalidate(dimension, pos);
@@ -1618,17 +1618,17 @@ public class ShadowSeedServer extends MinecraftServer {
             // fill(15)——磁盘上的正确天光被抹成全 15（R2 整片异常亮的根因）。
             chunk.initializeLightSources();
             this.injectedChunks.put(key, chunk);
+            SectionDeltaSnapshot snapshot = SectionDeltaSnapshot.capture(chunk);
             if (io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes.get(dimension, pos) == null) {
                 try {
                     long contentHash = io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil
-                            .combineSectionHashes(io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil
-                                    .computeSectionHashes(chunk));
+                            .combineSectionHashesFromArray(snapshot.sectionHashes());
                     io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes.put(dimension, pos, contentHash);
                 } catch (Throwable ignored) {
                     // compare 无 hash 会走空基线 FULL；不得因 hash 失败丢柱
                 }
             }
-            SectionDeltaSnapshots.put(dimension, pos, SectionDeltaSnapshot.capture(chunk));
+            SectionDeltaSnapshots.put(dimension, pos, snapshot);
         });
         // 悬置柱放行（同 injectChunk）：读盘/生成柱入表即恢复原版加载链
         ShadowChunkMapCompat.completeSuspendedLoad(dimension, pos, chunk);

@@ -17,7 +17,8 @@ public final class ChunkPipelineProfile {
         ENCODE_WAIT, ENCODE_WALL, SEND_WAIT, SERVER_TICK, CLIENT_TICK, DRAIN_INTERVAL
     }
     public enum Counter { FULL, DELTA, UNCHANGED, ERROR, QUOTA_DEFERRED, EMPTY_BATCH,
-        ELIGIBLE_AFTER_EMPTY, FLOW_EVICTED, FLOW_ABANDONED, REQUEST_EVICTED, READY_PEAK, DECODE_PEAK }
+        ELIGIBLE_AFTER_EMPTY, FLOW_EVICTED, FLOW_ABANDONED, REQUEST_EVICTED, READY_PEAK, DECODE_PEAK,
+        BACKPRESSURE_DEFERRED, DECODE_RETRY }
     private static final Bucket CLIENT = new Bucket("client"), SERVER = new Bucket("server");
     private static final LinkedHashMap<Long, Flow> FLOWS = new LinkedHashMap<>();
     private static final LinkedHashMap<Column, Long> MESH = new LinkedHashMap<>();

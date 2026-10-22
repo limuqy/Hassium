@@ -113,11 +113,15 @@ public final class ChunkContentHashUtil {
         StreamingXXHash64 hasher = XX_FACTORY.newStreamingHash64(HASH_SEED);
         HashingOutputStream out = new HashingOutputStream(hasher);
         try {
+            boolean nonEmpty = false;
             for (int i = 0; i < sectionHashes.length; i++) {
                 if (sectionHashes[i] == 0L) continue;
+                nonEmpty = true;
                 writeInt(out, i);
                 writeLong(out, sectionHashes[i]);
             }
+            // A padded all-air snapshot is equivalent to the empty canonical map.
+            if (!nonEmpty) return 1L;
             long hash = out.getValue();
             return hash == 0L ? 1L : hash;
         } catch (IOException e) {

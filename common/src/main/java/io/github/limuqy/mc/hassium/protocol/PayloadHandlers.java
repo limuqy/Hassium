@@ -77,11 +77,17 @@ public final class PayloadHandlers {
 
     /** 工人线程：ZSTD 解压 + packet 解码 + {@link ShadowPullClient} 业务分发。 */
     static void processShadowPullResponse(byte[] data) {
+        processShadowPullResponse(data, () -> true);
+    }
+
+    static void processShadowPullResponse(byte[] data, java.util.function.BooleanSupplier current) {
         FriendlyByteBuf buf = wrap(data);
         try {
-            ShadowPullClient.handleResponse(ShadowPullResponseS2CPacket.decode(buf));
+            var response = ShadowPullResponseS2CPacket.decode(buf);
+            if (current.getAsBoolean()) ShadowPullClient.handleResponse(response);
         } catch (Exception e) {
             LOGGER.warn("[CLIENT] Failed to handle shadowPullV1 response", e);
+            if (current.getAsBoolean()) ShadowPullClient.retryDecodeResponse(data);
         } finally {
             buf.release();
         }
