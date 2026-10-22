@@ -63,6 +63,7 @@ param(
     # seedgen/dimension 场景强制 -CleanWorld 语义；存在 scripts/smoke/profiles/<name>.profile.properties
     # 时按键值对 patch 双端 hassium toml（见 Invoke-SmokeProfilePatch）。
     [string]$Scenario = "classic",
+    [ValidateRange(1,2)][int]$ClientCount = 1,
     # Always restore a new isolated copy of a supplied world. The source archive is read-only.
     [string]$WorldZip = "",
     [switch]$Offline,
@@ -80,6 +81,8 @@ param(
 )
 
 $ErrorActionPreference = "Continue"
+if ($Scenario -eq 'egressload') { $ClientCount = 2 }
+if ($ClientCount -gt 1 -and $Scenario -ne 'egressload') { throw 'ClientCount=2 is supported by the egressload scenario.' }
 if ($Scenario -eq 'ovdgen') {
     if (-not $PSBoundParameters.ContainsKey('Vd1')) { $Vd1 = 4 }
     if (-not $PSBoundParameters.ContainsKey('Vd2')) { $Vd2 = 4 }
@@ -787,6 +790,20 @@ $clientProc = Start-Process -FilePath $gradlew `
     -PassThru -WindowStyle Hidden
 
 $observerProc = $null
+if ($Scenario -eq 'egressload') {
+    $observerDir = Join-Path $logRoot "observer/$SessionId"
+    $observerProbeDir = Join-Path $probeDir 'observer'
+    New-Item -ItemType Directory -Force -Path "$observerDir/config/hassium", $observerProbeDir | Out-Null
+    Copy-Item -LiteralPath (Join-Path $clientRunDir 'options.txt') -Destination "$observerDir/options.txt"
+    Copy-Item -LiteralPath (Join-Path $clientRunDir 'config/hassium/hassium-client.toml') -Destination "$observerDir/config/hassium/hassium-client.toml"
+    $observerArgs = @('--no-daemon', "-Dorg.gradle.jvmargs=-Xmx2G -DsmokeSession=${SessionId}_observer",
+        ":${Loader}:runClient", "-Pmc_ver=$Ver", '-PhassiumSmokeTest=true', "-PhassiumSmokeHost=$effectiveHost",
+        '-PhassiumSmokeScenario=egressload', '-PhassiumSmokeUsername=EgressObserver',
+        "-PhassiumSmokeClientRunDir=$observerDir", "-PhassiumSmokeProbeDir=$observerProbeDir", '-PhassiumSmokePhases=classic')
+    if ($Offline) { $observerArgs += '--offline' }
+    $observerProc = Start-Process -FilePath $gradlew -ArgumentList $observerArgs -WindowStyle Hidden -PassThru `
+        -RedirectStandardOutput (Join-Path $logDir "observer_$SessionId.log") -RedirectStandardError (Join-Path $logDir "observer_$SessionId.err.log")
+}
 if ($Scenario -eq 'sleepmixed') {
     $observerDir = Join-Path $logRoot "observer/$SessionId"
     New-Item -ItemType Directory -Force -Path "$observerDir/config/hassium" | Out-Null
@@ -835,6 +852,13 @@ if (-not $clientProc.HasExited) {
     Stop-Process -Id $clientProc.Id -Force -ErrorAction SilentlyContinue
 }
 $clientExit = if ($clientProc.ExitCode) { $clientProc.ExitCode } else { 0 }
+if ($observerProc -and $Scenario -eq 'egressload' -and -not $observerProc.HasExited) {
+    $remainingMs = [int][Math]::Max(0, ($clientDeadline - (Get-Date)).TotalMilliseconds)
+    while ($remainingMs -gt 0 -and -not $observerProc.HasExited) {
+        $null = $observerProc.WaitForExit([Math]::Min(1000, $remainingMs))
+        $remainingMs = [int][Math]::Max(0, ($clientDeadline - (Get-Date)).TotalMilliseconds)
+    }
+}
 if ($observerProc -and ($observerProc.HasExited -eq $false -or $observerProc.ExitCode -ne 0)) {
     Write-Host "[$SessionId] Mixed observer did not complete successfully"
     $clientExit = 2
@@ -845,7 +869,7 @@ Write-Host "[$SessionId] [8/9] 解析结果 (客户端退出码: $clientExit)...
 # 单轮场景没有 ROUND2；不得把未运行的轮次写成 stats=false / pass=false。
 # flyroundtrip：单轮往返飞行黑块专项（join → 飞出去 → 掉头飞回 → dump ROUND1 → assertProbe → exit rounds=1）。
 # dictionary：单轮字典热更 rollout（join → /tick rate 200 → 等训练+offer+ACK 切换 → dump ROUND1 → exit rounds=1）。
-$requiresRound2 = $Scenario -notin @("seedgen", "ovdgen", "modcompat", "modcompat_strict", "flyroundtrip", "dictionary", "trafficprofile", "trafficfactory")
+$requiresRound2 = $Scenario -notin @("seedgen", "ovdgen", "modcompat", "modcompat_strict", "flyroundtrip", "dictionary", "trafficprofile", "trafficfactory", "egressload")
 $clientContent = if (Test-Path $clientLog) { Get-Content $clientLog -Raw } else { "" }
 
 # F17：Gradle 会把 fork 出的游戏 JVM 的真实退出码写进自己的失败信息（在 client 的 stderr 日志里）。挂起被系统关闭时是
@@ -973,7 +997,9 @@ $logAuditAllow = @(
     "Unknown structure start: minecraft:trial_chambers"
 ) + @($AllowErrorPatterns)
 $logAuditFailures = @()
-foreach ($auditLog in @($serverLog, $clientLog)) {
+$auditLogs = @($serverLog, $clientLog)
+if ($Scenario -eq 'egressload') { $auditLogs += Join-Path $logDir "observer_$SessionId.log" }
+foreach ($auditLog in $auditLogs) {
     if (-not (Test-Path $auditLog)) { continue }
     $tag = Split-Path -Leaf $auditLog
     $inExitWindow = $false
@@ -1011,6 +1037,8 @@ $resultObj = @{
     Scenario = $Scenario
     Result = "UNKNOWN"
     ClientExitCode = $clientExit
+    ClientCount = $ClientCount
+    ObserverExitCode = if ($observerProc -and $observerProc.HasExited) { $observerProc.ExitCode } else { $null }
     # F17 挂起取证：ClientNativeExitCode = fork 出的游戏 JVM 真实退出码（gradlew 恒为 1，
     # 系统判定挂起并关闭进程时是 0xCFFFFFFF）；HangDumps 非空 = 日志静默期间抓到过现场。
     ClientNativeExitCode = $clientNativeExit

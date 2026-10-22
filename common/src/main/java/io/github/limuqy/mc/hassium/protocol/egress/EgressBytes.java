@@ -7,6 +7,8 @@ import java.util.Arrays;
 /** Bounded, canonical wire primitives shared by the v3 codec and its replay tests. */
 final class EgressBytes {
     static final class Writer extends ByteArrayOutputStream {
+        Writer() {}
+        Writer(int capacity) { super(capacity); }
         Writer integer(int value) {
             if (value < 0) throw new IllegalArgumentException("Negative wire integer");
             do { int b = value & 127; value >>>= 7; write(b | (value == 0 ? 0 : 128)); } while (value != 0);
@@ -21,6 +23,7 @@ final class EgressBytes {
         Writer bytes(byte[] value) { writeBytes(value); return this; }
         Writer fixedInt(int value) { for (int s = 24; s >= 0; s -= 8) write(value >>> s); return this; }
     }
+    static int numberSize(long value) { int size = 1; while ((value >>>= 7) != 0) size++; return size; }
     static final class Reader {
         private final byte[] bytes;
         private int position;

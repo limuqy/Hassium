@@ -48,8 +48,8 @@ public final class EgressFixture {
         return new State(session, sequence, biome, text, List.copyOf(values));
     }
     public static boolean enabled() {
-        return Services.PLATFORM.isDevelopmentEnvironment() && (Set.of("egress", "egressbench").contains(System.getProperty("hassium.smokeScenario", ""))
-                || Set.of("egress", "egressbench").contains(System.getProperty("hassium.serverSmokeScenario", "")));
+        return Services.PLATFORM.isDevelopmentEnvironment() && (Set.of("egress", "egressbench", "egressload").contains(System.getProperty("hassium.smokeScenario", ""))
+                || Set.of("egress", "egressbench", "egressload").contains(System.getProperty("hassium.serverSmokeScenario", "")));
     }
     private static String text(int sequence) { return "opaque-Mod-state-" + "x".repeat(sequence % 150); }
     private static List<Integer> values(int sequence) { List<Integer> values = new ArrayList<>(); for (int i = 0; i < sequence % 9; i++) values.add(sequence + i); return List.copyOf(values); }
@@ -57,6 +57,7 @@ public final class EgressFixture {
     private static final Map<net.minecraft.network.Connection, Long> SESSIONS = new WeakHashMap<>();
     public static void tickServer(MinecraftServer server) {
         if (!enabled()) return;
+        if ("egressload".equals(System.getProperty("hassium.serverSmokeScenario"))) { EgressLoadBenchmark.tickServer(server); return; }
         if ("egressbench".equals(System.getProperty("hassium.serverSmokeScenario"))) { EgressBenchmark.tickServer(server); return; }
         for (var player : server.getPlayerList().getPlayers()) {
             var connection = PlayerCompat.getConnection(player);
@@ -105,6 +106,8 @@ public final class EgressFixture {
             if (!state.biome.is(Biomes.PLAINS) || !state.text.equals(text(received)) || !state.values.equals(values(received))) throw new IllegalStateException("Fixture registry/string/list mismatch");
         } else if (((Event)payload).value != received * 100003L) throw new IllegalStateException("Fixture event mismatch");
         received++;
+        if ("egressload".equals(System.getProperty("hassium.smokeScenario")) && received == EgressLoadBenchmark.EXPECTED)
+            Constants.LOG.info("[EGRESS_LOAD_CLIENT] received={} profile={}", received, new com.google.gson.Gson().toJson(EgressProfiler.snapshot()));
         if (received == COUNT) Constants.LOG.info("[EGRESS_FIXTURE] PASS count={} typed state/event, registry, strings, lists, bundles, exactly-once", received);
     }
     private EgressFixture() {}

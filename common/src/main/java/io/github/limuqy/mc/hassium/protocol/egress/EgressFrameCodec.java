@@ -5,6 +5,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.function.IntFunction;
+import java.util.function.Consumer;
 import java.util.zip.CRC32C;
 
 /** One codec per transport direction; state advances only after a complete frame validates. */
@@ -24,10 +25,19 @@ public final class EgressFrameCodec implements AutoCloseable {
     private long templateAttempts, templateSkips, templateWins;
     private boolean closed;
 
-    public record PacketBytes(String key, byte[] bytes) {
-        public PacketBytes { if (key == null || bytes == null || bytes.length == 0 || bytes.length > MAX_FRAME_BYTES) throw EgressBytes.invalid("Invalid packet"); bytes = bytes.clone(); }
-        @Override public byte[] bytes() { return bytes.clone(); }
-        // Package-private, read-only view: the record owns this immutable copy.
+    public static final class PacketBytes {
+        private final String key;
+        private final byte[] bytes;
+        public PacketBytes(String key, byte[] bytes) { this(key, bytes, false); }
+        private PacketBytes(String key, byte[] bytes, boolean owned) {
+            if (key == null || bytes == null || bytes.length == 0 || bytes.length > MAX_FRAME_BYTES) throw EgressBytes.invalid("Invalid packet");
+            this.key = key; this.bytes = owned ? bytes : bytes.clone();
+        }
+        /** Only pass freshly allocated bytes whose ownership is transferred to this packet. */
+        static PacketBytes owned(String key, byte[] bytes) { return new PacketBytes(key, bytes, true); }
+        public String key() { return key; }
+        public byte[] bytes() { return bytes.clone(); }
+        // Package-private read-only view. Callers must never modify the owned array.
         byte[] content() { return bytes; }
     }
     public record Dictionary(int epoch, byte[] bytes) {
@@ -54,6 +64,10 @@ public final class EgressFrameCodec implements AutoCloseable {
     }
     public synchronized void setLevel(int level) { open(); compressor.setLevel(level); }
     public synchronized Encoded encode(List<PacketBytes> packets, long sessionEpoch, Dictionary dictionary) {
+        return encode(packets, sessionEpoch, dictionary, null);
+    }
+    /** The observer may retain, but must never mutate, the already serialized logical batch. */
+    synchronized Encoded encode(List<PacketBytes> packets, long sessionEpoch, Dictionary dictionary, Consumer<byte[]> logicalObserver) {
         open();
         if (sessionEpoch <= 0 || packets == null || packets.isEmpty() || packets.size() > MAX_PACKETS) throw EgressBytes.invalid("Invalid outbound frame");
         if (epoch != sessionEpoch) { if (epoch != 0 && sessionEpoch <= epoch) throw EgressBytes.invalid("Epoch regression"); reset(sessionEpoch); }
@@ -64,14 +78,15 @@ public final class EgressFrameCodec implements AutoCloseable {
         Candidate best = choose(logical, false, logical.length, checksum, next, dictionary);
         TemplateDictionary.Transaction transaction = null;
         if (templatesEnabled) {
-            if (templates.shouldAttempt(packets, best.frame.length, logical.length)) { templateAttempts++; transaction = templates.prepare(packets); }
+            if (templates.shouldAttempt(packets, best.size, logical.length)) { templateAttempts++; transaction = templates.prepare(packets); }
             else templateSkips++;
         }
         if (transaction != null && transaction.bytes().length <= MAX_LOGICAL_BYTES) {
             Candidate mapped = choose(transaction.bytes(), true, logical.length, checksum, next, dictionary);
-            if (mapped.frame.length < best.frame.length) best = mapped;
+            if (mapped.size < best.size) best = mapped;
         }
-        if (best.frame.length > MAX_FRAME_BYTES) throw EgressBytes.invalid("Carrier exceeds payload limit");
+        if (best.size > MAX_FRAME_BYTES) throw EgressBytes.invalid("Carrier exceeds payload limit");
+        byte[] frame = assemble(best, logical.length, checksum, next);
         int exact = 0, partial = 0, definitions = 0;
         if (best.mapped) { transaction.commit(); exact = transaction.exact; partial = transaction.partial; definitions = transaction.definitions; }
         if (templatesEnabled) {
@@ -80,7 +95,8 @@ public final class EgressFrameCodec implements AutoCloseable {
         }
         if (historyEnabled) appendHistory(best.payload);
         sequence = next;
-        return new Encoded(best.frame, logical.length, best.mode, best.mapped, exact, partial, definitions,
+        if (logicalObserver != null) logicalObserver.accept(logical);
+        return new Encoded(frame, logical.length, best.mode, best.mapped, exact, partial, definitions,
                 dictionary == null ? 0 : dictionary.epoch);
     }
     public record TemplateStats(long attempts, long skips, long wins) {}
@@ -90,12 +106,12 @@ public final class EgressFrameCodec implements AutoCloseable {
         if (historyEnabled && history.length != 0 && !dictionaryMagic(history)) {
             compressor.loadDict(history);
             Candidate c = candidate(compressor.compress(payload), payload, mapped, HISTORY, 0, length, crc, next);
-            if (c.frame.length < best.frame.length) best = c;
+            if (c.size < best.size) best = c;
         }
         compressor.loadDict(dictionary == null ? new byte[0] : dictionary.bytes);
         Candidate c = candidate(compressor.compress(payload), payload, mapped, dictionary == null ? ZSTD : TRAINED,
                 dictionary == null ? 0 : dictionary.epoch, length, crc, next);
-        return c.frame.length < best.frame.length ? c : best;
+        return c.size < best.size ? c : best;
     }
     // The embedded JNI loader auto-detects formatted dictionaries. Opaque bytes with that
     // reserved prefix are not a valid raw-content candidate; other complete candidates remain eligible.
@@ -103,11 +119,18 @@ public final class EgressFrameCodec implements AutoCloseable {
         return bytes.length >= 4 && bytes[0] == 0x37 && bytes[1] == (byte)0xa4 && bytes[2] == 0x30 && bytes[3] == (byte)0xec;
     }
     private Candidate candidate(byte[] encoded, byte[] payload, boolean mapped, int mode, int dictEpoch, int length, int crc, long next) {
-        EgressBytes.Writer w = new EgressBytes.Writer();
-        w.integer(VERSION).number(epoch).number(next).octet(mode | (mapped ? 4 : 0)).integer(length).integer(payload.length).fixedInt(crc);
-        if (mode == TRAINED) w.integer(dictEpoch);
-        w.bytes(encoded);
-        return new Candidate(w.toByteArray(), payload, mode, mapped);
+        int size = EgressBytes.numberSize(VERSION) + EgressBytes.numberSize(epoch) + EgressBytes.numberSize(next)
+                + 1 + EgressBytes.numberSize(length) + EgressBytes.numberSize(payload.length) + 4
+                + (mode == TRAINED ? EgressBytes.numberSize(dictEpoch) : 0) + encoded.length;
+        return new Candidate(encoded, payload, mode, mapped, dictEpoch, size);
+    }
+    private byte[] assemble(Candidate selected, int length, int crc, long next) {
+        EgressBytes.Writer w = new EgressBytes.Writer(selected.size);
+        w.integer(VERSION).number(epoch).number(next).octet(selected.mode | (selected.mapped ? 4 : 0))
+                .integer(length).integer(selected.payload.length).fixedInt(crc);
+        if (selected.mode == TRAINED) w.integer(selected.dictEpoch);
+        w.bytes(selected.encoded);
+        return w.toByteArray();
     }
     public synchronized List<byte[]> decode(byte[] frame, IntFunction<byte[]> dictionaries) {
         open();
@@ -149,8 +172,10 @@ public final class EgressFrameCodec implements AutoCloseable {
         return packets;
     }
     private static byte[] logical(List<PacketBytes> packets) {
-        EgressBytes.Writer w = new EgressBytes.Writer(); w.integer(packets.size());
-        for (PacketBytes p : packets) { w.integer(p.bytes.length).bytes(p.bytes); if (w.size() > MAX_LOGICAL_BYTES) throw EgressBytes.invalid("Logical frame too large"); }
+        int size = EgressBytes.numberSize(packets.size());
+        for (PacketBytes p : packets) { size += EgressBytes.numberSize(p.bytes.length) + p.bytes.length; if (size > MAX_LOGICAL_BYTES) throw EgressBytes.invalid("Logical frame too large"); }
+        EgressBytes.Writer w = new EgressBytes.Writer(size); w.integer(packets.size());
+        for (PacketBytes p : packets) w.integer(p.bytes.length).bytes(p.bytes);
         return w.toByteArray();
     }
     static List<byte[]> splitLogical(byte[] logical) {
@@ -170,5 +195,5 @@ public final class EgressFrameCodec implements AutoCloseable {
     private void reset(long sessionEpoch) { epoch = sessionEpoch; sequence = 0; history = new byte[0]; templates.clear(); }
     private void open() { if (closed) throw EgressBytes.invalid("Codec closed"); }
     @Override public synchronized void close() { if (!closed) { closed = true; compressor.close(); decompressor.close(); history = new byte[0]; templates.clear(); } }
-    private record Candidate(byte[] frame, byte[] payload, int mode, boolean mapped) {}
+    private record Candidate(byte[] encoded, byte[] payload, int mode, boolean mapped, int dictEpoch, int size) {}
 }

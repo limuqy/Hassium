@@ -50,7 +50,7 @@ final class EgressOutboundHandler extends ChannelDuplexHandler {
             this.play = play;
         }
     }
-    private record Batch(List<Write> writes, EgressProtocol protocol, long epoch, int size) {}
+    private record Batch(List<Write> writes, EgressProtocol protocol, long epoch, int size, long sealedAt) {}
     private static final Object FLUSH = new Object();
 
     EgressOutboundHandler(Connection connection) {
@@ -144,7 +144,9 @@ final class EgressOutboundHandler extends ChannelDuplexHandler {
     private void seal() {
         if (timer != null) { timer.cancel(false); timer = null; }
         if (pending.isEmpty()) return;
-        fifo.add(new Batch(List.copyOf(pending), protocol, epoch, pending.stream().mapToInt(w -> w.bytes.readableBytes() + 128).sum()));
+        long sealedAt = EgressProfiler.ENABLED ? System.nanoTime() : 0;
+        if (EgressProfiler.ENABLED) for (Write write : pending) EgressProfiler.Stage.BATCH_WAIT.record(sealedAt - write.enqueued, -1);
+        fifo.add(new Batch(List.copyOf(pending), protocol, epoch, pending.stream().mapToInt(w -> w.bytes.readableBytes() + 128).sum(), sealedAt));
         pending.clear(); pendingBytes = 0;
         if (flushRequested) { flushRequested = false; queueFlush(); }
     }
@@ -181,41 +183,64 @@ final class EgressOutboundHandler extends ChannelDuplexHandler {
     }
     private void compress(Batch batch) {
         busy = true; inFlight.add(batch);
+        long preparationStart = EgressProfiler.ENABLED ? System.nanoTime() : 0;
+        EgressProfiler.Stage.FIFO_WAIT.record(preparationStart - batch.sealedAt, -1);
+        long preparationAllocated = EgressProfiler.allocated();
         List<EgressFrameCodec.PacketBytes> packets = new ArrayList<>(batch.writes.size());
         try {
             for (Write write : batch.writes) {
                 ByteBuf bytes = write.bytes; write.bytes = null;
                 try {
                     byte[] data = new byte[bytes.readableBytes()]; bytes.readBytes(data);
-                    packets.add(new EgressFrameCodec.PacketBytes(write.meta.key(), data));
+                    packets.add(EgressFrameCodec.PacketBytes.owned(write.meta.key(), data));
                 } finally { bytes.release(); }
             }
             var dictionary = dictionarySupplier.get();
+            EgressProfiler.finish(EgressProfiler.Stage.PREPARE, preparationStart, preparationAllocated);
+            long submitted = EgressProfiler.ENABLED ? System.nanoTime() : 0;
             worker.execute(() -> {
                 long start = System.nanoTime();
                 long cpu = EgressCpuClock.now();
+                long allocated = EgressProfiler.allocated();
+                EgressProfiler.Stage.WORKER_QUEUE.record(start - submitted, -1);
+                SampleCollector samples = new SampleCollector(connection);
                 try {
                     EgressFrameCodec.Encoded frame;
                     synchronized (codecLifecycle) {
                         if (closed) return;
                         if (codec == null) codec = new EgressFrameCodec(EgressPipeline.compressionLevel());
                         codec.setLevel(EgressPipeline.compressionLevel());
-                        frame = codec.encode(packets, batch.epoch, dictionary);
+                        frame = codec.encode(packets, batch.epoch, dictionary, samples);
                     }
-                    EgressPipeline.METRICS.compressionNanos.add(System.nanoTime() - start);
+                    long codecNs = System.nanoTime() - start;
+                    EgressPipeline.METRICS.compressionNanos.add(codecNs);
                     EgressPipeline.METRICS.compressionCpuNanos.add(EgressCpuClock.now() - cpu);
-                    // Feed the existing training/rollout machinery complete native bytes.
-                    EgressBytes.Writer raw = new EgressBytes.Writer(); raw.integer(packets.size());
-                    for (var packet : packets) { byte[] bytes = packet.bytes(); raw.integer(bytes.length).bytes(bytes); }
-                    byte[] corpus = raw.toByteArray();
-                    DictionaryManager.collectSample(corpus); DictionaryManager.collectCorpusSample(connection, corpus);
-                    context.executor().execute(() -> send(batch, frame));
+                    EgressProfiler.Stage.CODEC.record(codecNs, EgressProfiler.allocationDelta(allocated));
+                    samples.collect();
+                    long encodedAt = EgressProfiler.ENABLED ? System.nanoTime() : 0;
+                    context.executor().execute(() -> {
+                        EgressProfiler.elapsed(EgressProfiler.Stage.EVENT_LOOP_RETURN, encodedAt);
+                        send(batch, frame);
+                    });
                 } catch (Throwable e) { context.executor().execute(() -> fail(e)); }
             });
         } catch (Throwable e) { fail(e); }
     }
+    private static final class SampleCollector implements Consumer<byte[]> {
+        private final Connection connection;
+        private byte[] logical;
+        SampleCollector(Connection connection) { this.connection = connection; }
+        public void accept(byte[] logical) { this.logical = logical; }
+        void collect() {
+            long start = EgressProfiler.ENABLED ? System.nanoTime() : 0, beforeAllocated = EgressProfiler.allocated();
+            // Reuse the immutable native logical batch. The dictionary hooks decide whether to retain it.
+            DictionaryManager.collectSample(logical); DictionaryManager.collectCorpusSample(connection, logical);
+            EgressProfiler.finish(EgressProfiler.Stage.SAMPLE, start, beforeAllocated);
+        }
+    }
     private void send(Batch batch, EgressFrameCodec.Encoded frame) {
         if (closed) return;
+        long writeStarted = EgressProfiler.ENABLED ? System.nanoTime() : 0;
         ByteBuf carrier = context.alloc().buffer();
         try {
             carrierEncoder.encode(batch.protocol, carrier, frame.bytes());
@@ -224,6 +249,7 @@ final class EgressOutboundHandler extends ChannelDuplexHandler {
             int compressionPrefixBytes = context.pipeline().get("compress") == null ? 0 : 1;
             ChannelPromise result = context.newPromise();
             result.addListener(f -> {
+                EgressProfiler.elapsed(EgressProfiler.Stage.WRITE, writeStarted);
                 inFlight.remove(batch); if (!closed) queuedBytes -= batch.size;
                 for (Write write : batch.writes) complete(write, f.isSuccess() ? null : f.cause());
                 if (!f.isSuccess()) { fail(f.cause()); return; }
@@ -246,7 +272,11 @@ final class EgressOutboundHandler extends ChannelDuplexHandler {
     private void complete(Write write, Throwable failure) {
         if (write.completed) return;
         write.completed = true;
-        if (write.play) EgressPipeline.METRICS.queueNanos.add(System.nanoTime() - write.enqueued);
+        if (write.play) {
+            long elapsed = System.nanoTime() - write.enqueued;
+            EgressPipeline.METRICS.queueNanos.add(elapsed);
+            if (failure == null) EgressProfiler.Stage.OUTBOUND_TOTAL.record(elapsed, -1);
+        }
         if (!write.promise.isVoid()) { if (failure == null) write.promise.trySuccess(); else write.promise.tryFailure(failure); }
     }
     private void fail(Throwable cause) {

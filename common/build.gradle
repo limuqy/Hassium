@@ -77,6 +77,10 @@ tasks.named('processResources').configure {
 
 task runJava(type: JavaExec) {
     classpath = sourceSets.main.runtimeClasspath
+    // Offline performance comparisons can prepend archived codec classes without replacing the checkout.
+    if (project.hasProperty('prependClasspath')) {
+        classpath = files(project.property('prependClasspath')) + classpath
+    }
     mainClass = project.findProperty('mainClass') ?: 'io.github.limuqy.mc.hassium.benchmark.CompressionBenchmark'
 
     if (project.hasProperty('args')) {

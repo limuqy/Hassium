@@ -3,6 +3,36 @@ import unittest
 from scripts.smoke.analyzer import _late_near_player, _server_full_push_timeouts, _spatial_check
 
 
+class EgressLoadGateTest(unittest.TestCase):
+    def fixture(self):
+        import json
+        summary = {"count": 10, "allocationSamples": 10}
+        profile = {stage: summary for stage in ("BATCH_WAIT", "FIFO_WAIT", "PREPARE", "WORKER_QUEUE", "CODEC", "SAMPLE", "EVENT_LOOP_RETURN", "WRITE", "OUTBOUND_TOTAL")}
+        done = {"phase": "done", "connections": 2, "sent": [{"packets": 36480, "callbacks": 36480 // 257}] * 2,
+                "metrics": {"errors": 0}, "profile": profile}
+        server = "\n".join("[EGRESS_LOAD] " + json.dumps({"phase": phase}) for phase in ("warmup", "steady", "burst", "drain"))
+        server += "\n[EGRESS_LOAD] " + json.dumps(done)
+        client_profile = {stage: summary for stage in ("INBOUND_WORKER_QUEUE", "DECODE", "INBOUND_EVENT_LOOP_RETURN", "NATIVE_DELIVERY")}
+        client = "HassiumSmokeTest:PASS\n[EGRESS_LOAD_CLIENT] received=36480 profile=" + json.dumps(client_profile)
+        return server, client
+
+    def test_requires_both_clients_and_complete_burst_with_profiles(self):
+        from scripts.smoke.analyzer import _check_egress_load
+        server, client = self.fixture()
+        self.assertEqual([], _check_egress_load(server, [client, client]))
+        codes = {item["code"] for item in _check_egress_load(server, [client, ""])}
+        self.assertIn("EGRESS_LOAD_CLIENT_FAILED", codes)
+        self.assertIn("EGRESS_LOAD_CLIENT_PROFILE_MISSING", codes)
+
+    def test_incomplete_phase_and_missing_allocation_cannot_pass(self):
+        from scripts.smoke.analyzer import _check_egress_load
+        server, client = self.fixture()
+        server = server.replace('"phase": "burst"', '"phase": "other"').replace('"allocationSamples": 10', '"allocationSamples": 0')
+        codes = {item["code"] for item in _check_egress_load(server, [client, client])}
+        self.assertIn("EGRESS_LOAD_PHASE_MISSING", codes)
+        self.assertIn("EGRESS_LOAD_PROFILE_MISSING", codes)
+
+
 class CacheModeLightProbeTest(unittest.TestCase):
     def fixture(self):
         return {"contentCheck": {"footBlock": "minecraft:quartz_block"},

@@ -532,6 +532,43 @@ def _movement_segments(client_log: str) -> list[dict[str, Any]]:
     return segments
 
 
+def _check_egress_load(server_log: str, client_logs: list[str]) -> list[dict[str, Any]]:
+    failures = []
+    reports = []
+    for line in server_log.splitlines():
+        if "[EGRESS_LOAD] " in line:
+            try:
+                reports.append(json.loads(line.split("[EGRESS_LOAD] ", 1)[1]))
+            except (ValueError, TypeError):
+                failures.append(_failure("EGRESS_LOAD_REPORT_INVALID"))
+    done = next((report for report in reversed(reports) if report.get("phase") == "done"), {})
+    if done.get("connections") != 2 or len(done.get("sent", [])) != 2:
+        failures.append(_failure("EGRESS_LOAD_CONCURRENCY_MISSING"))
+    if not {"warmup", "steady", "burst", "drain", "done"}.issubset({item.get("phase") for item in reports}):
+        failures.append(_failure("EGRESS_LOAD_PHASE_MISSING"))
+    for sent in done.get("sent", []):
+        if sent.get("packets") != 36480 or sent.get("callbacks") != 36480 // 257:
+            failures.append(_failure("EGRESS_LOAD_SEND_COUNT", actual=sent))
+    if _obj(done.get("metrics")).get("errors") != 0:
+        failures.append(_failure("EGRESS_LOAD_PROTOCOL_ERRORS"))
+    for stage in ("BATCH_WAIT", "FIFO_WAIT", "PREPARE", "WORKER_QUEUE", "CODEC", "SAMPLE", "EVENT_LOOP_RETURN", "WRITE", "OUTBOUND_TOTAL"):
+        summary = _obj(_obj(done.get("profile")).get(stage))
+        if not summary.get("count") or (stage in ("PREPARE", "CODEC", "SAMPLE") and not summary.get("allocationSamples")):
+            failures.append(_failure("EGRESS_LOAD_PROFILE_MISSING", stage=stage))
+    for index, log in enumerate(client_logs):
+        if "HassiumSmokeTest:PASS" not in log or "HassiumSmokeTest:FAIL" in log:
+            failures.append(_failure("EGRESS_LOAD_CLIENT_FAILED", client=index))
+        match = re.search(r"\[EGRESS_LOAD_CLIENT\] received=36480 profile=(\{[^\n]+\})", log)
+        try:
+            profile = json.loads(match.group(1)) if match else {}
+        except ValueError:
+            profile = {}
+        if not all(_obj(profile.get(stage)).get("count") for stage in
+                   ("INBOUND_WORKER_QUEUE", "DECODE", "INBOUND_EVENT_LOOP_RETURN", "NATIVE_DELIVERY")):
+            failures.append(_failure("EGRESS_LOAD_CLIENT_PROFILE_MISSING", client=index))
+    return failures
+
+
 def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
     scenario = str(result.get("Scenario") or "classic")
     # 移动会话标记（由 runtime-smoke-test.ps1 透传 -MoveSeconds）。>0 ⇒ 走开后柱会合法卸载，
@@ -612,7 +649,7 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
         checks["dictionary_rollout"] = "PASS" if has_dict_flip else "FAIL"
 
     # 单轮场景（probe 只有 round1.json）：新场景必须在此登记，否则会被按两轮判定 → PROBE_MISSING。
-    single_round_scenarios = {"seedgen", "ovdgen", "modcompat", "modcompat_strict", "flyroundtrip", "dictionary", "egress", "egressbench", "factoryegress20", "factoryegress100", "factoryegress200", "trafficprofile", "trafficfactory"}
+    single_round_scenarios = {"seedgen", "ovdgen", "modcompat", "modcompat_strict", "flyroundtrip", "dictionary", "egress", "egressbench", "egressload", "factoryegress20", "factoryegress100", "factoryegress200", "trafficprofile", "trafficfactory"}
     round_numbers = (1,) if scenario in single_round_scenarios else (1, 2)
     stats_ok = {n: bool(re.search(rf"CLIENT_STATS ROUND{n} begin", log_text)
                     and re.search(rf"CLIENT_STATS ROUND{n} end", log_text)) for n in round_numbers}
@@ -770,6 +807,15 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
                                      cardinalTruncated=len(spatial["cardinalHoles"]) > 64,
                                      diagonalTruncated=len(spatial["diagonalHoles"]) > 64))
 
+
+    if scenario == "egressload":
+        observer_path = logs_dir / f"observer_{session}.log"
+        observer = observer_path.read_text(encoding="utf-8", errors="replace") if observer_path.exists() else ""
+        load_failures = _check_egress_load(log_text, [client_log, observer])
+        if result.get("ObserverExitCode") != 0:
+            load_failures.append(_failure("EGRESS_LOAD_OBSERVER_EXIT", exitCode=result.get("ObserverExitCode")))
+        failures.extend(load_failures)
+        checks["egress_load"] = "FAIL" if load_failures else "PASS"
 
     if scenario == "classic" and not bool(result.get("ServerSwitched")):
         failures.append(_failure("SERVER_SWITCH_MISSING"))

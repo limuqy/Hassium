@@ -1,0 +1,3382 @@
+[
+  {
+    "session": "egress_perf_1201_forge_r2_20261022",
+    "version": "1.20.1",
+    "loader": "forge",
+    "result": "PASS",
+    "analysis": {
+      "pass": true,
+      "failures": [],
+      "warnings": [],
+      "skipped": [
+        {
+          "code": "TRACE_MESH_PENDING",
+          "severity": "INFO",
+          "round": 1,
+          "gap": {
+            "count": 67,
+            "positions": [
+              [
+                -8,
+                -3
+              ],
+              [
+                -8,
+                -2
+              ],
+              [
+                -8,
+                -1
+              ],
+              [
+                -8,
+                0
+              ],
+              [
+                -8,
+                1
+              ],
+              [
+                -8,
+                2
+              ],
+              [
+                -8,
+                3
+              ],
+              [
+                -7,
+                -4
+              ],
+              [
+                -7,
+                -3
+              ],
+              [
+                -7,
+                -2
+              ],
+              [
+                -7,
+                -1
+              ],
+              [
+                -7,
+                0
+              ],
+              [
+                -7,
+                1
+              ],
+              [
+                -7,
+                4
+              ],
+              [
+                -6,
+                -5
+              ],
+              [
+                -6,
+                -4
+              ],
+              [
+                -6,
+                -3
+              ],
+              [
+                -6,
+                -2
+              ],
+              [
+                -6,
+                -1
+              ],
+              [
+                -6,
+                0
+              ],
+              [
+                -6,
+                5
+              ],
+              [
+                -5,
+                -5
+              ],
+              [
+                -5,
+                -4
+              ],
+              [
+                -5,
+                -3
+              ],
+              [
+                -5,
+                -2
+              ],
+              [
+                -5,
+                -1
+              ],
+              [
+                -5,
+                5
+              ],
+              [
+                -4,
+                -5
+              ],
+              [
+                -4,
+                -4
+              ],
+              [
+                -4,
+                -3
+              ],
+              [
+                -4,
+                -2
+              ],
+              [
+                -4,
+                5
+              ],
+              [
+                -3,
+                -5
+              ],
+              [
+                -3,
+                -4
+              ],
+              [
+                -3,
+                -3
+              ],
+              [
+                -3,
+                -2
+              ],
+              [
+                -3,
+                5
+              ],
+              [
+                -2,
+                -5
+              ],
+              [
+                -2,
+                -4
+              ],
+              [
+                -2,
+                -3
+              ],
+              [
+                -2,
+                -2
+              ],
+              [
+                -2,
+                5
+              ],
+              [
+                -1,
+                -5
+              ],
+              [
+                -1,
+                -4
+              ],
+              [
+                -1,
+                -3
+              ],
+              [
+                -1,
+                -2
+              ],
+              [
+                -1,
+                -1
+              ],
+              [
+                -1,
+                5
+              ],
+              [
+                0,
+                -5
+              ],
+              [
+                0,
+                -4
+              ],
+              [
+                0,
+                -3
+              ],
+              [
+                0,
+                -2
+              ],
+              [
+                0,
+                -1
+              ],
+              [
+                0,
+                5
+              ],
+              [
+                1,
+                -4
+              ],
+              [
+                1,
+                -3
+              ],
+              [
+                1,
+                -2
+              ],
+              [
+                1,
+                -1
+              ],
+              [
+                1,
+                0
+              ],
+              [
+                1,
+                4
+              ],
+              [
+                2,
+                -3
+              ],
+              [
+                2,
+                -2
+              ],
+              [
+                2,
+                -1
+              ],
+              [
+                2,
+                0
+              ]
+            ],
+            "truncated": true
+          },
+          "detail": "mesh compilation is asynchronous; resident cache is the smoke gate"
+        }
+      ],
+      "checks": {
+        "smoke_markers": "PASS",
+        "client_exit": "PASS",
+        "login_handshake": "PASS",
+        "zstd_pipeline": "PASS",
+        "egress_load": "PASS",
+        "server_switch": "PASS",
+        "process_fatal": "PASS",
+        "probe": "PASS"
+      },
+      "trace": {
+        "round1": {
+          "available": true,
+          "actualSource": "clientCache.actualPresent",
+          "counts": {
+            "networkReceived": 109,
+            "shadowInjected": 109,
+            "shadowReady": 109,
+            "clientApplied": 109,
+            "meshCompiled": 42
+          },
+          "gaps": {
+            "receivedNotInjected": {
+              "count": 0,
+              "positions": [],
+              "truncated": false
+            },
+            "injectedNotReady": {
+              "count": 0,
+              "positions": [],
+              "truncated": false
+            },
+            "readyNotApplied": {
+              "count": 0,
+              "positions": [],
+              "truncated": false
+            },
+            "appliedNotMeshed": {
+              "count": 67,
+              "positions": [
+                [
+                  -8,
+                  -3
+                ],
+                [
+                  -8,
+                  -2
+                ],
+                [
+                  -8,
+                  -1
+                ],
+                [
+                  -8,
+                  0
+                ],
+                [
+                  -8,
+                  1
+                ],
+                [
+                  -8,
+                  2
+                ],
+                [
+                  -8,
+                  3
+                ],
+                [
+                  -7,
+                  -4
+                ],
+                [
+                  -7,
+                  -3
+                ],
+                [
+                  -7,
+                  -2
+                ],
+                [
+                  -7,
+                  -1
+                ],
+                [
+                  -7,
+                  0
+                ],
+                [
+                  -7,
+                  1
+                ],
+                [
+                  -7,
+                  4
+                ],
+                [
+                  -6,
+                  -5
+                ],
+                [
+                  -6,
+                  -4
+                ],
+                [
+                  -6,
+                  -3
+                ],
+                [
+                  -6,
+                  -2
+                ],
+                [
+                  -6,
+                  -1
+                ],
+                [
+                  -6,
+                  0
+                ],
+                [
+                  -6,
+                  5
+                ],
+                [
+                  -5,
+                  -5
+                ],
+                [
+                  -5,
+                  -4
+                ],
+                [
+                  -5,
+                  -3
+                ],
+                [
+                  -5,
+                  -2
+                ],
+                [
+                  -5,
+                  -1
+                ],
+                [
+                  -5,
+                  5
+                ],
+                [
+                  -4,
+                  -5
+                ],
+                [
+                  -4,
+                  -4
+                ],
+                [
+                  -4,
+                  -3
+                ],
+                [
+                  -4,
+                  -2
+                ],
+                [
+                  -4,
+                  5
+                ],
+                [
+                  -3,
+                  -5
+                ],
+                [
+                  -3,
+                  -4
+                ],
+                [
+                  -3,
+                  -3
+                ],
+                [
+                  -3,
+                  -2
+                ],
+                [
+                  -3,
+                  5
+                ],
+                [
+                  -2,
+                  -5
+                ],
+                [
+                  -2,
+                  -4
+                ],
+                [
+                  -2,
+                  -3
+                ],
+                [
+                  -2,
+                  -2
+                ],
+                [
+                  -2,
+                  5
+                ],
+                [
+                  -1,
+                  -5
+                ],
+                [
+                  -1,
+                  -4
+                ],
+                [
+                  -1,
+                  -3
+                ],
+                [
+                  -1,
+                  -2
+                ],
+                [
+                  -1,
+                  -1
+                ],
+                [
+                  -1,
+                  5
+                ],
+                [
+                  0,
+                  -5
+                ],
+                [
+                  0,
+                  -4
+                ],
+                [
+                  0,
+                  -3
+                ],
+                [
+                  0,
+                  -2
+                ],
+                [
+                  0,
+                  -1
+                ],
+                [
+                  0,
+                  5
+                ],
+                [
+                  1,
+                  -4
+                ],
+                [
+                  1,
+                  -3
+                ],
+                [
+                  1,
+                  -2
+                ],
+                [
+                  1,
+                  -1
+                ],
+                [
+                  1,
+                  0
+                ],
+                [
+                  1,
+                  4
+                ],
+                [
+                  2,
+                  -3
+                ],
+                [
+                  2,
+                  -2
+                ],
+                [
+                  2,
+                  -1
+                ],
+                [
+                  2,
+                  0
+                ]
+              ],
+              "truncated": true
+            },
+            "expectedNotPresent": {
+              "count": 0,
+              "positions": [],
+              "truncated": false
+            }
+          }
+        }
+      },
+      "spatial": {
+        "round1": {
+          "available": true,
+          "observed": 109,
+          "expected": 109,
+          "cardinalHoles": [],
+          "diagonalHoles": [],
+          "enclosed": {
+            "available": true,
+            "observed": 109,
+            "enclosedCount": 0,
+            "largestComponent": 0,
+            "components": [],
+            "enclosedHoles": {
+              "count": 0,
+              "positions": [],
+              "truncated": false
+            }
+          }
+        }
+      }
+    },
+    "phases": [
+      {
+        "metrics": {
+          "originalBytes": 0,
+          "aggregateBytes": 126,
+          "bypassBytes": 0,
+          "wireBytes": 162,
+          "packets": 0,
+          "frames": 2,
+          "exactReferences": 0,
+          "templateReferences": 0,
+          "definitionBytes": 0,
+          "compressionNanos": 866900,
+          "compressionCpuNanos": 0,
+          "queueNanos": 203869400,
+          "errors": 0
+        },
+        "profile": {
+          "BATCH_WAIT": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "FIFO_WAIT": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "PREPARE": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "WORKER_QUEUE": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "CODEC": {
+            "count": 2,
+            "totalNs": 1397900,
+            "p50UpperNs": 589823,
+            "p95UpperNs": 917503,
+            "p99UpperNs": 917503,
+            "maxNs": 866900,
+            "allocatedBytes": 33104,
+            "allocationSamples": 2
+          },
+          "SAMPLE": {
+            "count": 2,
+            "totalNs": 6800,
+            "p50UpperNs": 3071,
+            "p95UpperNs": 3839,
+            "p99UpperNs": 3839,
+            "maxNs": 3800,
+            "allocatedBytes": 0,
+            "allocationSamples": 2
+          },
+          "EVENT_LOOP_RETURN": {
+            "count": 2,
+            "totalNs": 84000,
+            "p50UpperNs": 40959,
+            "p95UpperNs": 49151,
+            "p99UpperNs": 49151,
+            "maxNs": 47000,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "WRITE": {
+            "count": 2,
+            "totalNs": 348500,
+            "p50UpperNs": 180223,
+            "p95UpperNs": 196607,
+            "p99UpperNs": 196607,
+            "maxNs": 181100,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "OUTBOUND_TOTAL": {
+            "count": 12,
+            "totalNs": 203869400,
+            "p50UpperNs": 18874367,
+            "p95UpperNs": 18874367,
+            "p99UpperNs": 18874367,
+            "maxNs": 17267200,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "INBOUND_WORKER_QUEUE": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "DECODE": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "INBOUND_EVENT_LOOP_RETURN": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "NATIVE_DELIVERY": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          }
+        },
+        "phase": "warmup",
+        "connections": 2,
+        "sent": [
+          {
+            "packets": 0,
+            "callbacks": 0
+          },
+          {
+            "packets": 0,
+            "callbacks": 0
+          }
+        ]
+      },
+      {
+        "metrics": {
+          "originalBytes": 1979174,
+          "aggregateBytes": 152654,
+          "bypassBytes": 1254525,
+          "wireBytes": 1420216,
+          "packets": 14825,
+          "frames": 496,
+          "exactReferences": 0,
+          "templateReferences": 0,
+          "definitionBytes": 0,
+          "compressionNanos": 553925300,
+          "compressionCpuNanos": 109375000,
+          "queueNanos": 338557799000,
+          "errors": 0
+        },
+        "profile": {
+          "BATCH_WAIT": {
+            "count": 14410,
+            "totalNs": 315657454600,
+            "p50UpperNs": 8388607,
+            "p95UpperNs": 54525951,
+            "p99UpperNs": 54525951,
+            "maxNs": 59058100,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "FIFO_WAIT": {
+            "count": 496,
+            "totalNs": 117542000,
+            "p50UpperNs": 24575,
+            "p95UpperNs": 1310719,
+            "p99UpperNs": 2883583,
+            "maxNs": 10205000,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "PREPARE": {
+            "count": 496,
+            "totalNs": 17179300,
+            "p50UpperNs": 26623,
+            "p95UpperNs": 106495,
+            "p99UpperNs": 147455,
+            "maxNs": 158400,
+            "allocatedBytes": 1510664,
+            "allocationSamples": 496
+          },
+          "WORKER_QUEUE": {
+            "count": 496,
+            "totalNs": 115134700,
+            "p50UpperNs": 45055,
+            "p95UpperNs": 720895,
+            "p99UpperNs": 7864319,
+            "maxNs": 20083300,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "CODEC": {
+            "count": 496,
+            "totalNs": 554456300,
+            "p50UpperNs": 983039,
+            "p95UpperNs": 1966079,
+            "p99UpperNs": 3145727,
+            "maxNs": 14620300,
+            "allocatedBytes": 39112472,
+            "allocationSamples": 496
+          },
+          "SAMPLE": {
+            "count": 496,
+            "totalNs": 1232900,
+            "p50UpperNs": 2047,
+            "p95UpperNs": 5119,
+            "p99UpperNs": 9215,
+            "maxNs": 61200,
+            "allocatedBytes": 0,
+            "allocationSamples": 496
+          },
+          "EVENT_LOOP_RETURN": {
+            "count": 496,
+            "totalNs": 22368700,
+            "p50UpperNs": 36863,
+            "p95UpperNs": 61439,
+            "p99UpperNs": 106495,
+            "maxNs": 2460900,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "WRITE": {
+            "count": 496,
+            "totalNs": 60349800,
+            "p50UpperNs": 114687,
+            "p95UpperNs": 212991,
+            "p99UpperNs": 393215,
+            "maxNs": 954900,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "OUTBOUND_TOTAL": {
+            "count": 14796,
+            "totalNs": 338557799000,
+            "p50UpperNs": 9437183,
+            "p95UpperNs": 54525951,
+            "p99UpperNs": 54525951,
+            "maxNs": 61244400,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "INBOUND_WORKER_QUEUE": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "DECODE": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "INBOUND_EVENT_LOOP_RETURN": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "NATIVE_DELIVERY": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          }
+        },
+        "phase": "steady",
+        "connections": 2,
+        "sent": [
+          {
+            "packets": 3200,
+            "callbacks": 12
+          },
+          {
+            "packets": 3200,
+            "callbacks": 12
+          }
+        ]
+      },
+      {
+        "metrics": {
+          "originalBytes": 4663771,
+          "aggregateBytes": 477421,
+          "bypassBytes": 1265015,
+          "wireBytes": 1765903,
+          "packets": 44166,
+          "frames": 1006,
+          "exactReferences": 0,
+          "templateReferences": 0,
+          "definitionBytes": 0,
+          "compressionNanos": 990355100,
+          "compressionCpuNanos": 250000000,
+          "queueNanos": 1458949321000,
+          "errors": 0
+        },
+        "profile": {
+          "BATCH_WAIT": {
+            "count": 43639,
+            "totalNs": 1405644013000,
+            "p50UpperNs": 50331647,
+            "p95UpperNs": 54525951,
+            "p99UpperNs": 54525951,
+            "maxNs": 59058100,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "FIFO_WAIT": {
+            "count": 1006,
+            "totalNs": 212317600,
+            "p50UpperNs": 18431,
+            "p95UpperNs": 1179647,
+            "p99UpperNs": 2097151,
+            "maxNs": 10205000,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "PREPARE": {
+            "count": 1006,
+            "totalNs": 31438500,
+            "p50UpperNs": 28671,
+            "p95UpperNs": 73727,
+            "p99UpperNs": 131071,
+            "maxNs": 158400,
+            "allocatedBytes": 5683224,
+            "allocationSamples": 1006
+          },
+          "WORKER_QUEUE": {
+            "count": 1006,
+            "totalNs": 133775600,
+            "p50UpperNs": 40959,
+            "p95UpperNs": 98303,
+            "p99UpperNs": 2097151,
+            "maxNs": 20083300,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "CODEC": {
+            "count": 1006,
+            "totalNs": 990886100,
+            "p50UpperNs": 917503,
+            "p95UpperNs": 1703935,
+            "p99UpperNs": 2621439,
+            "maxNs": 14620300,
+            "allocatedBytes": 86411640,
+            "allocationSamples": 1006
+          },
+          "SAMPLE": {
+            "count": 1006,
+            "totalNs": 1793000,
+            "p50UpperNs": 1407,
+            "p95UpperNs": 4607,
+            "p99UpperNs": 6655,
+            "maxNs": 61200,
+            "allocatedBytes": 0,
+            "allocationSamples": 1006
+          },
+          "EVENT_LOOP_RETURN": {
+            "count": 1006,
+            "totalNs": 38139700,
+            "p50UpperNs": 30719,
+            "p95UpperNs": 57343,
+            "p99UpperNs": 90111,
+            "maxNs": 2460900,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "WRITE": {
+            "count": 1006,
+            "totalNs": 102114900,
+            "p50UpperNs": 98303,
+            "p95UpperNs": 196607,
+            "p99UpperNs": 294911,
+            "maxNs": 954900,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "OUTBOUND_TOTAL": {
+            "count": 44040,
+            "totalNs": 1458949321000,
+            "p50UpperNs": 50331647,
+            "p95UpperNs": 54525951,
+            "p99UpperNs": 54525951,
+            "maxNs": 61244400,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "INBOUND_WORKER_QUEUE": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "DECODE": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "INBOUND_EVENT_LOOP_RETURN": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "NATIVE_DELIVERY": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          }
+        },
+        "phase": "burst",
+        "connections": 2,
+        "sent": [
+          {
+            "packets": 16000,
+            "callbacks": 62
+          },
+          {
+            "packets": 16000,
+            "callbacks": 62
+          }
+        ]
+      },
+      {
+        "metrics": {
+          "originalBytes": 9054661,
+          "aggregateBytes": 946762,
+          "bypassBytes": 1281781,
+          "wireBytes": 2262700,
+          "packets": 88100,
+          "frames": 1548,
+          "exactReferences": 0,
+          "templateReferences": 46,
+          "definitionBytes": 129,
+          "compressionNanos": 1379444100,
+          "compressionCpuNanos": 421875000,
+          "queueNanos": 1820218430500,
+          "errors": 0
+        },
+        "profile": {
+          "BATCH_WAIT": {
+            "count": 87399,
+            "totalNs": 1689671722000,
+            "p50UpperNs": 2621439,
+            "p95UpperNs": 54525951,
+            "p99UpperNs": 54525951,
+            "maxNs": 59058100,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "FIFO_WAIT": {
+            "count": 1548,
+            "totalNs": 350650600,
+            "p50UpperNs": 16383,
+            "p95UpperNs": 1179647,
+            "p99UpperNs": 2097151,
+            "maxNs": 10205000,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "PREPARE": {
+            "count": 1548,
+            "totalNs": 55026100,
+            "p50UpperNs": 26623,
+            "p95UpperNs": 114687,
+            "p99UpperNs": 180223,
+            "maxNs": 1212900,
+            "allocatedBytes": 12536728,
+            "allocationSamples": 1548
+          },
+          "WORKER_QUEUE": {
+            "count": 1548,
+            "totalNs": 151555200,
+            "p50UpperNs": 36863,
+            "p95UpperNs": 81919,
+            "p99UpperNs": 1310719,
+            "maxNs": 20083300,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "CODEC": {
+            "count": 1548,
+            "totalNs": 1379975100,
+            "p50UpperNs": 851967,
+            "p95UpperNs": 1703935,
+            "p99UpperNs": 2359295,
+            "maxNs": 14620300,
+            "allocatedBytes": 144708992,
+            "allocationSamples": 1548
+          },
+          "SAMPLE": {
+            "count": 1548,
+            "totalNs": 2263900,
+            "p50UpperNs": 1151,
+            "p95UpperNs": 4095,
+            "p99UpperNs": 5631,
+            "maxNs": 61200,
+            "allocatedBytes": 0,
+            "allocationSamples": 1548
+          },
+          "EVENT_LOOP_RETURN": {
+            "count": 1548,
+            "totalNs": 66211600,
+            "p50UpperNs": 30719,
+            "p95UpperNs": 65535,
+            "p99UpperNs": 425983,
+            "maxNs": 2460900,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "WRITE": {
+            "count": 1548,
+            "totalNs": 140996600,
+            "p50UpperNs": 90111,
+            "p95UpperNs": 180223,
+            "p99UpperNs": 245759,
+            "maxNs": 954900,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "OUTBOUND_TOTAL": {
+            "count": 88102,
+            "totalNs": 1820218430500,
+            "p50UpperNs": 3670015,
+            "p95UpperNs": 54525951,
+            "p99UpperNs": 54525951,
+            "maxNs": 61244400,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "INBOUND_WORKER_QUEUE": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "DECODE": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "INBOUND_EVENT_LOOP_RETURN": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "NATIVE_DELIVERY": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          }
+        },
+        "phase": "drain",
+        "connections": 2,
+        "sent": [
+          {
+            "packets": 36480,
+            "callbacks": 141
+          },
+          {
+            "packets": 36480,
+            "callbacks": 141
+          }
+        ]
+      },
+      {
+        "metrics": {
+          "originalBytes": 9060469,
+          "aggregateBytes": 952261,
+          "bypassBytes": 1281785,
+          "wireBytes": 2269661,
+          "packets": 88821,
+          "frames": 1628,
+          "exactReferences": 0,
+          "templateReferences": 46,
+          "definitionBytes": 129,
+          "compressionNanos": 1434932200,
+          "compressionCpuNanos": 421875000,
+          "queueNanos": 1822638092400,
+          "errors": 0
+        },
+        "profile": {
+          "BATCH_WAIT": {
+            "count": 88116,
+            "totalNs": 1691447889400,
+            "p50UpperNs": 2621439,
+            "p95UpperNs": 54525951,
+            "p99UpperNs": 54525951,
+            "maxNs": 59058100,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "FIFO_WAIT": {
+            "count": 1628,
+            "totalNs": 352387600,
+            "p50UpperNs": 16383,
+            "p95UpperNs": 1179647,
+            "p99UpperNs": 2097151,
+            "maxNs": 10205000,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "PREPARE": {
+            "count": 1628,
+            "totalNs": 55995200,
+            "p50UpperNs": 24575,
+            "p95UpperNs": 114687,
+            "p99UpperNs": 180223,
+            "maxNs": 1212900,
+            "allocatedBytes": 12587536,
+            "allocationSamples": 1628
+          },
+          "WORKER_QUEUE": {
+            "count": 1628,
+            "totalNs": 154661100,
+            "p50UpperNs": 36863,
+            "p95UpperNs": 81919,
+            "p99UpperNs": 1179647,
+            "maxNs": 20083300,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "CODEC": {
+            "count": 1628,
+            "totalNs": 1435463200,
+            "p50UpperNs": 851967,
+            "p95UpperNs": 1703935,
+            "p99UpperNs": 2359295,
+            "maxNs": 14620300,
+            "allocatedBytes": 150090456,
+            "allocationSamples": 1628
+          },
+          "SAMPLE": {
+            "count": 1628,
+            "totalNs": 2341900,
+            "p50UpperNs": 1151,
+            "p95UpperNs": 4095,
+            "p99UpperNs": 5631,
+            "maxNs": 61200,
+            "allocatedBytes": 0,
+            "allocationSamples": 1628
+          },
+          "EVENT_LOOP_RETURN": {
+            "count": 1628,
+            "totalNs": 68413900,
+            "p50UpperNs": 30719,
+            "p95UpperNs": 65535,
+            "p99UpperNs": 425983,
+            "maxNs": 2460900,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "WRITE": {
+            "count": 1628,
+            "totalNs": 147880100,
+            "p50UpperNs": 90111,
+            "p95UpperNs": 180223,
+            "p99UpperNs": 245759,
+            "maxNs": 954900,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "OUTBOUND_TOTAL": {
+            "count": 88817,
+            "totalNs": 1822638092400,
+            "p50UpperNs": 3670015,
+            "p95UpperNs": 54525951,
+            "p99UpperNs": 54525951,
+            "maxNs": 61244400,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "INBOUND_WORKER_QUEUE": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "DECODE": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "INBOUND_EVENT_LOOP_RETURN": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "NATIVE_DELIVERY": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          }
+        },
+        "phase": "done",
+        "connections": 2,
+        "sent": [
+          {
+            "packets": 36480,
+            "callbacks": 141
+          },
+          {
+            "packets": 36480,
+            "callbacks": 141
+          }
+        ]
+      }
+    ],
+    "clients": [
+      {
+        "role": "client",
+        "received": 36480,
+        "profile": {
+          "BATCH_WAIT": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "FIFO_WAIT": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "PREPARE": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "WORKER_QUEUE": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "CODEC": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "SAMPLE": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "EVENT_LOOP_RETURN": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "WRITE": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "OUTBOUND_TOTAL": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "INBOUND_WORKER_QUEUE": {
+            "count": 790,
+            "totalNs": 216681500,
+            "p50UpperNs": 32767,
+            "p95UpperNs": 90111,
+            "p99UpperNs": 3932159,
+            "maxNs": 73101900,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "DECODE": {
+            "count": 790,
+            "totalNs": 103779700,
+            "p50UpperNs": 73727,
+            "p95UpperNs": 212991,
+            "p99UpperNs": 524287,
+            "maxNs": 23697000,
+            "allocatedBytes": 59756424,
+            "allocationSamples": 790
+          },
+          "INBOUND_EVENT_LOOP_RETURN": {
+            "count": 790,
+            "totalNs": 30921700,
+            "p50UpperNs": 36863,
+            "p95UpperNs": 73727,
+            "p99UpperNs": 147455,
+            "maxNs": 930800,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "NATIVE_DELIVERY": {
+            "count": 790,
+            "totalNs": 166571500,
+            "p50UpperNs": 180223,
+            "p95UpperNs": 524287,
+            "p99UpperNs": 917503,
+            "maxNs": 3675500,
+            "allocatedBytes": 53424216,
+            "allocationSamples": 790
+          }
+        }
+      },
+      {
+        "role": "observer",
+        "received": 36480,
+        "profile": {
+          "BATCH_WAIT": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "FIFO_WAIT": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "PREPARE": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "WORKER_QUEUE": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "CODEC": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "SAMPLE": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "EVENT_LOOP_RETURN": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "WRITE": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "OUTBOUND_TOTAL": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "INBOUND_WORKER_QUEUE": {
+            "count": 805,
+            "totalNs": 199644600,
+            "p50UpperNs": 36863,
+            "p95UpperNs": 245759,
+            "p99UpperNs": 6815743,
+            "maxNs": 17817400,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "DECODE": {
+            "count": 805,
+            "totalNs": 134092100,
+            "p50UpperNs": 106495,
+            "p95UpperNs": 229375,
+            "p99UpperNs": 655359,
+            "maxNs": 18222300,
+            "allocatedBytes": 58703256,
+            "allocationSamples": 805
+          },
+          "INBOUND_EVENT_LOOP_RETURN": {
+            "count": 805,
+            "totalNs": 110154800,
+            "p50UpperNs": 36863,
+            "p95UpperNs": 90111,
+            "p99UpperNs": 1179647,
+            "maxNs": 28925900,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "NATIVE_DELIVERY": {
+            "count": 805,
+            "totalNs": 217736500,
+            "p50UpperNs": 180223,
+            "p95UpperNs": 655359,
+            "p99UpperNs": 1703935,
+            "maxNs": 9571400,
+            "allocatedBytes": 53781416,
+            "allocationSamples": 805
+          }
+        }
+      }
+    ]
+  },
+  {
+    "session": "egress_perf_1211_neoforge_20261022",
+    "version": "1.21.1",
+    "loader": "neoforge",
+    "result": "PASS",
+    "analysis": {
+      "pass": true,
+      "failures": [],
+      "warnings": [],
+      "skipped": [
+        {
+          "code": "TRACE_MESH_PENDING",
+          "severity": "INFO",
+          "round": 1,
+          "gap": {
+            "count": 71,
+            "positions": [
+              [
+                -8,
+                -3
+              ],
+              [
+                -8,
+                -2
+              ],
+              [
+                -8,
+                -1
+              ],
+              [
+                -8,
+                0
+              ],
+              [
+                -8,
+                1
+              ],
+              [
+                -8,
+                2
+              ],
+              [
+                -8,
+                3
+              ],
+              [
+                -7,
+                -4
+              ],
+              [
+                -7,
+                -3
+              ],
+              [
+                -7,
+                -2
+              ],
+              [
+                -7,
+                -1
+              ],
+              [
+                -7,
+                0
+              ],
+              [
+                -7,
+                1
+              ],
+              [
+                -7,
+                4
+              ],
+              [
+                -6,
+                -5
+              ],
+              [
+                -6,
+                -4
+              ],
+              [
+                -6,
+                -3
+              ],
+              [
+                -6,
+                -2
+              ],
+              [
+                -6,
+                -1
+              ],
+              [
+                -6,
+                0
+              ],
+              [
+                -6,
+                5
+              ],
+              [
+                -5,
+                -5
+              ],
+              [
+                -5,
+                -4
+              ],
+              [
+                -5,
+                -3
+              ],
+              [
+                -5,
+                -2
+              ],
+              [
+                -5,
+                -1
+              ],
+              [
+                -5,
+                0
+              ],
+              [
+                -5,
+                5
+              ],
+              [
+                -4,
+                -5
+              ],
+              [
+                -4,
+                -4
+              ],
+              [
+                -4,
+                -3
+              ],
+              [
+                -4,
+                -2
+              ],
+              [
+                -4,
+                -1
+              ],
+              [
+                -4,
+                5
+              ],
+              [
+                -3,
+                -5
+              ],
+              [
+                -3,
+                -4
+              ],
+              [
+                -3,
+                -3
+              ],
+              [
+                -3,
+                -2
+              ],
+              [
+                -3,
+                5
+              ],
+              [
+                -2,
+                -5
+              ],
+              [
+                -2,
+                -4
+              ],
+              [
+                -2,
+                -3
+              ],
+              [
+                -2,
+                -2
+              ],
+              [
+                -2,
+                5
+              ],
+              [
+                -1,
+                -5
+              ],
+              [
+                -1,
+                -4
+              ],
+              [
+                -1,
+                -3
+              ],
+              [
+                -1,
+                -2
+              ],
+              [
+                -1,
+                -1
+              ],
+              [
+                -1,
+                5
+              ],
+              [
+                0,
+                -5
+              ],
+              [
+                0,
+                -4
+              ],
+              [
+                0,
+                -3
+              ],
+              [
+                0,
+                -2
+              ],
+              [
+                0,
+                -1
+              ],
+              [
+                0,
+                0
+              ],
+              [
+                0,
+                5
+              ],
+              [
+                1,
+                -4
+              ],
+              [
+                1,
+                -3
+              ],
+              [
+                1,
+                -2
+              ],
+              [
+                1,
+                -1
+              ],
+              [
+                1,
+                0
+              ],
+              [
+                1,
+                1
+              ],
+              [
+                1,
+                4
+              ]
+            ],
+            "truncated": true
+          },
+          "detail": "mesh compilation is asynchronous; resident cache is the smoke gate"
+        }
+      ],
+      "checks": {
+        "smoke_markers": "PASS",
+        "client_exit": "PASS",
+        "login_handshake": "PASS",
+        "zstd_pipeline": "PASS",
+        "egress_load": "PASS",
+        "server_switch": "PASS",
+        "process_fatal": "PASS",
+        "probe": "PASS"
+      },
+      "trace": {
+        "round1": {
+          "available": true,
+          "actualSource": "clientCache.actualPresent",
+          "counts": {
+            "networkReceived": 109,
+            "shadowInjected": 109,
+            "shadowReady": 109,
+            "clientApplied": 109,
+            "meshCompiled": 38
+          },
+          "gaps": {
+            "receivedNotInjected": {
+              "count": 0,
+              "positions": [],
+              "truncated": false
+            },
+            "injectedNotReady": {
+              "count": 0,
+              "positions": [],
+              "truncated": false
+            },
+            "readyNotApplied": {
+              "count": 0,
+              "positions": [],
+              "truncated": false
+            },
+            "appliedNotMeshed": {
+              "count": 71,
+              "positions": [
+                [
+                  -8,
+                  -3
+                ],
+                [
+                  -8,
+                  -2
+                ],
+                [
+                  -8,
+                  -1
+                ],
+                [
+                  -8,
+                  0
+                ],
+                [
+                  -8,
+                  1
+                ],
+                [
+                  -8,
+                  2
+                ],
+                [
+                  -8,
+                  3
+                ],
+                [
+                  -7,
+                  -4
+                ],
+                [
+                  -7,
+                  -3
+                ],
+                [
+                  -7,
+                  -2
+                ],
+                [
+                  -7,
+                  -1
+                ],
+                [
+                  -7,
+                  0
+                ],
+                [
+                  -7,
+                  1
+                ],
+                [
+                  -7,
+                  4
+                ],
+                [
+                  -6,
+                  -5
+                ],
+                [
+                  -6,
+                  -4
+                ],
+                [
+                  -6,
+                  -3
+                ],
+                [
+                  -6,
+                  -2
+                ],
+                [
+                  -6,
+                  -1
+                ],
+                [
+                  -6,
+                  0
+                ],
+                [
+                  -6,
+                  5
+                ],
+                [
+                  -5,
+                  -5
+                ],
+                [
+                  -5,
+                  -4
+                ],
+                [
+                  -5,
+                  -3
+                ],
+                [
+                  -5,
+                  -2
+                ],
+                [
+                  -5,
+                  -1
+                ],
+                [
+                  -5,
+                  0
+                ],
+                [
+                  -5,
+                  5
+                ],
+                [
+                  -4,
+                  -5
+                ],
+                [
+                  -4,
+                  -4
+                ],
+                [
+                  -4,
+                  -3
+                ],
+                [
+                  -4,
+                  -2
+                ],
+                [
+                  -4,
+                  -1
+                ],
+                [
+                  -4,
+                  5
+                ],
+                [
+                  -3,
+                  -5
+                ],
+                [
+                  -3,
+                  -4
+                ],
+                [
+                  -3,
+                  -3
+                ],
+                [
+                  -3,
+                  -2
+                ],
+                [
+                  -3,
+                  5
+                ],
+                [
+                  -2,
+                  -5
+                ],
+                [
+                  -2,
+                  -4
+                ],
+                [
+                  -2,
+                  -3
+                ],
+                [
+                  -2,
+                  -2
+                ],
+                [
+                  -2,
+                  5
+                ],
+                [
+                  -1,
+                  -5
+                ],
+                [
+                  -1,
+                  -4
+                ],
+                [
+                  -1,
+                  -3
+                ],
+                [
+                  -1,
+                  -2
+                ],
+                [
+                  -1,
+                  -1
+                ],
+                [
+                  -1,
+                  5
+                ],
+                [
+                  0,
+                  -5
+                ],
+                [
+                  0,
+                  -4
+                ],
+                [
+                  0,
+                  -3
+                ],
+                [
+                  0,
+                  -2
+                ],
+                [
+                  0,
+                  -1
+                ],
+                [
+                  0,
+                  0
+                ],
+                [
+                  0,
+                  5
+                ],
+                [
+                  1,
+                  -4
+                ],
+                [
+                  1,
+                  -3
+                ],
+                [
+                  1,
+                  -2
+                ],
+                [
+                  1,
+                  -1
+                ],
+                [
+                  1,
+                  0
+                ],
+                [
+                  1,
+                  1
+                ],
+                [
+                  1,
+                  4
+                ]
+              ],
+              "truncated": true
+            },
+            "expectedNotPresent": {
+              "count": 0,
+              "positions": [],
+              "truncated": false
+            }
+          }
+        }
+      },
+      "spatial": {
+        "round1": {
+          "available": true,
+          "observed": 109,
+          "expected": 109,
+          "cardinalHoles": [],
+          "diagonalHoles": [],
+          "enclosed": {
+            "available": true,
+            "observed": 109,
+            "enclosedCount": 0,
+            "largestComponent": 0,
+            "components": [],
+            "enclosedHoles": {
+              "count": 0,
+              "positions": [],
+              "truncated": false
+            }
+          }
+        }
+      }
+    },
+    "phases": [
+      {
+        "connections": 2,
+        "sent": [
+          {
+            "callbacks": 0,
+            "packets": 0
+          },
+          {
+            "callbacks": 0,
+            "packets": 0
+          }
+        ],
+        "metrics": {
+          "originalBytes": 0,
+          "aggregateBytes": 530,
+          "bypassBytes": 0,
+          "wireBytes": 582,
+          "packets": 0,
+          "frames": 2,
+          "exactReferences": 0,
+          "templateReferences": 0,
+          "definitionBytes": 0,
+          "compressionNanos": 1896800,
+          "compressionCpuNanos": 0,
+          "queueNanos": 1208118300,
+          "errors": 0
+        },
+        "profile": {
+          "BATCH_WAIT": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "FIFO_WAIT": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "PREPARE": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "WORKER_QUEUE": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "CODEC": {
+            "count": 2,
+            "totalNs": 1896800,
+            "p50UpperNs": 786431,
+            "p95UpperNs": 1179647,
+            "p99UpperNs": 1179647,
+            "maxNs": 1143000,
+            "allocatedBytes": 110120,
+            "allocationSamples": 2
+          },
+          "SAMPLE": {
+            "count": 2,
+            "totalNs": 8600,
+            "p50UpperNs": 3327,
+            "p95UpperNs": 5631,
+            "p99UpperNs": 5631,
+            "maxNs": 5500,
+            "allocatedBytes": 0,
+            "allocationSamples": 2
+          },
+          "EVENT_LOOP_RETURN": {
+            "count": 2,
+            "totalNs": 92300,
+            "p50UpperNs": 49151,
+            "p95UpperNs": 49151,
+            "p99UpperNs": 49151,
+            "maxNs": 46300,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "WRITE": {
+            "count": 2,
+            "totalNs": 353900,
+            "p50UpperNs": 163839,
+            "p95UpperNs": 196607,
+            "p99UpperNs": 196607,
+            "maxNs": 193300,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "OUTBOUND_TOTAL": {
+            "count": 64,
+            "totalNs": 1208118300,
+            "p50UpperNs": 20971519,
+            "p95UpperNs": 20971519,
+            "p99UpperNs": 20971519,
+            "maxNs": 19859100,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "INBOUND_WORKER_QUEUE": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "DECODE": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "INBOUND_EVENT_LOOP_RETURN": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "NATIVE_DELIVERY": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          }
+        },
+        "phase": "warmup"
+      },
+      {
+        "connections": 2,
+        "sent": [
+          {
+            "callbacks": 12,
+            "packets": 3200
+          },
+          {
+            "callbacks": 12,
+            "packets": 3200
+          }
+        ],
+        "metrics": {
+          "originalBytes": 1939002,
+          "aggregateBytes": 156699,
+          "bypassBytes": 1259362,
+          "wireBytes": 1432559,
+          "packets": 16051,
+          "frames": 512,
+          "exactReferences": 0,
+          "templateReferences": 8,
+          "definitionBytes": 55,
+          "compressionNanos": 560978100,
+          "compressionCpuNanos": 171875000,
+          "queueNanos": 338159957900,
+          "errors": 0
+        },
+        "profile": {
+          "BATCH_WAIT": {
+            "count": 15602,
+            "totalNs": 313397568400,
+            "p50UpperNs": 5767167,
+            "p95UpperNs": 54525951,
+            "p99UpperNs": 54525951,
+            "maxNs": 51564300,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "FIFO_WAIT": {
+            "count": 512,
+            "totalNs": 163182800,
+            "p50UpperNs": 20479,
+            "p95UpperNs": 1441791,
+            "p99UpperNs": 7340031,
+            "maxNs": 10941900,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "PREPARE": {
+            "count": 512,
+            "totalNs": 16393200,
+            "p50UpperNs": 24575,
+            "p95UpperNs": 81919,
+            "p99UpperNs": 122879,
+            "maxNs": 237200,
+            "allocatedBytes": 1529792,
+            "allocationSamples": 512
+          },
+          "WORKER_QUEUE": {
+            "count": 512,
+            "totalNs": 38213000,
+            "p50UpperNs": 40959,
+            "p95UpperNs": 90111,
+            "p99UpperNs": 917503,
+            "maxNs": 7791200,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "CODEC": {
+            "count": 512,
+            "totalNs": 560978100,
+            "p50UpperNs": 983039,
+            "p95UpperNs": 1966079,
+            "p99UpperNs": 2621439,
+            "maxNs": 7096100,
+            "allocatedBytes": 38642432,
+            "allocationSamples": 512
+          },
+          "SAMPLE": {
+            "count": 512,
+            "totalNs": 1232600,
+            "p50UpperNs": 1407,
+            "p95UpperNs": 4607,
+            "p99UpperNs": 9215,
+            "maxNs": 189400,
+            "allocatedBytes": 0,
+            "allocationSamples": 512
+          },
+          "EVENT_LOOP_RETURN": {
+            "count": 512,
+            "totalNs": 19669100,
+            "p50UpperNs": 32767,
+            "p95UpperNs": 61439,
+            "p99UpperNs": 163839,
+            "maxNs": 1314500,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "WRITE": {
+            "count": 512,
+            "totalNs": 178786200,
+            "p50UpperNs": 98303,
+            "p95UpperNs": 212991,
+            "p99UpperNs": 10485759,
+            "maxNs": 11552500,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "OUTBOUND_TOTAL": {
+            "count": 16011,
+            "totalNs": 338159957900,
+            "p50UpperNs": 7340031,
+            "p95UpperNs": 54525951,
+            "p99UpperNs": 54525951,
+            "maxNs": 56576600,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "INBOUND_WORKER_QUEUE": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "DECODE": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "INBOUND_EVENT_LOOP_RETURN": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "NATIVE_DELIVERY": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          }
+        },
+        "phase": "steady"
+      },
+      {
+        "connections": 2,
+        "sent": [
+          {
+            "callbacks": 62,
+            "packets": 16000
+          },
+          {
+            "callbacks": 62,
+            "packets": 16000
+          }
+        ],
+        "metrics": {
+          "originalBytes": 4409435,
+          "aggregateBytes": 479878,
+          "bypassBytes": 1268948,
+          "wireBytes": 1778808,
+          "packets": 47233,
+          "frames": 1022,
+          "exactReferences": 0,
+          "templateReferences": 8,
+          "definitionBytes": 55,
+          "compressionNanos": 990857900,
+          "compressionCpuNanos": 234375000,
+          "queueNanos": 1462889755100,
+          "errors": 0
+        },
+        "profile": {
+          "BATCH_WAIT": {
+            "count": 46676,
+            "totalNs": 1403358495200,
+            "p50UpperNs": 50331647,
+            "p95UpperNs": 54525951,
+            "p99UpperNs": 54525951,
+            "maxNs": 57686400,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "FIFO_WAIT": {
+            "count": 1021,
+            "totalNs": 238344600,
+            "p50UpperNs": 18431,
+            "p95UpperNs": 1179647,
+            "p99UpperNs": 3145727,
+            "maxNs": 10941900,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "PREPARE": {
+            "count": 1021,
+            "totalNs": 29632800,
+            "p50UpperNs": 26623,
+            "p95UpperNs": 65535,
+            "p99UpperNs": 114687,
+            "maxNs": 237200,
+            "allocatedBytes": 5582208,
+            "allocationSamples": 1021
+          },
+          "WORKER_QUEUE": {
+            "count": 1021,
+            "totalNs": 57198600,
+            "p50UpperNs": 36863,
+            "p95UpperNs": 73727,
+            "p99UpperNs": 458751,
+            "maxNs": 7791200,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "CODEC": {
+            "count": 1022,
+            "totalNs": 990857900,
+            "p50UpperNs": 917503,
+            "p95UpperNs": 1835007,
+            "p99UpperNs": 2359295,
+            "maxNs": 7096100,
+            "allocatedBytes": 85986344,
+            "allocationSamples": 1022
+          },
+          "SAMPLE": {
+            "count": 1022,
+            "totalNs": 1674500,
+            "p50UpperNs": 1023,
+            "p95UpperNs": 3839,
+            "p99UpperNs": 6143,
+            "maxNs": 189400,
+            "allocatedBytes": 0,
+            "allocationSamples": 1022
+          },
+          "EVENT_LOOP_RETURN": {
+            "count": 1022,
+            "totalNs": 35810500,
+            "p50UpperNs": 28671,
+            "p95UpperNs": 57343,
+            "p99UpperNs": 212991,
+            "maxNs": 1314500,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "WRITE": {
+            "count": 1022,
+            "totalNs": 219399800,
+            "p50UpperNs": 90111,
+            "p95UpperNs": 196607,
+            "p99UpperNs": 8388607,
+            "maxNs": 11552500,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "OUTBOUND_TOTAL": {
+            "count": 47215,
+            "totalNs": 1462889755100,
+            "p50UpperNs": 50331647,
+            "p95UpperNs": 54525951,
+            "p99UpperNs": 54525951,
+            "maxNs": 58778600,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "INBOUND_WORKER_QUEUE": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "DECODE": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "INBOUND_EVENT_LOOP_RETURN": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "NATIVE_DELIVERY": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          }
+        },
+        "phase": "burst"
+      },
+      {
+        "connections": 2,
+        "sent": [
+          {
+            "callbacks": 141,
+            "packets": 36480
+          },
+          {
+            "callbacks": 141,
+            "packets": 36480
+          }
+        ],
+        "metrics": {
+          "originalBytes": 8444240,
+          "aggregateBytes": 959362,
+          "bypassBytes": 1284272,
+          "wireBytes": 2288186,
+          "packets": 92466,
+          "frames": 1586,
+          "exactReferences": 0,
+          "templateReferences": 36,
+          "definitionBytes": 111,
+          "compressionNanos": 1439377400,
+          "compressionCpuNanos": 281250000,
+          "queueNanos": 1842013498000,
+          "errors": 0
+        },
+        "profile": {
+          "BATCH_WAIT": {
+            "count": 91739,
+            "totalNs": 1694654356300,
+            "p50UpperNs": 2097151,
+            "p95UpperNs": 54525951,
+            "p99UpperNs": 54525951,
+            "maxNs": 57686400,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "FIFO_WAIT": {
+            "count": 1586,
+            "totalNs": 406340500,
+            "p50UpperNs": 16383,
+            "p95UpperNs": 1310719,
+            "p99UpperNs": 2359295,
+            "maxNs": 10941900,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "PREPARE": {
+            "count": 1586,
+            "totalNs": 53933400,
+            "p50UpperNs": 24575,
+            "p95UpperNs": 98303,
+            "p99UpperNs": 245759,
+            "maxNs": 522300,
+            "allocatedBytes": 12006632,
+            "allocationSamples": 1586
+          },
+          "WORKER_QUEUE": {
+            "count": 1586,
+            "totalNs": 80388000,
+            "p50UpperNs": 36863,
+            "p95UpperNs": 73727,
+            "p99UpperNs": 147455,
+            "maxNs": 7791200,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "CODEC": {
+            "count": 1586,
+            "totalNs": 1439377400,
+            "p50UpperNs": 851967,
+            "p95UpperNs": 1703935,
+            "p99UpperNs": 2359295,
+            "maxNs": 7096100,
+            "allocatedBytes": 148129224,
+            "allocationSamples": 1586
+          },
+          "SAMPLE": {
+            "count": 1586,
+            "totalNs": 2088800,
+            "p50UpperNs": 959,
+            "p95UpperNs": 3583,
+            "p99UpperNs": 5119,
+            "maxNs": 189400,
+            "allocatedBytes": 0,
+            "allocationSamples": 1586
+          },
+          "EVENT_LOOP_RETURN": {
+            "count": 1586,
+            "totalNs": 101903600,
+            "p50UpperNs": 26623,
+            "p95UpperNs": 262143,
+            "p99UpperNs": 1048575,
+            "maxNs": 2698000,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "WRITE": {
+            "count": 1586,
+            "totalNs": 267152900,
+            "p50UpperNs": 81919,
+            "p95UpperNs": 163839,
+            "p99UpperNs": 1835007,
+            "maxNs": 11552500,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "OUTBOUND_TOTAL": {
+            "count": 92509,
+            "totalNs": 1842013498000,
+            "p50UpperNs": 3407871,
+            "p95UpperNs": 54525951,
+            "p99UpperNs": 54525951,
+            "maxNs": 58778600,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "INBOUND_WORKER_QUEUE": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "DECODE": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "INBOUND_EVENT_LOOP_RETURN": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "NATIVE_DELIVERY": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          }
+        },
+        "phase": "drain"
+      },
+      {
+        "connections": 2,
+        "sent": [
+          {
+            "callbacks": 141,
+            "packets": 36480
+          },
+          {
+            "callbacks": 141,
+            "packets": 36480
+          }
+        ],
+        "metrics": {
+          "originalBytes": 8453626,
+          "aggregateBytes": 968421,
+          "bypassBytes": 1284276,
+          "wireBytes": 2299295,
+          "packets": 93554,
+          "frames": 1668,
+          "exactReferences": 0,
+          "templateReferences": 36,
+          "definitionBytes": 111,
+          "compressionNanos": 1501012400,
+          "compressionCpuNanos": 343750000,
+          "queueNanos": 1845190614900,
+          "errors": 0
+        },
+        "profile": {
+          "BATCH_WAIT": {
+            "count": 92823,
+            "totalNs": 1696798370300,
+            "p50UpperNs": 2097151,
+            "p95UpperNs": 54525951,
+            "p99UpperNs": 54525951,
+            "maxNs": 57686400,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "FIFO_WAIT": {
+            "count": 1668,
+            "totalNs": 406857700,
+            "p50UpperNs": 15359,
+            "p95UpperNs": 1310719,
+            "p99UpperNs": 2359295,
+            "maxNs": 10941900,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "PREPARE": {
+            "count": 1668,
+            "totalNs": 54960700,
+            "p50UpperNs": 22527,
+            "p95UpperNs": 98303,
+            "p99UpperNs": 245759,
+            "maxNs": 522300,
+            "allocatedBytes": 12080392,
+            "allocationSamples": 1668
+          },
+          "WORKER_QUEUE": {
+            "count": 1668,
+            "totalNs": 83446200,
+            "p50UpperNs": 36863,
+            "p95UpperNs": 73727,
+            "p99UpperNs": 122879,
+            "maxNs": 7791200,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "CODEC": {
+            "count": 1668,
+            "totalNs": 1501012400,
+            "p50UpperNs": 851967,
+            "p95UpperNs": 1703935,
+            "p99UpperNs": 2359295,
+            "maxNs": 7096100,
+            "allocatedBytes": 153868496,
+            "allocationSamples": 1668
+          },
+          "SAMPLE": {
+            "count": 1668,
+            "totalNs": 2157800,
+            "p50UpperNs": 959,
+            "p95UpperNs": 3583,
+            "p99UpperNs": 5119,
+            "maxNs": 189400,
+            "allocatedBytes": 0,
+            "allocationSamples": 1668
+          },
+          "EVENT_LOOP_RETURN": {
+            "count": 1668,
+            "totalNs": 103885600,
+            "p50UpperNs": 26623,
+            "p95UpperNs": 212991,
+            "p99UpperNs": 983039,
+            "maxNs": 2698000,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "WRITE": {
+            "count": 1668,
+            "totalNs": 280129500,
+            "p50UpperNs": 90111,
+            "p95UpperNs": 163839,
+            "p99UpperNs": 2097151,
+            "maxNs": 11552500,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "OUTBOUND_TOTAL": {
+            "count": 93588,
+            "totalNs": 1845190614900,
+            "p50UpperNs": 3407871,
+            "p95UpperNs": 54525951,
+            "p99UpperNs": 54525951,
+            "maxNs": 58778600,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "INBOUND_WORKER_QUEUE": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "DECODE": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "INBOUND_EVENT_LOOP_RETURN": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "NATIVE_DELIVERY": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          }
+        },
+        "phase": "done"
+      }
+    ],
+    "clients": [
+      {
+        "role": "client",
+        "received": 36480,
+        "profile": {
+          "BATCH_WAIT": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "FIFO_WAIT": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "PREPARE": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "WORKER_QUEUE": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "CODEC": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "SAMPLE": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "EVENT_LOOP_RETURN": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "WRITE": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "OUTBOUND_TOTAL": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "INBOUND_WORKER_QUEUE": {
+            "count": 806,
+            "totalNs": 56745600,
+            "p50UpperNs": 36863,
+            "p95UpperNs": 65535,
+            "p99UpperNs": 655359,
+            "maxNs": 7546900,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "DECODE": {
+            "count": 806,
+            "totalNs": 97066600,
+            "p50UpperNs": 98303,
+            "p95UpperNs": 196607,
+            "p99UpperNs": 393215,
+            "maxNs": 8199400,
+            "allocatedBytes": 59314128,
+            "allocationSamples": 806
+          },
+          "INBOUND_EVENT_LOOP_RETURN": {
+            "count": 806,
+            "totalNs": 33880300,
+            "p50UpperNs": 36863,
+            "p95UpperNs": 73727,
+            "p99UpperNs": 163839,
+            "maxNs": 1344800,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "NATIVE_DELIVERY": {
+            "count": 806,
+            "totalNs": 126253300,
+            "p50UpperNs": 122879,
+            "p95UpperNs": 393215,
+            "p99UpperNs": 720895,
+            "maxNs": 2808800,
+            "allocatedBytes": 31533528,
+            "allocationSamples": 806
+          }
+        }
+      },
+      {
+        "role": "observer",
+        "received": 36480,
+        "profile": {
+          "BATCH_WAIT": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "FIFO_WAIT": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "PREPARE": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "WORKER_QUEUE": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "CODEC": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "SAMPLE": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "EVENT_LOOP_RETURN": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "WRITE": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "OUTBOUND_TOTAL": {
+            "count": 0,
+            "totalNs": 0,
+            "p50UpperNs": 0,
+            "p95UpperNs": 0,
+            "p99UpperNs": 0,
+            "maxNs": 0,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "INBOUND_WORKER_QUEUE": {
+            "count": 870,
+            "totalNs": 201717700,
+            "p50UpperNs": 36863,
+            "p95UpperNs": 90111,
+            "p99UpperNs": 2621439,
+            "maxNs": 70332800,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "DECODE": {
+            "count": 870,
+            "totalNs": 83458400,
+            "p50UpperNs": 65535,
+            "p95UpperNs": 196607,
+            "p99UpperNs": 589823,
+            "maxNs": 5620800,
+            "allocatedBytes": 59675328,
+            "allocationSamples": 870
+          },
+          "INBOUND_EVENT_LOOP_RETURN": {
+            "count": 870,
+            "totalNs": 45989500,
+            "p50UpperNs": 36863,
+            "p95UpperNs": 98303,
+            "p99UpperNs": 393215,
+            "maxNs": 4169700,
+            "allocatedBytes": 0,
+            "allocationSamples": 0
+          },
+          "NATIVE_DELIVERY": {
+            "count": 870,
+            "totalNs": 141912400,
+            "p50UpperNs": 122879,
+            "p95UpperNs": 425983,
+            "p99UpperNs": 917503,
+            "maxNs": 4383500,
+            "allocatedBytes": 31568536,
+            "allocationSamples": 870
+          }
+        }
+      }
+    ]
+  }
+]

@@ -73,17 +73,25 @@ final class EgressInboundHandler extends ChannelInboundHandlerAdapter {
                 if (frame == null) { queuedBytes -= size; context.fireChannelRead(bytes); }
                 else {
                     bytes.release(); busy = true;
+                    long submitted = EgressProfiler.ENABLED ? System.nanoTime() : 0;
                     worker.execute(() -> {
                         try {
+                            long started = EgressProfiler.ENABLED ? System.nanoTime() : 0, allocated = EgressProfiler.allocated();
+                            EgressProfiler.Stage.INBOUND_WORKER_QUEUE.record(started - submitted, -1);
                             List<byte[]> packets = codec.decode(frame, DictionaryManager::getAggregationDictForEpoch);
+                            EgressProfiler.finish(EgressProfiler.Stage.DECODE, started, allocated);
+                            long decodedAt = EgressProfiler.ENABLED ? System.nanoTime() : 0;
                             context.executor().execute(() -> {
                                 if (closed) return;
+                                long deliveryStart = EgressProfiler.ENABLED ? System.nanoTime() : 0, deliveryAllocated = EgressProfiler.allocated();
+                                EgressProfiler.Stage.INBOUND_EVENT_LOOP_RETURN.record(deliveryStart - decodedAt, -1);
                                 queuedBytes -= size;
                                 // Each packet re-enters the actual loader-bound codec; no RawCustomPayload is synthesized.
                                 for (byte[] packet : packets) {
                                     if (closed || !context.channel().isActive()) break;
                                     context.fireChannelRead(Unpooled.wrappedBuffer(packet));
                                 }
+                                EgressProfiler.finish(EgressProfiler.Stage.NATIVE_DELIVERY, deliveryStart, deliveryAllocated);
                                 busy = false; drain();
                             });
                         } catch (Throwable e) { context.executor().execute(() -> fail(e)); }

@@ -67,6 +67,25 @@ NeoForge `GenericPacketSplitter` 的大小预编码会令小包 codec 执行两�
 
 `EgressPipeline.METRICS` 提供服务端 PLAY 原始编码量、聚合载荷、旁路编码量、成功写出的 TCP 载荷、帧/包数、定义成本、精确/模板命中、压缩墙钟/线程 CPU 和等待耗时。TCP 在 framing/compression 后按写 promise 成功计量；原始量不与载体量相加。该 TCP 口径包含 vanilla 长度与压缩前缀，不包含 IP/TCP 头和重传。`/hassium stats` 展示这些独立口径。
 
+发送端只将 native ByteBuf 复制到一份自有数组，公共 `PacketBytes` 构造与读取仍防御性复制。训练采样复用 codec 已生成的不可变逻辑批次，不再逐包重建语料；原有首训和分钟采样门保持生效。候选先计算完整帧的准确大小，最后只装配胜出的帧；模板定义收益按字段长度计算并缓存排序值，失败试算可复用已提交模板的查询索引，没有可用引用/定义时提前结束。历史、择优顺序、模板事务与 v3 字节格式保持一致。
+
+开发测量可在游戏 JVM 设置 `-Dhassium.egressProfile=true`；`egressload` 专项自动启用。`EgressProfiler.snapshot()` 提供有界直方图的次数、总耗时、P50/P95/P99 上界及最大值。每个二进制数量级有八个桶，分位数为桶上界（最高约 12.5% 桶宽），不是精确排序值。生产默认关闭；线程分配计数器按需初始化。
+
+| 阶段 | 范围与样本单位 |
+|---|---|
+| `BATCH_WAIT` | 每个聚合子包：原生编码字节进入出口 → 封批 |
+| `FIFO_WAIT` | 每个批次：封批 → 开始转换自有数组 |
+| `PREPARE` | EventLoop 上复制字节、组织批次与获取字典 |
+| `WORKER_QUEUE` | 提交后台作业 → worker 开始执行 |
+| `CODEC` / `SAMPLE` | 编码及候选择优 / 原有字典采样钩子，分开计量 |
+| `EVENT_LOOP_RETURN` | 后台处理结束 → EventLoop 开始写出回调 |
+| `WRITE` | 聚合载体装配开始 → 对应写 promise 完成 |
+| `OUTBOUND_TOTAL` | 每个成功 PLAY 子包：编码字节进入出口 → 写 promise 成功；含旁路，不含原生编码、RTT 或客户端处理 |
+| `INBOUND_WORKER_QUEUE` / `DECODE` | 客户端解压作业排队 / 解压和完整帧验证 |
+| `INBOUND_EVENT_LOOP_RETURN` / `NATIVE_DELIVERY` | 解压后返回 EventLoop / 整批回灌原生 decoder；不含客户端主线程任务的后续执行 |
+
+`PREPARE`、`CODEC`、`SAMPLE`、`DECODE`、`NATIVE_DELIVERY` 同时记录当前线程的 Java 堆分配字节。`allocationSamples=0` 表示未测量或平台不支持，不能当作零分配；不包含 native/Zstd 内存、其他线程或存活堆大小。直方图快照在活跃记录时近似一致，不同样本单位的分位数不能相加。现有 `queueNanos` 继续保持「入队到写完成」累计口径，压缩计时排除语料采样。
+
 调试 JSONL 的 `native_v3` 是实际 native encoder 输出，`agg_v3` 是成功写出的内部帧，`phase_v3` 是开发采集阶段。采集不会额外执行 Mod codec。
 
 `EgressReplay` 使用二进制 EG3R 语料，分别运行独立字典、历史、历史+模板三个实际 codec，检查每包字节、顺序、完整帧和 native/vanilla 封装大小。历史旧版语料只检验不透明字节算法，不证明目标版本的原生兼容或当前收益。运行示例：
@@ -77,6 +96,15 @@ NeoForge `GenericPacketSplitter` 的大小预编码会令小包 codec 执行两�
 ```
 
 `egress` 专项仅开发环境注册 `egress_fixture:typed_state`：State/Event 同一通道，包含 biome holder、变长字符串/列表和一次性事件。验证 512 个包的具体类型、原生 encoder 单次调用、Bundle、回调及重连。`egressbench` 在同一路径/配置下按 warmup→idle→128 个移动实体→密集 Mod payload 分阶段采集；生产环境不启用夹具。
+
+`egressload` 由同一 harness 启动两个独立客户端 JVM、用户名、runDir 和 probe。双方聚合激活后进行 200 tick 预热（16 包/tick/连接）、200 tick 稳态（64 包/tick/连接）、200 tick 突发（每五 tick 各发 512 包）、40 tick 排空；每连接精确交付 36,480 个有序类型化包及 141 次回调。客户端逐包校验内容/顺序/执行次数；分析器同时要求两端 PASS、服务端完整阶段和发送量、零协议错误及双方分阶段测量。同步 JSONL 调试导出关闭；两个重点加载器必须串行运行：
+
+```powershell
+.\scripts\runtime-smoke-test.ps1 -Ver 1.20.1 -Loader forge -Phase I -Scenario egressload -SessionId egress_load_forge -Vd1 4 -Vd2 4 -ClientRenderDistance 4 -Offline
+.\scripts\runtime-smoke-test.ps1 -Ver 1.21.1 -Loader neoforge -Phase I -Scenario egressload -SessionId egress_load_neoforge -Vd1 4 -Vd2 4 -ClientRenderDistance 4 -Offline
+```
+
+`EgressAllocationReplay <report.csv> [baseline.csv]` 使用四组确定性不透明输入，每组 180 帧，预热一遍、测量四遍。测量范围包含 native 字节自有化模拟、真实 v3 codec 和非采样路径；原始输入生成、native codec、解码验证、SHA-256 计算在计时外。选中帧的长度与 SHA-256 必须与可选基线 CSV 一致。归档旧 codec 时通过 `common:runJava -PprependClasspath=<旧 classes 根目录>` 串行对照；这是离线分配/耗时对照，不代表线上 TPS、GC 或端到端收益。
 
 `EgressCaptureReplay <native.jsonl> <report.csv> [repeats=1] [verifySelected=true]` 从采集恢复字典、会话代及完整原生包，按实际批次对照三个模式。默认要求历史+模板逐字节重现实际选中帧；比较新发送策略与旧采集时显式传入 `false`，仍逐包检查原始字节、顺序、CRC 和同协议独立字典大小上限。`repeats>1` 丢弃首遍预热，报告后续连续阶段的平均 CPU/墙钟；恢复和校验位于计时外。旧编码器类可归档后放在回放 classpath 前端，使同一个回放工具对照旧策略。CSV 追加试算、跳过及胜出帧，旧编码器无该接口时为 -1。按成功 TCP 计量和聚合封装差值计算同一语料的独立字典出口基线，旁路流量保持原值。CPU 对照仅为 codec 部分；队列等待报告实际 v3 观测值，不将离线回放宣称为端到端延迟对照。
 

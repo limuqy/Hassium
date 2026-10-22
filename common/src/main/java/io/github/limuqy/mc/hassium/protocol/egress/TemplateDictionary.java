@@ -7,6 +7,7 @@ final class TemplateDictionary {
     static final int MAX_ENTRIES = 2048, MAX_STORAGE = 2 * 1024 * 1024;
     static final int MAX_SEEDS = 256, MAX_SEED_BYTES = 512 * 1024, MAX_SEARCH = 24;
     private LinkedHashMap<Integer, Entry> entries = new LinkedHashMap<>();
+    private Map<String, ArrayDeque<Entry>> lookupIndex;
     private final LinkedHashMap<String, ArrayDeque<Model>> seeds = new LinkedHashMap<>();
     private final LinkedHashMap<Model, Boolean> recentModels = new LinkedHashMap<>(16, .75f, true);
     private int backoff, cooldown, initialFrames, referenceRatio = -1;
@@ -59,7 +60,7 @@ final class TemplateDictionary {
             this.exact = exact; this.partial = partial; this.definitions = definitions;
         }
         byte[] bytes() { return bytes; }
-        void commit() { entries = table; nextId = next; }
+        void commit() { entries = table; nextId = next; lookupIndex = null; }
     }
     /** A failed probe backs off at most 32 frames; a different packet mix wakes learning immediately. */
     boolean shouldAttempt(List<EgressFrameCodec.PacketBytes> packets, int frameBytes, int logicalBytes) {
@@ -94,21 +95,24 @@ final class TemplateDictionary {
             byte[] bytes = packet.content();
             if (bytes.length >= 8 && bytes.length <= 4096 && packet.key().length() <= 256) observations[i] = observe(packet.key(), bytes);
         }
-        Map<String, ArrayDeque<Entry>> index = new HashMap<>();
-        for (Entry e : entries.values()) index.computeIfAbsent(seedKey(e.key, e.base.length), ignored -> new ArrayDeque<>()).addFirst(e);
+        if (lookupIndex == null) {
+            lookupIndex = new HashMap<>();
+            for (Entry e : entries.values()) lookupIndex.computeIfAbsent(seedKey(e.key, e.base.length), ignored -> new ArrayDeque<>()).addFirst(e);
+        }
         Entry[] references = new Entry[packets.size()];
         Model[] candidates = new Model[packets.size()];
         Map<Model, Integer> uses = new LinkedHashMap<>();
+        boolean hasReferences = false;
         for (int i = 0; i < packets.size(); i++) {
             var packet = packets.get(i); byte[] bytes = packet.content();
             if (bytes.length < 8 || bytes.length > 4096 || packet.key().length() > 256) continue;
             String bucket = seedKey(packet.key(), bytes.length); int checked = 0;
-            var existing = index.get(bucket);
+            var existing = lookupIndex.get(bucket);
             if (existing != null) for (Entry e : existing) {
                 if (++checked > MAX_SEARCH) break;
                 if (e.matches(bytes) && (references[i] == null || e.variables() < references[i].variables())) references[i] = e;
             }
-            if (references[i] != null) continue;
+            if (references[i] != null) { hasReferences = true; continue; }
             // observe already chose the nearest of at most 24 models. Its variable union can
             // only expand, so retain that result instead of searching or allocating it again.
             Model model = observations[i];
@@ -116,10 +120,15 @@ final class TemplateDictionary {
             if (candidates[i] != null) uses.merge(candidates[i], 1, Integer::sum);
         }
         // Count the complete definition and conservative ID cost; never admit from presumed future hits.
-        List<Model> admissible = new ArrayList<>();
+        record Admission(Model model, long profit) {}
+        List<Admission> admissible = new ArrayList<>();
         int admissionId = (int)Math.min(Integer.MAX_VALUE, (long)nextId + 15);
-        for (var use : uses.entrySet()) if (profit(use.getKey(), use.getValue(), admissionId) > 0) admissible.add(use.getKey());
-        admissible.sort(Comparator.comparingLong((Model m) -> profit(m, uses.get(m), admissionId)).reversed());
+        for (var use : uses.entrySet()) {
+            long profit = profit(use.getKey(), use.getValue(), admissionId);
+            if (profit > 0) admissible.add(new Admission(use.getKey(), profit));
+        }
+        admissible.sort(Comparator.comparingLong(Admission::profit).reversed());
+        if (!hasReferences && admissible.isEmpty()) return null;
         LinkedHashMap<Integer, Entry> table = new LinkedHashMap<>(entries);
         Set<Integer> used = new HashSet<>();
         for (Entry e : references) if (e != null) used.add(e.id);
@@ -127,7 +136,8 @@ final class TemplateDictionary {
         EgressBytes.Writer commands = new EgressBytes.Writer(), records = new EgressBytes.Writer();
         int next = nextId, commandCount = 0, exact = 0, partial = 0, definitions = 0;
         int storage = 0; for (Entry e : table.values()) storage += e.cost();
-        for (Model model : admissible) {
+        for (Admission admission : admissible) {
+            Model model = admission.model;
             if (admitted.size() == 16) break;
             if (next >= Integer.MAX_VALUE - 16) throw EgressBytes.invalid("Template IDs exhausted");
             Entry entry = model.entry(next++);
@@ -159,9 +169,10 @@ final class TemplateDictionary {
         return new Transaction(out.toByteArray(), table, next, exact, partial, definitions);
     }
     private static long profit(Model model, int count, int id) {
-        Entry entry = model.entry(id); var definition = new EgressBytes.Writer(); writeDefinition(definition, entry);
-        int saved = model.base.length + varIntSize(model.base.length) - 1 - varIntSize(id) - entry.variables();
-        return (long)count * saved - definition.size();
+        int definition = 1 + varIntSize(id) + varIntSize(model.base.length) + model.base.length + varIntSize(model.slots.size());
+        for (Slot slot : model.slots) definition += varIntSize(slot.offset) + varIntSize(slot.length);
+        int saved = model.base.length + varIntSize(model.base.length) - 1 - varIntSize(id) - variables(model.slots);
+        return (long)count * saved - definition;
     }
     private static int varIntSize(int n) { int result = 1; while ((n >>>= 7) != 0) result++; return result; }
     private static int variables(List<Slot> slots) { int result = 0; for (Slot slot : slots) result += slot.length; return result; }
@@ -224,7 +235,7 @@ final class TemplateDictionary {
         private final int next;
         Decoded(byte[] bytes, LinkedHashMap<Integer, Entry> table, int next) { this.bytes = bytes; this.table = table; this.next = next; }
         byte[] bytes() { return bytes; }
-        void commit() { entries = table; nextId = next; }
+        void commit() { entries = table; nextId = next; lookupIndex = null; }
     }
     Decoded decode(byte[] payload) {
         EgressBytes.Reader r = new EgressBytes.Reader(payload);
@@ -273,6 +284,6 @@ final class TemplateDictionary {
         }
         r.end(); return new Decoded(logical.toByteArray(), table, next);
     }
-    void clear() { entries.clear(); seeds.clear(); recentModels.clear(); seedBytes = seedCount = backoff = cooldown = initialFrames = 0; referenceRatio = -1; traffic = 0; attempted = false; nextId = 1; }
-    void replace(TemplateDictionary other) { entries = new LinkedHashMap<>(other.entries); nextId = other.nextId; }
+    void clear() { entries.clear(); lookupIndex = null; seeds.clear(); recentModels.clear(); seedBytes = seedCount = backoff = cooldown = initialFrames = 0; referenceRatio = -1; traffic = 0; attempted = false; nextId = 1; }
+    void replace(TemplateDictionary other) { entries = new LinkedHashMap<>(other.entries); lookupIndex = null; nextId = other.nextId; }
 }

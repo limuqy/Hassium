@@ -1,0 +1,6 @@
+# Two concurrent native clients; 200 warmup ticks, 200 steady ticks, 200 burst ticks, 40 drain ticks.
+join label=WAIT_JOIN_1 since=start timeoutMs=${joinTimeoutMs}
+wait ms=100000
+assertProbe key=egress.fixtureReceived op=eq value=36480
+dump label=ROUND1 round=1
+exit rounds=1
