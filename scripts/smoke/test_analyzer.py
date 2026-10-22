@@ -4,6 +4,25 @@ from scripts.smoke.analyzer import _late_near_player, _server_full_push_timeouts
 
 
 class EgressLoadGateTest(unittest.TestCase):
+    def test_stress_count_and_configuration_are_independent_gates(self):
+        import json
+        from scripts.smoke.analyzer import _check_egress_load
+        from scripts.smoke.test_egress_window_report import stress_fixture
+        result, phases = stress_fixture()
+        server, client = self.fixture()
+        reports = [json.loads(line.split("[EGRESS_LOAD] ")[1]) for line in server.splitlines()]
+        for report in reports:
+            report.update(phases[report["phase"]])
+            if report["phase"] == "done":
+                report["sent"] = [{"packets": 2688000, "callbacks": 2688000 // 257}] * 2
+        server = "\n".join("[EGRESS_LOAD] " + json.dumps(report) for report in reports)
+        client = client.replace("received=36480", "received=2688000")
+        self.assertEqual([], _check_egress_load(server, [client, client], result))
+        result["EgressStressWorkload"]["rate"] = 512
+        codes = {failure["code"] for failure in _check_egress_load(server, [client, client], result)}
+        self.assertIn("EGRESS_STRESS_WORKLOAD_MISMATCH", codes)
+        self.assertIn("EGRESS_LOAD_SEND_COUNT", codes)
+
     def fixture(self):
         import json
         summary = {"count": 10, "allocationSamples": 10}

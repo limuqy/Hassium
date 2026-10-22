@@ -11,7 +11,9 @@ import java.util.concurrent.atomic.LongAdder;
 public final class EgressProfiler {
     public static final boolean ENABLED = Boolean.getBoolean("hassium.egressProfile")
             || "egressload".equals(System.getProperty("hassium.smokeScenario"))
-            || "egressload".equals(System.getProperty("hassium.serverSmokeScenario"));
+            || "egressload".equals(System.getProperty("hassium.serverSmokeScenario"))
+            || "egressstress".equals(System.getProperty("hassium.smokeScenario"))
+            || "egressstress".equals(System.getProperty("hassium.serverSmokeScenario"));
     private static final class Allocations { static final com.sun.management.ThreadMXBean BEAN = allocationBean(); }
     public enum Stage {
         BATCH_WAIT, FIFO_WAIT, PREPARE, WORKER_QUEUE, CODEC, SAMPLE, EVENT_LOOP_RETURN, WRITE, OUTBOUND_TOTAL,
@@ -33,10 +35,15 @@ public final class EgressProfiler {
             if (allocated >= 0) { allocations.add(allocated); allocationSamples.increment(); }
         }
         Summary snapshot() {
-            long[] counts = new long[buckets.length()]; long count = 0;
-            for (int i = 0; i < counts.length; i++) { counts[i] = buckets.get(i); count += counts[i]; }
+            long[] counts = counts(); long count = 0;
+            for (long n : counts) count += n;
             return new Summary(count, total.sum(), percentile(counts, count, 50), percentile(counts, count, 95),
                     percentile(counts, count, 99), max.get(), allocations.sum(), allocationSamples.sum());
+        }
+        long[] counts() {
+            long[] copy = new long[buckets.length()];
+            for (int i = 0; i < copy.length; i++) copy[i] = buckets.get(i);
+            return copy;
         }
         private static long percentile(long[] counts, long count, int percentile) {
             if (count == 0) return 0;
@@ -71,6 +78,12 @@ public final class EgressProfiler {
     public static Map<String, Summary> snapshot() {
         Map<String, Summary> result = new LinkedHashMap<>();
         if (ENABLED) for (Stage stage : Stage.values()) result.put(stage.name(), stage.values.snapshot());
+        return result;
+    }
+    /** Cumulative bucket copies allow phase subtraction without resetting in-flight measurements. */
+    static Map<String, long[]> histogramSnapshot() {
+        Map<String, long[]> result = new LinkedHashMap<>();
+        if (ENABLED) for (Stage stage : Stage.values()) result.put(stage.name(), stage.values.counts());
         return result;
     }
     static void reset() { for (Stage stage : Stage.values()) stage.values.reset(); }

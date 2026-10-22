@@ -532,7 +532,7 @@ def _movement_segments(client_log: str) -> list[dict[str, Any]]:
     return segments
 
 
-def _check_egress_load(server_log: str, client_logs: list[str]) -> list[dict[str, Any]]:
+def _check_egress_load(server_log: str, client_logs: list[str], result: dict | None = None) -> list[dict[str, Any]]:
     failures = []
     reports = []
     for line in server_log.splitlines():
@@ -546,8 +546,18 @@ def _check_egress_load(server_log: str, client_logs: list[str]) -> list[dict[str
         failures.append(_failure("EGRESS_LOAD_CONCURRENCY_MISSING"))
     if not {"warmup", "steady", "burst", "drain", "done"}.issubset({item.get("phase") for item in reports}):
         failures.append(_failure("EGRESS_LOAD_PHASE_MISSING"))
+    expected = 36480
+    if result and result.get("Scenario") == "egressstress":
+        from .egress_window_report import expected_packets
+        try:
+            expected = expected_packets(result, {item.get("phase"): item for item in reports})
+        except (ValueError, TypeError) as error:
+            failures.append(_failure("EGRESS_STRESS_WORKLOAD_MISMATCH", detail=str(error)))
+            expected = -1
+    if len(client_logs) != 2:
+        failures.append(_failure("EGRESS_LOAD_CONCURRENCY_MISSING"))
     for sent in done.get("sent", []):
-        if sent.get("packets") != 36480 or sent.get("callbacks") != 36480 // 257:
+        if sent.get("packets") != expected or sent.get("callbacks") != expected // 257:
             failures.append(_failure("EGRESS_LOAD_SEND_COUNT", actual=sent))
     if _obj(done.get("metrics")).get("errors") != 0:
         failures.append(_failure("EGRESS_LOAD_PROTOCOL_ERRORS"))
@@ -558,7 +568,7 @@ def _check_egress_load(server_log: str, client_logs: list[str]) -> list[dict[str
     for index, log in enumerate(client_logs):
         if "HassiumSmokeTest:PASS" not in log or "HassiumSmokeTest:FAIL" in log:
             failures.append(_failure("EGRESS_LOAD_CLIENT_FAILED", client=index))
-        match = re.search(r"\[EGRESS_LOAD_CLIENT\] received=36480 profile=(\{[^\n]+\})", log)
+        match = re.search(r"\[EGRESS_LOAD_CLIENT\] received=" + str(expected) + r" profile=(\{[^\n]+\})", log)
         try:
             profile = json.loads(match.group(1)) if match else {}
         except ValueError:
@@ -649,7 +659,7 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
         checks["dictionary_rollout"] = "PASS" if has_dict_flip else "FAIL"
 
     # 单轮场景（probe 只有 round1.json）：新场景必须在此登记，否则会被按两轮判定 → PROBE_MISSING。
-    single_round_scenarios = {"seedgen", "ovdgen", "modcompat", "modcompat_strict", "flyroundtrip", "dictionary", "egress", "egressbench", "egressload", "factoryegress20", "factoryegress100", "factoryegress200", "trafficprofile", "trafficfactory"}
+    single_round_scenarios = {"seedgen", "ovdgen", "modcompat", "modcompat_strict", "flyroundtrip", "dictionary", "egress", "egressbench", "egressload", "egressstress", "factoryegress20", "factoryegress100", "factoryegress200", "trafficprofile", "trafficfactory"}
     round_numbers = (1,) if scenario in single_round_scenarios else (1, 2)
     stats_ok = {n: bool(re.search(rf"CLIENT_STATS ROUND{n} begin", log_text)
                     and re.search(rf"CLIENT_STATS ROUND{n} end", log_text)) for n in round_numbers}
@@ -808,10 +818,10 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
                                      diagonalTruncated=len(spatial["diagonalHoles"]) > 64))
 
 
-    if scenario == "egressload":
+    if scenario in ("egressload", "egressstress"):
         observer_path = logs_dir / f"observer_{session}.log"
         observer = observer_path.read_text(encoding="utf-8", errors="replace") if observer_path.exists() else ""
-        load_failures = _check_egress_load(log_text, [client_log, observer])
+        load_failures = _check_egress_load(log_text, [client_log, observer], result)
         if result.get("ObserverExitCode") != 0:
             load_failures.append(_failure("EGRESS_LOAD_OBSERVER_EXIT", exitCode=result.get("ObserverExitCode")))
         failures.extend(load_failures)

@@ -77,6 +77,10 @@ public final class ServerSmokeTest {
         return Boolean.parseBoolean(System.getProperty("hassium.serverSmokeTest", "false"));
     }
 
+    public static void beforeEgressFlush(MinecraftServer server) {
+        if (enabled) io.github.limuqy.mc.hassium.protocol.egress.EgressFixture.beforeFlush(server);
+    }
+
     public static void initIfEnabled(MinecraftServer server) {
         if (!isEnabled() || server == null) {
             return;

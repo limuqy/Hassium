@@ -20,6 +20,12 @@ dependencies {
 loom {
     runConfigs.configureEach {
         ideConfigGenerated = true
+        if (project.findProperty('hassiumSmokeTest')?.toString() == 'true') {
+            ['rate', 'warmupTicks', 'measureTicks', 'drainTicks'].each { key ->
+                def value = project.findProperty("hassiumEgressStress.${key}")
+                if (value != null) jvmArguments.add("-Dhassium.egressStress.${key}=${value}")
+            }
+        }
         if (name == 'client') {
             runDir = 'run/client'
             def smokeRunDir = project.findProperty('hassiumSmokeClientRunDir')

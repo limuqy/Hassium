@@ -64,6 +64,12 @@ param(
     # 时按键值对 patch 双端 hassium toml（见 Invoke-SmokeProfilePatch）。
     [string]$Scenario = "classic",
     [ValidateRange(1,2)][int]$ClientCount = 1,
+    # Optional benchmark override, applied after the scenario profile; 0 keeps its value.
+    [ValidateRange(0,5000)][int]$AggregationMaxWaitTimeMs = 0,
+    [ValidateRange(4,1536)][int]$EgressStressRate = 1024,
+    [ValidateRange(20,2400)][int]$EgressStressWarmupTicks = 900,
+    [ValidateRange(20,3600)][int]$EgressStressMeasureTicks = 1200,
+    [ValidateRange(20,400)][int]$EgressStressDrainTicks = 100,
     # Always restore a new isolated copy of a supplied world. The source archive is read-only.
     [string]$WorldZip = "",
     [switch]$Offline,
@@ -81,8 +87,11 @@ param(
 )
 
 $ErrorActionPreference = "Continue"
-if ($Scenario -eq 'egressload') { $ClientCount = 2 }
-if ($ClientCount -gt 1 -and $Scenario -ne 'egressload') { throw 'ClientCount=2 is supported by the egressload scenario.' }
+if ($Scenario -eq 'egressstress') {
+    if ($EgressStressRate % 4 -ne 0 -or $EgressStressMeasureTicks % 2 -ne 0) { throw 'Stress rate must be divisible by 4 and measure ticks by 2.' }
+}
+if ($Scenario -in @('egressload','egressstress')) { $ClientCount = 2 }
+if ($ClientCount -gt 1 -and $Scenario -notin @('egressload','egressstress')) { throw 'ClientCount=2 is supported by egressload/egressstress.' }
 if ($Scenario -eq 'ovdgen') {
     if (-not $PSBoundParameters.ContainsKey('Vd1')) { $Vd1 = 4 }
     if (-not $PSBoundParameters.ContainsKey('Vd2')) { $Vd2 = 4 }
@@ -571,6 +580,11 @@ if ($Scenario -in @("seedgen", "ovdgen", "ovdlight", "dimension", "modcompat", "
 # T8 场景配置档案落盘：存在 scripts/smoke/profiles/<Scenario>.profile.properties 时，
 # 按键值对 patch 双端 hassium toml（须在服务端/客户端启动前完成）。文件不存在则 no-op。
 Invoke-SmokeProfilePatch -Name $Scenario -ClientRunDir $clientRunDir -ServerRunDir $serverRunDir -SessionTag $SessionId
+if ($AggregationMaxWaitTimeMs -gt 0) {
+    Set-SmokeTomlKeys -Label 'aggregation window override' -ClientRunDir $clientRunDir -ServerRunDir $serverRunDir -SessionTag $SessionId -Pairs @(
+        @{ Key = 'master.aggregationMaxWaitTimeMs'; Value = "$AggregationMaxWaitTimeMs" }
+    )
+}
 
 if ($Scenario -eq "dictionary") {
     # 字典热更场景前置：删除服务端已训练字典（含 tmp 残留）与语料目录内容（agg-*.bin*，
@@ -685,6 +699,12 @@ if ($PregenOnly) {
     exit 0
 }
 
+$egressStressArgs = @()
+if ($Scenario -eq 'egressstress') {
+    $egressStressArgs = @("-PhassiumEgressStress.rate=$EgressStressRate", "-PhassiumEgressStress.warmupTicks=$EgressStressWarmupTicks",
+        "-PhassiumEgressStress.measureTicks=$EgressStressMeasureTicks", "-PhassiumEgressStress.drainTicks=$EgressStressDrainTicks")
+}
+
 # 5. 启动服务端（后台，启用 ServerSmokeTest）
 $gradlew = Join-Path $projectRoot "gradlew.bat"
 # 5.0 不再调 gradlew --stop：该命令全局停所有 daemon，会误杀并行会话 / 其他项目正在跑的构建。
@@ -698,6 +718,7 @@ if ($PSBoundParameters.ContainsKey('Scenario')) {
     # 配合 ScenarioEngine 服务端 op 逻辑；仅 serverSide 注入，客户端走 -PhassiumSmokeScenario）
     $serverArgs += "-PhassiumServerSmokeScenario=$Scenario"
 }
+$serverArgs += $egressStressArgs
 $server = Start-Process -FilePath $gradlew `
     -ArgumentList $serverArgs `
     -RedirectStandardOutput $serverLog `
@@ -783,6 +804,7 @@ if ($ManualLogout) {
 if ($JoinTimeoutMs -gt 0) {
     $clientArgs += "-PhassiumSmokeJoinTimeoutMs=$JoinTimeoutMs"
 }
+$clientArgs += $egressStressArgs
 $clientProc = Start-Process -FilePath $gradlew `
     -ArgumentList $clientArgs `
     -RedirectStandardOutput $clientLog `
@@ -790,7 +812,7 @@ $clientProc = Start-Process -FilePath $gradlew `
     -PassThru -WindowStyle Hidden
 
 $observerProc = $null
-if ($Scenario -eq 'egressload') {
+if ($Scenario -in @('egressload','egressstress')) {
     $observerDir = Join-Path $logRoot "observer/$SessionId"
     $observerProbeDir = Join-Path $probeDir 'observer'
     New-Item -ItemType Directory -Force -Path "$observerDir/config/hassium", $observerProbeDir | Out-Null
@@ -798,8 +820,9 @@ if ($Scenario -eq 'egressload') {
     Copy-Item -LiteralPath (Join-Path $clientRunDir 'config/hassium/hassium-client.toml') -Destination "$observerDir/config/hassium/hassium-client.toml"
     $observerArgs = @('--no-daemon', "-Dorg.gradle.jvmargs=-Xmx2G -DsmokeSession=${SessionId}_observer",
         ":${Loader}:runClient", "-Pmc_ver=$Ver", '-PhassiumSmokeTest=true', "-PhassiumSmokeHost=$effectiveHost",
-        '-PhassiumSmokeScenario=egressload', '-PhassiumSmokeUsername=EgressObserver',
+        "-PhassiumSmokeScenario=$Scenario", '-PhassiumSmokeUsername=EgressObserver',
         "-PhassiumSmokeClientRunDir=$observerDir", "-PhassiumSmokeProbeDir=$observerProbeDir", '-PhassiumSmokePhases=classic')
+    $observerArgs += $egressStressArgs
     if ($Offline) { $observerArgs += '--offline' }
     $observerProc = Start-Process -FilePath $gradlew -ArgumentList $observerArgs -WindowStyle Hidden -PassThru `
         -RedirectStandardOutput (Join-Path $logDir "observer_$SessionId.log") -RedirectStandardError (Join-Path $logDir "observer_$SessionId.err.log")
@@ -852,7 +875,7 @@ if (-not $clientProc.HasExited) {
     Stop-Process -Id $clientProc.Id -Force -ErrorAction SilentlyContinue
 }
 $clientExit = if ($clientProc.ExitCode) { $clientProc.ExitCode } else { 0 }
-if ($observerProc -and $Scenario -eq 'egressload' -and -not $observerProc.HasExited) {
+if ($observerProc -and $Scenario -in @('egressload','egressstress') -and -not $observerProc.HasExited) {
     $remainingMs = [int][Math]::Max(0, ($clientDeadline - (Get-Date)).TotalMilliseconds)
     while ($remainingMs -gt 0 -and -not $observerProc.HasExited) {
         $null = $observerProc.WaitForExit([Math]::Min(1000, $remainingMs))
@@ -869,7 +892,7 @@ Write-Host "[$SessionId] [8/9] 解析结果 (客户端退出码: $clientExit)...
 # 单轮场景没有 ROUND2；不得把未运行的轮次写成 stats=false / pass=false。
 # flyroundtrip：单轮往返飞行黑块专项（join → 飞出去 → 掉头飞回 → dump ROUND1 → assertProbe → exit rounds=1）。
 # dictionary：单轮字典热更 rollout（join → /tick rate 200 → 等训练+offer+ACK 切换 → dump ROUND1 → exit rounds=1）。
-$requiresRound2 = $Scenario -notin @("seedgen", "ovdgen", "modcompat", "modcompat_strict", "flyroundtrip", "dictionary", "trafficprofile", "trafficfactory", "egressload")
+$requiresRound2 = $Scenario -notin @("seedgen", "ovdgen", "modcompat", "modcompat_strict", "flyroundtrip", "dictionary", "trafficprofile", "trafficfactory", "egressload", "egressstress")
 $clientContent = if (Test-Path $clientLog) { Get-Content $clientLog -Raw } else { "" }
 
 # F17：Gradle 会把 fork 出的游戏 JVM 的真实退出码写进自己的失败信息（在 client 的 stderr 日志里）。挂起被系统关闭时是
@@ -998,7 +1021,7 @@ $logAuditAllow = @(
 ) + @($AllowErrorPatterns)
 $logAuditFailures = @()
 $auditLogs = @($serverLog, $clientLog)
-if ($Scenario -eq 'egressload') { $auditLogs += Join-Path $logDir "observer_$SessionId.log" }
+if ($Scenario -in @('egressload','egressstress')) { $auditLogs += Join-Path $logDir "observer_$SessionId.log" }
 foreach ($auditLog in $auditLogs) {
     if (-not (Test-Path $auditLog)) { continue }
     $tag = Split-Path -Leaf $auditLog
@@ -1038,6 +1061,8 @@ $resultObj = @{
     Result = "UNKNOWN"
     ClientExitCode = $clientExit
     ClientCount = $ClientCount
+    AggregationMaxWaitTimeMs = $AggregationMaxWaitTimeMs
+    EgressStressWorkload = @{ rate=$EgressStressRate; warmupTicks=$EgressStressWarmupTicks; measureTicks=$EgressStressMeasureTicks; drainTicks=$EgressStressDrainTicks }
     ObserverExitCode = if ($observerProc -and $observerProc.HasExited) { $observerProc.ExitCode } else { $null }
     # F17 挂起取证：ClientNativeExitCode = fork 出的游戏 JVM 真实退出码（gradlew 恒为 1，
     # 系统判定挂起并关闭进程时是 0xCFFFFFFF）；HangDumps 非空 = 日志静默期间抓到过现场。

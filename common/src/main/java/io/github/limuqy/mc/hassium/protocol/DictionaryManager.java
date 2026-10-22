@@ -716,6 +716,9 @@ public class DictionaryManager {
      * 最低数据集校验决定，拒绝则保持现行字典到下一天）。
      */
     private static void retrainIfDue() {
+        // Fixed dictionary throughout the explicit development benchmark, including across midnight.
+        if (io.github.limuqy.mc.hassium.server.ServerSmokeTest.isEnabled()
+                && "egressstress".equals(System.getProperty("hassium.serverSmokeScenario"))) return;
         if (!serverSide) {
             return;
         }

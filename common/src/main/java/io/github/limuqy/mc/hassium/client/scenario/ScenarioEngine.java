@@ -105,6 +105,12 @@ public final class ScenarioEngine {
             throw new IllegalStateException("scenario load failed: " + resource, e);
         }
         Map<String, String> vars = new LinkedHashMap<>();
+        if ("egressstress".equals(name)) {
+            var workload = io.github.limuqy.mc.hassium.protocol.egress.EgressStressWorkload.configured();
+            io.github.limuqy.mc.hassium.protocol.egress.EgressStressWorkload.text(0);
+            vars.put("egressStressWaitMs", Long.toString(workload.clientWaitMs()));
+            vars.put("egressStressExpected", Integer.toString(workload.expected()));
+        }
         vars.put("delayMs", Long.toString(delayMs));
         // 2026-09-18 用户指定：R1 喂满等待 40s、R2 20s（可用 JVM 属性覆盖）
         vars.put("round1WaitMs", Long.toString(parseLong(

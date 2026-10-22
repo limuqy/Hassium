@@ -1,0 +1,29 @@
+{
+  "baseCommit": "39ac77d1f9677544ce97d6e88434377f40a4206a",
+  "processor": "AMD Ryzen 9 8940HX with Radeon Graphics",
+  "logicalProcessors": 32,
+  "egressWorkers": 8,
+  "order": [
+    "forge:50",
+    "forge:20",
+    "forge:10",
+    "neoforge:10",
+    "neoforge:20",
+    "neoforge:50"
+  ],
+  "inputs": [
+    {
+      "loader": "forge",
+      "version": "1.20.1",
+      "worldSha256": "F722F5A016D22A818C763F44A20DF34B56814626F68DB25E960C32B1B7A1E7E0",
+      "dictionarySha256": "E393FA8D66693E71A5440DD01EA0C438B097B3041B70D596654304A981A7C9CA"
+    },
+    {
+      "loader": "neoforge",
+      "version": "1.21.1",
+      "worldSha256": "0B5ED5E1E4A2DED022B887BBAC7F362739436FB5D5796789405F23B6CB04F2D3",
+      "dictionarySha256": "6E84D7F9151273ADAE19D90AE101A08891513205C7D5F3AD97CB0B1A457FB17F"
+    }
+  ],
+  "configsRestored": true
+}

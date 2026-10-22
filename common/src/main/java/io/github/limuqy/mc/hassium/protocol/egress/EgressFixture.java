@@ -28,8 +28,18 @@ public final class EgressFixture {
     public record State(long session, int sequence, Holder<Biome> biome, String text, List<Integer> values) implements Payload {}
     public record Event(long session, int sequence, long value) implements Payload {}
     private static final Set<String> ENCODED = ConcurrentHashMap.newKeySet();
+    private static final boolean STRESS = "egressstress".equals(System.getProperty("hassium.smokeScenario"))
+            || "egressstress".equals(System.getProperty("hassium.serverSmokeScenario"));
+    private static final int STRESS_EXPECTED = STRESS ? EgressStressWorkload.configured().expected() : 0;
+    private static final Map<Long, BitSet> STRESS_ENCODED = new ConcurrentHashMap<>();
     public static void write(net.minecraft.network.FriendlyByteBuf buf, Payload payload) {
-        if (!ENCODED.add(payload.session() + ":" + payload.sequence())) throw new IllegalStateException("Mod fixture codec executed twice");
+        if (STRESS) {
+            BitSet encoded = STRESS_ENCODED.computeIfAbsent(payload.session(), ignored -> new BitSet());
+            synchronized (encoded) {
+                if (encoded.get(payload.sequence())) throw new IllegalStateException("Mod fixture codec executed twice");
+                encoded.set(payload.sequence());
+            }
+        } else if (!ENCODED.add(payload.session() + ":" + payload.sequence())) throw new IllegalStateException("Mod fixture codec executed twice");
         buf.writeByte(payload instanceof State ? 0 : 1); buf.writeLong(payload.session()); buf.writeVarInt(payload.sequence());
         if (payload instanceof State state) {
             io.github.limuqy.mc.hassium.compat.EgressFixtureCompat.writeBiome(buf, state.biome());
@@ -48,16 +58,19 @@ public final class EgressFixture {
         return new State(session, sequence, biome, text, List.copyOf(values));
     }
     public static boolean enabled() {
-        return Services.PLATFORM.isDevelopmentEnvironment() && (Set.of("egress", "egressbench", "egressload").contains(System.getProperty("hassium.smokeScenario", ""))
-                || Set.of("egress", "egressbench", "egressload").contains(System.getProperty("hassium.serverSmokeScenario", "")));
+        return Services.PLATFORM.isDevelopmentEnvironment() && (Set.of("egress", "egressbench", "egressload", "egressstress").contains(System.getProperty("hassium.smokeScenario", ""))
+                || Set.of("egress", "egressbench", "egressload", "egressstress").contains(System.getProperty("hassium.serverSmokeScenario", "")));
     }
-    private static String text(int sequence) { return "opaque-Mod-state-" + "x".repeat(sequence % 150); }
+    private static String text(int sequence) { return STRESS ? EgressStressWorkload.text(sequence) : "opaque-Mod-state-" + "x".repeat(sequence % 150); }
     private static List<Integer> values(int sequence) { List<Integer> values = new ArrayList<>(); for (int i = 0; i < sequence % 9; i++) values.add(sequence + i); return List.copyOf(values); }
     private static final Map<net.minecraft.network.Connection, Integer> SENT = new WeakHashMap<>();
     private static final Map<net.minecraft.network.Connection, Long> SESSIONS = new WeakHashMap<>();
+    public static void beforeFlush(MinecraftServer server) {
+        if (STRESS && enabled()) EgressLoadBenchmark.beforeFlush(server);
+    }
     public static void tickServer(MinecraftServer server) {
         if (!enabled()) return;
-        if ("egressload".equals(System.getProperty("hassium.serverSmokeScenario"))) { EgressLoadBenchmark.tickServer(server); return; }
+        if (STRESS || "egressload".equals(System.getProperty("hassium.serverSmokeScenario"))) { EgressLoadBenchmark.tickServer(server); return; }
         if ("egressbench".equals(System.getProperty("hassium.serverSmokeScenario"))) { EgressBenchmark.tickServer(server); return; }
         for (var player : server.getPlayerList().getPlayers()) {
             var connection = PlayerCompat.getConnection(player);
@@ -106,7 +119,8 @@ public final class EgressFixture {
             if (!state.biome.is(Biomes.PLAINS) || !state.text.equals(text(received)) || !state.values.equals(values(received))) throw new IllegalStateException("Fixture registry/string/list mismatch");
         } else if (((Event)payload).value != received * 100003L) throw new IllegalStateException("Fixture event mismatch");
         received++;
-        if ("egressload".equals(System.getProperty("hassium.smokeScenario")) && received == EgressLoadBenchmark.EXPECTED)
+        if ((STRESS && received == STRESS_EXPECTED)
+                || ("egressload".equals(System.getProperty("hassium.smokeScenario")) && received == EgressLoadBenchmark.EXPECTED))
             Constants.LOG.info("[EGRESS_LOAD_CLIENT] received={} profile={}", received, new com.google.gson.Gson().toJson(EgressProfiler.snapshot()));
         if (received == COUNT) Constants.LOG.info("[EGRESS_FIXTURE] PASS count={} typed state/event, registry, strings, lists, bundles, exactly-once", received);
     }

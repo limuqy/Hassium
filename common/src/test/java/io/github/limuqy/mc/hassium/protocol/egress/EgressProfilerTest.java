@@ -5,6 +5,17 @@ import java.util.*;
 import static org.junit.jupiter.api.Assertions.*;
 
 class EgressProfilerTest {
+    @Test void cumulativeBucketCopiesIsolateSteadyAndBurstWithoutResetting() {
+        var distribution = new EgressProfiler.Distribution();
+        for (int n = 0; n < 20; n++) distribution.record(1_000, -1);
+        long[] warmup = distribution.counts();
+        for (int n = 0; n < 80; n++) distribution.record(50_000_000, -1);
+        long[] after = distribution.counts();
+        assertEquals(20, Arrays.stream(warmup).sum());
+        assertEquals(80, Arrays.stream(after).sum() - Arrays.stream(warmup).sum());
+        Arrays.fill(after, 0);
+        assertEquals(100, distribution.snapshot().count());
+    }
     @Test void percentilesBoundTheObservedRanksAndUnsupportedAllocationIsNotZero() {
         var distribution = new EgressProfiler.Distribution();
         for (int n = 1; n <= 100; n++) distribution.record(n * 1000L, -1);

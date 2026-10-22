@@ -104,6 +104,12 @@ NeoForge `GenericPacketSplitter` 的大小预编码会令小包 codec 执行两�
 .\scripts\runtime-smoke-test.ps1 -Ver 1.21.1 -Loader neoforge -Phase I -Scenario egressload -SessionId egress_load_neoforge -Vd1 4 -Vd2 4 -ClientRenderDistance 4 -Offline
 ```
 
+`egressstress` 复用双客户端校验，提高持续载荷并区分 tick 尾冲刷前的持续发包与冲刷后的突发发包。默认每连接1024包/tick，预热900 tick（1/4速率）、持续1200 tick、突发1200 tick（每两tick发双倍）、排空100 tick；State含3 KiB有界缓存文本，Event保持轻量。仅此开发场景冻结每日字典重训；生产环境不启用。可通过 `-EgressStressRate`、`-EgressStressWarmupTicks`、`-EgressStressMeasureTicks`、`-EgressStressDrainTicks` 调整压力与时长；客户端超时应覆盖预热、两段计量、排空和进服时间，默认工作量建议 `-ClientTimeoutSec 420`。1536档曾在突发时触发8 MiB队列保护，并非所有合法参数均保证成功。
+
+封批窗口对照可传 `-AggregationMaxWaitTimeMs 50|20|10`，在场景 profile 之后覆盖运行目录 TOML；不传或传 0 时保留 profile 值。每场 `[EGRESS_LOAD]` 同时记录实际窗口、批次大小、压缩等级、累积直方图桶和累积 worker/进程 CPU 时钟。相同加载器的各场应从同一只读存档 ZIP 和字典开始，保持负载、视距与配置一致，并串行运行。测试结论见[初轮低压对照](handoff/egress-window-20261022.md)及[高压复测与停止决定](handoff/egress-window-stress-20261023.md)：Forge 50/10 ms各三轮完成，资源收益有限，后续NeoForge正式轮次已停止，默认仍为50 ms。
+
+`scripts/smoke/egress_window_report.py <SessionId>... --output-dir <目录>` 校验 harness PASS、实际窗口、两端交付/回调及稳定的 worker 数量后生成 CSV/JSON。服务端主对照区间为预热结束到排空完成，另输出稳态、突发和排空区间；分位数由累积直方图桶相减后重新计算，不能相减累计 P95/P99。阶段边界附近的在途包按完成时归属，快照近似一致。CPU 采用阶段边界的累积线程/进程时钟差，避免逐小作业 CPU 差值累加的量化偏差；worker CPU 包含该池内的编码、采样等工作，进程 CPU 包含整个服务端。客户端快照仍覆盖完整客户端窗口，不能与服务端预热后区间混用为 RTT。
+
 `EgressAllocationReplay <report.csv> [baseline.csv]` 使用四组确定性不透明输入，每组 180 帧，预热一遍、测量四遍。测量范围包含 native 字节自有化模拟、真实 v3 codec 和非采样路径；原始输入生成、native codec、解码验证、SHA-256 计算在计时外。选中帧的长度与 SHA-256 必须与可选基线 CSV 一致。归档旧 codec 时通过 `common:runJava -PprependClasspath=<旧 classes 根目录>` 串行对照；这是离线分配/耗时对照，不代表线上 TPS、GC 或端到端收益。
 
 `EgressCaptureReplay <native.jsonl> <report.csv> [repeats=1] [verifySelected=true]` 从采集恢复字典、会话代及完整原生包，按实际批次对照三个模式。默认要求历史+模板逐字节重现实际选中帧；比较新发送策略与旧采集时显式传入 `false`，仍逐包检查原始字节、顺序、CRC 和同协议独立字典大小上限。`repeats>1` 丢弃首遍预热，报告后续连续阶段的平均 CPU/墙钟；恢复和校验位于计时外。旧编码器类可归档后放在回放 classpath 前端，使同一个回放工具对照旧策略。CSV 追加试算、跳过及胜出帧，旧编码器无该接口时为 -1。按成功 TCP 计量和聚合封装差值计算同一语料的独立字典出口基线，旁路流量保持原值。CPU 对照仅为 codec 部分；队列等待报告实际 v3 观测值，不将离线回放宣称为端到端延迟对照。
