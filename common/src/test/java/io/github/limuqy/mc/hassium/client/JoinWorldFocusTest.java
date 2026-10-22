@@ -21,6 +21,36 @@ class JoinWorldFocusTest {
     }
 
     @Test
+    void blockedPrefixDoesNotConsumeBatchSlots() {
+        ConcurrentHashMap<Long, String> source = new ConcurrentHashMap<>();
+        for (long i = 0; i < 80; i++) source.put(i, "work");
+        var order = new ArrayList<>(source.keySet());
+        var blocked = new java.util.HashSet<>(order.subList(0, 24));
+        List<Map.Entry<Long, String>> batch = new ArrayList<>();
+        JoinWorldFocus.fillDistanceFirst(source, batch, 24, key -> !blocked.contains(key));
+        assertEquals(order.subList(24, 48), batch.stream().map(Map.Entry::getKey).toList());
+        assertEquals(80, source.size(), "selection must not remove blocked work");
+    }
+
+    @Test
+    void blockedStandingColumnYieldsItsSlotAndRegainsPriorityWhenEligible() {
+        JoinWorldFocus.setFocusChunk(3, 7);
+        long standing = DimensionKey.key(DimensionKey.OVERWORLD, 3, 7);
+        long neighbor = DimensionKey.key(DimensionKey.OVERWORLD, 3, 8);
+        ConcurrentHashMap<Long, String> source = new ConcurrentHashMap<>();
+        source.put(standing, "standing"); source.put(neighbor, "neighbor");
+        List<Map.Entry<Long, String>> batch = new ArrayList<>();
+        JoinWorldFocus.fillDistanceFirst(source, batch, 1, key -> key != standing);
+        assertEquals(neighbor, batch.get(0).getKey());
+        batch.clear();
+        JoinWorldFocus.fillDistanceFirst(source, batch, 1, key -> true);
+        assertEquals(standing, batch.get(0).getKey());
+        batch.clear();
+        JoinWorldFocus.fillDistanceFirst(source, batch, 24, key -> false);
+        assertTrue(batch.isEmpty());
+    }
+
+    @Test
     @DisplayName("切比雪夫与脚下柱判定")
     void chebyshevAndStandingColumn() {
         JoinWorldFocus.setFocusChunk(4, -2);

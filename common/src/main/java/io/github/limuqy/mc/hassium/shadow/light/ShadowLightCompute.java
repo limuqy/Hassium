@@ -1,5 +1,8 @@
 package io.github.limuqy.mc.hassium.shadow.light;
 
+import net.minecraft.server.level.ServerLevel;
+import io.github.limuqy.mc.hassium.utils.ChunkPipelineProfile;
+import static io.github.limuqy.mc.hassium.utils.ChunkPipelineProfile.*;
 import io.github.limuqy.mc.hassium.platform.client.ShadowClientApi;
 import io.github.limuqy.mc.hassium.platform.client.ShadowClientBridge;
 import io.github.limuqy.mc.hassium.platform.client.TraceOrigin;
@@ -120,7 +123,7 @@ public final class ShadowLightCompute {
     /** 回传队列元素：整柱包（blocks + light 一次带全）。 */
     private record ReadyItem(ClientboundLevelChunkWithLightPacket chunkPacket,
                              boolean renderOnly,
-                             TraceOrigin traceOrigin, long sleepToken) {}
+                             TraceOrigin traceOrigin, long sleepToken, long profile) {}
 
     /**
      * 两阶段光照：已过 INITIALIZE_LIGHT 的柱（空 DataLayer 已安装）。
@@ -630,6 +633,7 @@ public final class ShadowLightCompute {
      * {@code hasClientApplyEpoch} 仍为真，boot/sweep/redeliver 全部跳过（实测 1529→23）。
      */
     public static void onClientDimensionChanged() {
+        resetClient();
         ready.clear();
         pending.clear();
         pendingDeltas.clear();
@@ -689,7 +693,7 @@ public final class ShadowLightCompute {
      *  避免每完成一块就一次 executor 往返）。 */
     private static final int PIPELINE_LOW_WATER = CONSUME_BATCH_LIMIT;
 
-    private record DeltaWork(String dimension, io.github.limuqy.mc.hassium.protocol.SectionDeltaS2CPacket.DeltaEntry entry, long sleepToken) {}
+    private record DeltaWork(String dimension, io.github.limuqy.mc.hassium.protocol.SectionDeltaS2CPacket.DeltaEntry entry, long sleepToken, long profile) {}
 
     private ShadowLightCompute() {}
 
@@ -854,9 +858,17 @@ public final class ShadowLightCompute {
 
     /** 现在就能开屏障的投递。 */
     private static boolean hasStartablePendingWork() {
-        return pending.keySet().stream().anyMatch(ShadowLightCompute::canStartQueuedLight)
-                || pendingDeltas.keySet().stream().anyMatch(ShadowLightCompute::canStartQueuedLight)
+        return pending.keySet().stream().anyMatch(ShadowLightCompute::canStartPending)
+                || pendingDeltas.keySet().stream().anyMatch(ShadowLightCompute::canStartDelta)
                 || generated.keySet().stream().anyMatch(ShadowLightCompute::canStartQueuedLight);
+    }
+
+    private static boolean canStartPending(long key) {
+        return canStartQueuedLight(key) && !generated.containsKey(key);
+    }
+
+    private static boolean canStartDelta(long key) {
+        return canStartQueuedLight(key) && !pending.containsKey(key) && !generated.containsKey(key);
     }
 
     private static boolean canStartQueuedLight(long key) {
@@ -1586,7 +1598,8 @@ public final class ShadowLightCompute {
         String dimension = packet.dimension();
         for (var entry : packet.entries()) {
             long key = DimensionKey.key(dimension, entry.chunkX(), entry.chunkZ());
-            pendingDeltas.put(key, new DeltaWork(dimension, entry, SleepTerrainClient.incomingToken(key)));
+            pendingDeltas.put(key, new DeltaWork(dimension, entry, SleepTerrainClient.incomingToken(key),
+                    begin(dimension, key, Source.DELTA)));
         }
         // 全量等价流量不在此处记：apply 失败会回退全量，收到即记会在「delta + 回退全量」
         // 场景把同一区块计两次。成功应用后由 consumeLoop 记 recordSectionDeltaReceived。
@@ -1675,7 +1688,7 @@ public final class ShadowLightCompute {
         long key = DimensionKey.key(dimension, pos.x, pos.z);
         SmokeChunkTrace.recordNetworkReceived(dimension, pos);
         pending.put(key, new PendingEntry(packet, traceOrigin(TraceOrigin.SERVER_PUSH),
-                client().peekPendingContentHash(dimension, pos.x, pos.z), SleepTerrainClient.incomingToken(key), false));
+                client().peekPendingContentHash(dimension, pos.x, pos.z), SleepTerrainClient.incomingToken(key), false, begin(dimension, key, Source.FULL)));
         pump();
     }
     /** 投递可渲染柱；区块追踪与邻域由影子端原版 ChunkMap 管理。
@@ -1707,7 +1720,7 @@ public final class ShadowLightCompute {
         long key = DimensionKey.key(activeDimension, pos.x, pos.z);
         SmokeChunkTrace.recordNetworkReceived(activeDimension, pos);
         pending.put(key, new PendingEntry(packet, traceOrigin(origin),
-                client().peekPendingContentHash(activeDimension, pos.x, pos.z), SleepTerrainClient.incomingToken(key), nbtRepair));
+                client().peekPendingContentHash(activeDimension, pos.x, pos.z), SleepTerrainClient.incomingToken(key), nbtRepair, begin(activeDimension, key, source(origin))));
         pump();
     }
 
@@ -1770,7 +1783,7 @@ public final class ShadowLightCompute {
     static void submitLightReuseOrGate(long key, LevelChunk chunk,
                                               net.minecraft.server.level.ServerLevel level,
                                               boolean lightReuse, boolean renderOnly,
-                                              TraceOrigin origin) {
+                                              TraceOrigin origin, long profile) {
         if (chunk == null || level == null) {
             return;
         }
@@ -1781,13 +1794,13 @@ public final class ShadowLightCompute {
             // 必须自行补标 lightInitPassed，否则该柱对邻柱恒为 'I'（卸载摘标 + 重注入走快路径
             // 不补标 → 邻柱齐套门白等超时）。见上方该分支的实测说明。
             lightInitPassed.add(key);
-            generated.put(key, new GenEntry(chunk, level, true, renderOnly, origin));
+            generated.put(key, new GenEntry(chunk, level, true, renderOnly, origin, profile));
             pump();
             return;
         }
         initializeLightImmediately(ShadowServerRegistry.getInstance().get(), key, chunk, level);
         LightNeighborhoodGate.enqueue(key, dim, pos,
-                new GateContext(null, chunk, level, LightMetric.RECOMPUTE, renderOnly, origin));
+                new GateContext(null, chunk, level, LightMetric.RECOMPUTE, renderOnly, origin, gate(profile)));
         pump();
     }
 
@@ -2065,35 +2078,35 @@ public final class ShadowLightCompute {
                 int limit = Math.min(CONSUME_BATCH_LIMIT, room);
                 // 脚下柱若只在 generated：pending 不得占满 24 槽把它挤掉。
                 int pendingLimit = limit;
-                if (client().findStandingKey(generated) != null
-                        && client().findStandingKey(pending) == null
+                Long standingGenerated = client().findStandingKey(generated);
+                Long standingPending = client().findStandingKey(pending);
+                if (standingGenerated != null && canStartQueuedLight(standingGenerated)
+                        && (standingPending == null || !canStartPending(standingPending))
                         && pendingLimit > 0) {
                     pendingLimit = limit - 1;
                 }
                 List<Map.Entry<Long, PendingEntry>> batch = new ArrayList<>(Math.max(4, pendingLimit));
-                client().fillDistanceFirst(pending, batch, pendingLimit);
-                batch.removeIf(e -> inflightLight.containsKey(e.getKey())
-                        || LightNeighborhoodGate.isAwaiting(e.getKey()) || generated.containsKey(e.getKey()));
+                client().fillDistanceFirst(pending, batch, pendingLimit, ShadowLightCompute::canStartPending);
                 for (Map.Entry<Long, PendingEntry> e : batch) {
-                    io.github.limuqy.mc.hassium.utils.ChunkFlowTiming.recordConsume(e.getKey());
+                    consume(e.getValue().profile());
                 }
                 // 本轮提交总量（pending+gen+delta+light）也以 CONSUME_BATCH_LIMIT 封顶：
                 // 防止 gen/delta/light 把单轮任务量叠回 1000 阈值。
                 int remaining = limit - batch.size();
                 List<Map.Entry<Long, GenEntry>> genBatch = new ArrayList<>();
-                client().fillDistanceFirst(generated, genBatch, remaining);
-                genBatch.removeIf(e -> inflightLight.containsKey(e.getKey())
-                        || LightNeighborhoodGate.isAwaiting(e.getKey()));
+                client().fillDistanceFirst(generated, genBatch, remaining, ShadowLightCompute::canStartQueuedLight);
                 remaining -= genBatch.size();
                 List<Map.Entry<Long, DeltaWork>> deltaBatch = new ArrayList<>();
                 for (Map.Entry<Long, DeltaWork> e : pendingDeltas.entrySet()) {
                     if (deltaBatch.size() >= remaining) {
                         break;
                     }
-                    deltaBatch.add(e);
+                    if (canStartDelta(e.getKey())) deltaBatch.add(e);
                 }
                 remaining -= deltaBatch.size();
                 if (batch.isEmpty() && genBatch.isEmpty() && deltaBatch.isEmpty()) {
+                    count(false, Counter.EMPTY_BATCH);
+                    if (ChunkPipelineProfile.ENABLED && hasStartablePendingWork()) count(false, Counter.ELIGIBLE_AFTER_EMPTY);
                     // 仍需扫描齐套队列：邻柱后到可能让等待中的柱齐套；超时条目强制降级
                     if (LightNeighborhoodGate.pendingCount() > 0) {
                         List<LightTask> gateTasks = new ArrayList<>();
@@ -2121,7 +2134,7 @@ public final class ShadowLightCompute {
                         pending.remove(e.getKey(),pendingEntry); continue;
                     }
                     long remoteHash = pendingEntry.contentHash();
-                    if (inflightLight.containsKey(e.getKey()) || LightNeighborhoodGate.isAwaiting(e.getKey())) {
+                    if (!canStartPending(e.getKey())) {
                         continue;
                     }
                     // 影子内存已有该柱：禁止 injectChunk REPLACE（clearChunkLight 会
@@ -2155,7 +2168,7 @@ public final class ShadowLightCompute {
                                     server.level(dimension), !needRelight, false,
                                     pendingEntry.traceOrigin() != null
                                             ? pendingEntry.traceOrigin()
-                                            : traceOrigin(TraceOrigin.SHADOW_MEMORY_CACHE));
+                                            : traceOrigin(TraceOrigin.SHADOW_MEMORY_CACHE), pendingEntry.profile());
                             continue;
                         }
                         // hash 已知且不匹配：影子副本过期，覆盖注入（走下方 injectChunk）。
@@ -2186,7 +2199,7 @@ public final class ShadowLightCompute {
                         Minecraft.getInstance().execute(()->SleepTerrainClient.haloApplied(appliedKey,appliedToken));
                     }
                     submitLightReuseOrGate(e.getKey(), injected, server.level(dimension),
-                            false, false, pendingEntry.traceOrigin());
+                            false, false, pendingEntry.traceOrigin(), pendingEntry.profile());
                 }
                 // 分段增量应用：本地基线 chunk 上就地覆盖变更 section + heightmaps + BE，
                 // 变更 section 逐格 checkBlock（applySectionDelta 内）→ 与注入共享下方光屏障。
@@ -2194,13 +2207,12 @@ public final class ShadowLightCompute {
                     long key = e.getKey();
                     if(!SleepTerrainClient.acceptPending(key,e.getValue().sleepToken())) { pendingDeltas.remove(key,e.getValue()); continue; }
                     // 先等旧的本地光工作结束，再换节；不得让旧 phase-1 / 回调覆盖权威增量。
-                    if (inflightLight.containsKey(key) || LightNeighborhoodGate.isAwaiting(key)
-                            || pending.containsKey(key) || generated.containsKey(key)
-                            || !pendingDeltas.remove(key, e.getValue())) {
+                    if (!canStartDelta(key) || !pendingDeltas.remove(key, e.getValue())) {
                         continue;
                     }
                     ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
                     DeltaWork work = e.getValue();
+                    consume(work.profile());
                     // P1（T7）：applySectionDelta 就地覆盖注入 chunk 的 section 容器
                     // （LevelChunkSection.read → PalettedContainer 写）——与 hash 比对线程
                     // （chunkHashOf / computeSectionHashes）同 chunk 锁互斥（T7 崩溃同机制）。
@@ -2240,7 +2252,7 @@ public final class ShadowLightCompute {
                         if (!isChunkBarrierBusy(key)) {
                             lightTasks.add(new LightTask(key, LightSource.DELTA, null,
                                     baseline, server.level(work.dimension()), LightMetric.RECOMPUTE,
-                                    false, traceOrigin(TraceOrigin.SECTION_DELTA)));
+                                    false, traceOrigin(TraceOrigin.SECTION_DELTA), work.profile()));
                         } else {
                             pendingDeltas.put(key, work);
                         }
@@ -2249,6 +2261,7 @@ public final class ShadowLightCompute {
                 // 本地生成（SeedGen / 磁盘光脏 relight）柱同样需要 per-chunk 光屏障
                 for (Map.Entry<Long, GenEntry> e : genBatch) {
                     GenEntry gen = e.getValue();
+                    if (gen != null) consume(gen.profile());
                     if (gen == null || gen.chunk == null) {
                         generated.remove(e.getKey(), gen); // 异常条目：条件移除丢弃
                         continue;
@@ -2409,11 +2422,11 @@ public final class ShadowLightCompute {
                     new net.minecraft.world.level.ChunkPos(
                             DimensionKey.chunkXOf(t.key), DimensionKey.chunkZOf(t.key)),
                     new GateContext(t.token, t.chunk, t.level,
-                            t.metric, t.renderOnly, t.traceOrigin));
+                            t.metric, t.renderOnly, t.traceOrigin, gate(t.profile)));
             return;
         }
         InflightLight inf = new InflightLight(t.key, t.source, t.token,
-                t.chunk, t.level, deadlineMs, t.metric, t.renderOnly, t.traceOrigin);
+                t.chunk, t.level, deadlineMs, t.metric, t.renderOnly, t.traceOrigin, t.profile);
         inf.submittedAtNs = System.nanoTime();
         inflightLight.put(t.key, inf);
         try {
@@ -2644,6 +2657,7 @@ public final class ShadowLightCompute {
 
     /** 原版 LIGHT future 完成后的唯一完成收口。 */
     private static void finishLight(LightTask task, boolean converged) {
+        duration(task.profile, Stage.LIGHT_WALL, task.submittedAtNs);
         if (!isEnabled()) {
             return;
         }
@@ -2679,7 +2693,7 @@ public final class ShadowLightCompute {
                         pos.x, pos.z, task.metric);
             }
             pushReady(task.key, task.chunk, task.level, converged, task.renderOnly,
-                    task.traceOrigin);
+                    task.traceOrigin, task.profile);
         } catch (Throwable t) {
             DebugLogger.warn(DebugLogger.LogType.ASYNC,
                     "[SHADOW_CHUNK] Build failed ({}, {})", pos.x, pos.z);
@@ -2970,14 +2984,14 @@ public final class ShadowLightCompute {
 
     private static void pushReady(long key, net.minecraft.world.level.chunk.LevelChunk chunk,
                                   net.minecraft.server.level.ServerLevel level, boolean converged,
-                                  boolean renderOnly, TraceOrigin traceOrigin) {
-        pushReady(key, chunk, level, converged, renderOnly, traceOrigin, false);
+                                  boolean renderOnly, TraceOrigin traceOrigin, long profile) {
+        pushReady(key, chunk, level, converged, renderOnly, traceOrigin, false, profile);
     }
 
     private static void pushReady(long key, net.minecraft.world.level.chunk.LevelChunk chunk,
                                   net.minecraft.server.level.ServerLevel level, boolean converged,
                                   boolean renderOnly, TraceOrigin traceOrigin,
-                                  boolean standingPreview) {
+                                  boolean standingPreview, long profile) {
         ChunkPos pos = chunk.getPos();
         if (!io.github.limuqy.mc.hassium.client.sleep.SleepClient.allowsChunk(pos.x,pos.z)) return;
         // B6：统一交付门 = ServerVD+余量；更远柱不进 ready（原版会 Ignore）
@@ -3007,14 +3021,18 @@ public final class ShadowLightCompute {
         // LevelChunkSection.write → PalettedContainer.acquire）——与 hash 比对线程
         // （chunkHashOf / computeSectionHashes）同 chunk 锁互斥，消除 1.21.11
         // ThreadingDetector 崩溃（T7 线程转储：consumeLoop pushReady 打包 vs hash 线程）。
+        long packQueued = now();
         runBuildOnShadowMain(pos, () -> {
+            duration(profile, Stage.PACK_WAIT, packQueued);
             var activeShadow=ShadowServerRegistry.getInstance().get();
             if(activeShadow!=null && activeShadow.injectedChunk(DimensionKey.dimensionOf(key),pos.x,pos.z)!=chunk) return;
             long sleepToken=SleepTerrainClient.snapshotToken(key,chunk);
             if(sleepToken<0) return;
             ClientboundLevelChunkWithLightPacket packet;
+            long packStart = now();
             packet = withChunkLock(pos, () -> SeedGenChunkCodec.buildPacket(chunk, level));
-            offerReady(key, pos, packet, converged, renderOnly, traceOrigin, standingPreview, sleepToken);
+            duration(profile, Stage.PACK_WALL, packStart);
+            offerReady(key, pos, packet, converged, renderOnly, traceOrigin, standingPreview, sleepToken, profile);
         });
     }
 
@@ -3045,12 +3063,12 @@ public final class ShadowLightCompute {
      */
     private static void offerReady(long key, ChunkPos pos, ClientboundLevelChunkWithLightPacket packet,
                                    boolean converged, boolean renderOnly, TraceOrigin traceOrigin) {
-        offerReady(key, pos, packet, converged, renderOnly, traceOrigin, false, 0);
+        offerReady(key, pos, packet, converged, renderOnly, traceOrigin, false, 0, 0);
     }
 
     private static void offerReady(long key, ChunkPos pos, ClientboundLevelChunkWithLightPacket packet,
                                    boolean converged, boolean renderOnly, TraceOrigin traceOrigin,
-                                   boolean standingPreview, long sleepToken) {
+                                   boolean standingPreview, long sleepToken, long profile) {
         if (packet == null) {
             DebugLogger.warn(DebugLogger.LogType.ASYNC,
                     "[SHADOW_CHUNK] Build packet failed ({}, {})", pos.x, pos.z);
@@ -3067,11 +3085,11 @@ public final class ShadowLightCompute {
                     pos.x, pos.z);
             return;
         }
-        io.github.limuqy.mc.hassium.utils.ChunkFlowTiming.recordReady(key);
+        ChunkPipelineProfile.ready(profile);
         if (!renderOnly) {
             SmokeChunkTrace.recordShadowReady(DimensionKey.dimensionOf(key), pos);
         }
-        ready.offer(new ReadyItem(packet, renderOnly, traceOrigin, sleepToken),
+        ready.offer(new ReadyItem(packet, renderOnly, traceOrigin, sleepToken, profile),
                 new KeyedPriorityQueue.Key(ChunkPos.asLong(pos.x, pos.z),
                         io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.OP_CHUNK_APPLY,
                         DimensionKey.dimensionOf(key)),
@@ -3126,9 +3144,10 @@ public final class ShadowLightCompute {
             return false;
         }
         long key = DimensionKey.key(dimension, x, z);
-        io.github.limuqy.mc.hassium.utils.ChunkFlowTiming.recordReady(key);
+        long profile = begin(dimension, key, Source.CACHE);
+        ChunkPipelineProfile.ready(profile);
         SmokeChunkTrace.recordShadowReady(dimension, new ChunkPos(x, z));
-        ready.offer(new ReadyItem(packet, false, TraceOrigin.SHADOW_MEMORY_CACHE, 0),
+        ready.offer(new ReadyItem(packet, false, TraceOrigin.SHADOW_MEMORY_CACHE, 0, profile),
                 new KeyedPriorityQueue.Key(ChunkPos.asLong(x, z),
                         io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.OP_CHUNK_APPLY,
                         dimension),
@@ -3295,11 +3314,13 @@ public final class ShadowLightCompute {
         ShadowClientApi pipeline = client();
         pipeline.setApplyInProgress(true);
         try {
+            startApply(item.profile());
             connection.handleLevelChunkWithLight(item.chunkPacket);
         } finally {
             pipeline.setApplyInProgress(false);
         }
         if (hasClientChunk(mc, chunkX, chunkZ)) {
+            applied(item.profile());
             SleepTerrainClient.applied(chunkKey,item.sleepToken());
             ignoredApplyRetries.remove(chunkKey);
             client().logShadowChunkApplyEvent("shadow_applied", chunkPos, item.renderOnly(), item.traceOrigin());
@@ -3417,6 +3438,7 @@ public final class ShadowLightCompute {
 
     /** 断连清理：清空投递/生成/回传（影子服务端由 registry 统一关停保存）。 */
     public static void onDisconnect() {
+        resetClient();
         pending.clear();
         pendingDeltas.clear();
         generated.clear();
@@ -3523,9 +3545,13 @@ public final class ShadowLightCompute {
     private record GateContext(Object token,
                                net.minecraft.world.level.chunk.LevelChunk chunk,
                                net.minecraft.server.level.ServerLevel level,
-                               LightMetric metric, boolean renderOnly, TraceOrigin traceOrigin) {
+                               LightMetric metric, boolean renderOnly, TraceOrigin traceOrigin, long profile) {
+        GateContext(Object token, LevelChunk chunk, ServerLevel level, LightMetric metric, boolean renderOnly, TraceOrigin origin) {
+            this(token, chunk, level, metric, renderOnly, origin, gate(profileBegin(chunk, level, origin)));
+        }
         LightTask toLightTask(long key) {
-            return new LightTask(key, LightSource.GATE, token, chunk, level, metric, renderOnly, traceOrigin);
+            promoted(profile);
+            return new LightTask(key, LightSource.GATE, token, chunk, level, metric, renderOnly, traceOrigin, profile);
         }
     }
 
@@ -3595,6 +3621,7 @@ public final class ShadowLightCompute {
         final boolean renderOnly;
         /** 来源仅在 debug.chunkApplyLogging 开启时随影子工作项传递。 */
         final TraceOrigin traceOrigin;
+        final long profile;
         /** 屏障提交时刻；光屏障完成时用于记重算耗时。 */
         volatile long submittedAtNs;
 
@@ -3602,6 +3629,13 @@ public final class ShadowLightCompute {
                   net.minecraft.world.level.chunk.LevelChunk chunk,
                   net.minecraft.server.level.ServerLevel level, LightMetric metric,
                   boolean renderOnly, TraceOrigin traceOrigin) {
+            this(key, source, token, chunk, level, metric, renderOnly, traceOrigin,
+                    token instanceof GenEntry g ? g.profile() : token instanceof PendingEntry p ? p.profile() : 0);
+        }
+
+        LightTask(long key, LightSource source, Object token, LevelChunk chunk, ServerLevel level,
+                  LightMetric metric, boolean renderOnly, TraceOrigin traceOrigin, long profile) {
+            this.profile = profile;
             this.key = key;
             this.source = source;
             this.token = token;
@@ -3624,17 +3658,17 @@ public final class ShadowLightCompute {
         InflightLight(long key, LightSource source, Object token,
                       net.minecraft.world.level.chunk.LevelChunk chunk,
                       net.minecraft.server.level.ServerLevel level, long deadlineMs,
-                      LightMetric metric, boolean renderOnly, TraceOrigin traceOrigin) {
-            super(key, source, token, chunk, level, metric, renderOnly, traceOrigin);
+                      LightMetric metric, boolean renderOnly, TraceOrigin traceOrigin, long profile) {
+            super(key, source, token, chunk, level, metric, renderOnly, traceOrigin, profile);
             this.deadlineMs = deadlineMs;
         }
     }
 
 
     private record PendingEntry(ClientboundLevelChunkWithLightPacket packet, TraceOrigin traceOrigin,
-                                long contentHash, long sleepToken, boolean nbtRepair) {
+                                long contentHash, long sleepToken, boolean nbtRepair, long profile) {
         PendingEntry(ClientboundLevelChunkWithLightPacket packet, TraceOrigin traceOrigin) {
-            this(packet, traceOrigin, 0L, 0L, false);
+            this(packet, traceOrigin, 0L, 0L, false, 0);
         }
     }
 
@@ -3655,7 +3689,18 @@ public final class ShadowLightCompute {
                             net.minecraft.server.level.ServerLevel level,
                             boolean lightReuse,
                             boolean renderOnly,
-                            TraceOrigin traceOrigin) {}
+                            TraceOrigin traceOrigin, long profile) {
+        GenEntry(LevelChunk chunk, ServerLevel level, boolean lightReuse, boolean renderOnly, TraceOrigin origin) {
+            this(chunk, level, lightReuse, renderOnly, origin, profileBegin(chunk, level, origin));
+        }
+    }
+
+    private static long profileBegin(LevelChunk chunk, ServerLevel level, TraceOrigin origin) {
+        if (!ChunkPipelineProfile.ENABLED || chunk == null || level == null
+                || level.dimension() == null || chunk.getPos() == null) return 0;
+        String dim = LevelCompat.getDimensionId(level);
+        return begin(dim, DimensionKey.key(dim, chunk.getPos().x, chunk.getPos().z), source(origin));
+    }
 }
 
 

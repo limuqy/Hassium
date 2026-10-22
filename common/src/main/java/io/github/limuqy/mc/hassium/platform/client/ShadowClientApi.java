@@ -78,8 +78,14 @@ public interface ShadowClientApi {
 
     <T> Long findStandingKey(ConcurrentHashMap<Long, T> source);
 
+    default <T> void fillDistanceFirst(ConcurrentHashMap<Long, T> source,
+                                      List<Map.Entry<Long, T>> batch, int limit) {
+        fillDistanceFirst(source, batch, limit, key -> true);
+    }
+
     <T> void fillDistanceFirst(ConcurrentHashMap<Long, T> source,
-                               List<Map.Entry<Long, T>> batch, int limit);
+                               List<Map.Entry<Long, T>> batch, int limit,
+                               java.util.function.LongPredicate eligible);
 
     // === 区块 handler 诊断 / 探针（原 ClientChunkHandler 等）===
 

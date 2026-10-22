@@ -418,8 +418,8 @@ public final class ClientChunkPipeline implements ShadowClientApi {
 
     @Override
     public <T> void fillDistanceFirst(ConcurrentHashMap<Long, T> source,
-                                      List<Map.Entry<Long, T>> batch, int limit) {
-        io.github.limuqy.mc.hassium.client.JoinWorldFocus.fillDistanceFirst(source, batch, limit);
+                                      List<Map.Entry<Long, T>> batch, int limit, java.util.function.LongPredicate eligible) {
+        io.github.limuqy.mc.hassium.client.JoinWorldFocus.fillDistanceFirst(source, batch, limit, eligible);
     }
 
     @Override

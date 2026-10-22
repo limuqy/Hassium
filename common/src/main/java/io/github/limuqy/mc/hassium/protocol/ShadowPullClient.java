@@ -1,5 +1,7 @@
 package io.github.limuqy.mc.hassium.protocol;
 
+import io.github.limuqy.mc.hassium.utils.ChunkPipelineProfile;
+import static io.github.limuqy.mc.hassium.utils.ChunkPipelineProfile.*;
 import io.github.limuqy.mc.hassium.platform.client.TraceOrigin;
 
 import io.github.limuqy.mc.hassium.Constants;
@@ -187,6 +189,7 @@ public final class ShadowPullClient {
                             entry -> ChunkPos.asLong(entry.chunkX(), entry.chunkZ()), ShadowPullRequestC2SPacket.Entry::chunkHash)),
                     includeLocalBaseline, nbtRepair);
             for (var entry : batch) {
+                ChunkPipelineProfile.request(dimension, requestId, ChunkPos.asLong(entry.chunkX(), entry.chunkZ()));
                 io.github.limuqy.mc.hassium.utils.DebugLogger.info(
                         io.github.limuqy.mc.hassium.utils.DebugLogger.LogType.NETWORK,
                         "[SHADOW_PULL] send id={} pos=({}, {}) hash={} sections={}", requestId,
@@ -512,6 +515,10 @@ public final class ShadowPullClient {
             return;
         }
         for (ShadowPullResponseS2CPacket.Result result : response.results()) {
+            ChunkPipelineProfile.response(response.dimension(), response.requestId(),
+                    ChunkPos.asLong(result.chunkX(), result.chunkZ()),
+                    result.kind() == ShadowPullResponseS2CPacket.Kind.DELTA ? Source.DELTA
+                            : result.kind() == ShadowPullResponseS2CPacket.Kind.UNCHANGED ? Source.CACHE : Source.FULL);
             // Defensive fallback for non-main-thread receivers or mixed legacy batches.
             if (result.kind() == ShadowPullResponseS2CPacket.Kind.UNCHANGED && !minecraft.isSameThread()) {
                 var sourceLevel = minecraft.level;

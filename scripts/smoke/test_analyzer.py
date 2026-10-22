@@ -3,6 +3,28 @@ import unittest
 from scripts.smoke.analyzer import _late_near_player, _server_full_push_timeouts, _spatial_check
 
 
+class CacheModeLightProbeTest(unittest.TestCase):
+    def fixture(self):
+        return {"contentCheck": {"footBlock": "minecraft:quartz_block"},
+                "lightFixture": {"sampled": 20, "mismatches": 0, "movementSamples": 640,
+                                 "movementFloorMissing": 0, "movementSkyLeaks": 0,
+                                 "movementDarkSources": 0}}
+
+    def test_cache_mode_keeps_light_checks_without_requiring_local_worldgen(self):
+        from scripts.smoke.analyzer import _check_ovd_light_probe
+        self.assertEqual(_check_ovd_light_probe(self.fixture(), 1, require_generation=False), [])
+        self.assertIn("OVD_GENERATION_MISSING",
+                      {item["code"] for item in _check_ovd_light_probe(self.fixture(), 1)})
+
+    def test_cache_mode_still_rejects_content_and_moving_light_defects(self):
+        from scripts.smoke.analyzer import _check_ovd_light_probe
+        probe = self.fixture()
+        probe["lightFixture"]["mismatches"] = 1
+        probe["lightFixture"]["movementSkyLeaks"] = 1
+        codes = {item["code"] for item in _check_ovd_light_probe(probe, 1, require_generation=False)}
+        self.assertEqual(codes, {"OVD_LIGHT_FIXTURE_CONTENT", "OVD_LIGHT_MOVEMENT_FIXTURE"})
+
+
 class SpatialCheckTest(unittest.TestCase):
     def test_cardinal_hole_is_p0(self):
         positions = [[-1, 0], [1, 0], [0, -1], [0, 1]]

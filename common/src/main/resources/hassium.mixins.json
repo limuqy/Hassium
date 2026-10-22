@@ -8,6 +8,7 @@
         "shadow.MixinChunkSerializer",
         "shadow.MixinLevelChunk",
         "shadow.MixinShadowBlockEntitySnapshots",
+        "shadow.MixinShadowStructureData",
         "shadow.LevelChunkPendingBeAccessor",
         "shadow.RegionFileAccessor",
         "shadow.ChunkMapAccessor",

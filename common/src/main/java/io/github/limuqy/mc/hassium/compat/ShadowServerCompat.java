@@ -197,22 +197,44 @@ public final class ShadowServerCompat {
         // （裸 Long2ObjectOpenHashMap / LongLinkedOpenHashSet / Long2ByteOpenHashMap）。
         // 原版靠「单线程 mainThreadExecutor 解码」串行，影子端解码在池线程上
         // ⇒ 必须把这份串行化补回来。见 ShadowPoiGate。
-        return ShadowPoiGate.callExclusive(level.getServer(), () -> parseChunkNbtUnlocked(level, levelId, pos, tag));
+        return ShadowPoiGate.callExclusive(level.getServer(), () -> {
+            ChunkAccess parsed = parseChunkNbtUnlocked(level, levelId, pos, tag);
+            if (parsed == null || !(level.getServer() instanceof io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer)
+                    || !io.github.limuqy.mc.hassium.shadow.storage.ShadowColumnContent.isContentBearing(tag)) {
+                return parsed;
+            }
+            int removed = ShadowBlockEntityCompat.pruneInconsistentSavedTags(parsed, tag);
+            if (removed == 0) return parsed;
+            Constants.LOG.warn("Hassium: repaired {} inconsistent cached block entities at {} in {}",
+                    removed, pos, LevelCompat.getDimensionId(level));
+            // SerializableChunkData may have copied the list into its post-load callback.
+            // Reparse ONLY repaired columns so every version captures the validated list.
+            // No runPostLoad/promotion has executed on the discarded result.
+            ChunkAccess repaired = parseChunkNbtUnlocked(level, levelId, pos, tag);
+            if (repaired != null) {
+                io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes.markContentDirty(
+                        LevelCompat.getDimensionId(level), pos);
+            }
+            return repaired;
+        });
     }
 
     private static ChunkAccess parseChunkNbtUnlocked(
             ServerLevel level, String levelId, ChunkPos pos, CompoundTag tag) {
+        boolean cacheOnly = ShadowStructureDataCompat.isCacheOnly(level);
+        CompoundTag readable = ShadowStructureDataCompat.forRead(tag, cacheOnly);
+        ChunkAccess parsed;
 #if MC_VER < MC_1_21_1
         // 读盘解码同样查该 BiMap（byNameCodec 解码方向）；撞上重建窗口会把未知
         // 调色板项静默替换成 air（promotePartial 只记日志）。ShadowRegistryWindow 在窗口内
         // **直接跳过**（返回 null ⇒ 本次 cache miss，走调用方既有 null 兜底）——
         // 非阻塞，不与 flushLock/chunkLock 构成锁序（原读写锁曾致退出卡满 10s）。
-        return ShadowRegistryWindow.withAccess(() -> ChunkSerializer.read(
-                level, level.getPoiManager(), pos, tag));
+        parsed = ShadowRegistryWindow.withAccess(() -> ChunkSerializer.read(
+                level, level.getPoiManager(), pos, readable));
 #elif MC_VER < MC_1_21_2
-        return ChunkSerializer.read(
+        parsed = ChunkSerializer.read(
                 level, level.getPoiManager(),
-                new RegionStorageInfo(levelId, level.dimension(), "chunk"), pos, tag);
+                new RegionStorageInfo(levelId, level.dimension(), "chunk"), pos, readable);
 #else
         // 官方读链两步：parse(NBT→record) → read(record→ChunkAccess；FULL 柱 =
         // ImposterProtoChunk 包 LevelChunk，与 <1.21.2 ChunkSerializer.read 同语义，
@@ -224,14 +246,17 @@ public final class ShadowServerCompat {
         // （1.21.3 classic R2 实测 schedLoadDiskNull=10074、diskBaselineOk=0）→
         // 本地缓存基线/回放全废 → R2 整柱重拉（fullReq=549、cacheRate 6.2%）。
 #if MC_VER < MC_1_21_9
-        SerializableChunkData data = SerializableChunkData.parse(level, level.registryAccess(), tag);
+        SerializableChunkData data = SerializableChunkData.parse(level, level.registryAccess(), readable);
 #else
-        SerializableChunkData data = SerializableChunkData.parse(level, level.palettedContainerFactory(), tag);
+        SerializableChunkData data = SerializableChunkData.parse(level, level.palettedContainerFactory(), readable);
 #endif
-        return data == null ? null
+        parsed = data == null ? null
                 : data.read(level, level.getPoiManager(),
                         new RegionStorageInfo(levelId, level.dimension(), "chunk"), pos);
 #endif
+        if (cacheOnly) ShadowStructureDataCompat.retain(parsed, tag);
+        ShadowStructureDataCompat.traceRead(parsed, tag, cacheOnly);
+        return parsed;
     }
 
     /**

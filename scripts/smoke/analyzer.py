@@ -242,7 +242,8 @@ def _check_ovd_generation_probe(probe: dict[str, Any], number: int, mc_ver: Any)
     return failures
 
 
-def _check_ovd_light_probe(probe: dict[str, Any], number: int) -> list[dict[str, Any]]:
+def _check_ovd_light_probe(probe: dict[str, Any], number: int,
+                           require_generation: bool = True) -> list[dict[str, Any]]:
     """The artificial Y297 floor must survive OVD-to-authority promotion in both rounds."""
     foot = _obj(probe.get("contentCheck")).get("footBlock")
     failures = []
@@ -255,7 +256,7 @@ def _check_ovd_light_probe(probe: dict[str, Any], number: int) -> list[dict[str,
             or any(_num(fixture.get(key)) != 0 for key in
                    ("movementFloorMissing", "movementSkyLeaks", "movementDarkSources"))):
         failures.append(_failure("OVD_LIGHT_MOVEMENT_FIXTURE", round=number, fixture=fixture))
-    if number == 1 and not _positions(_obj(probe.get("chunkTrace")).get("ovdGenerated")):
+    if require_generation and number == 1 and not _positions(_obj(probe.get("chunkTrace")).get("ovdGenerated")):
         failures.append(_failure("OVD_GENERATION_MISSING", round=number))
     return failures
 
@@ -535,7 +536,7 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
     scenario = str(result.get("Scenario") or "classic")
     # 移动会话标记（由 runtime-smoke-test.ps1 透传 -MoveSeconds）。>0 ⇒ 走开后柱会合法卸载，
     # 故 trace 的「驻留」口径不适用（见 _MOBILE_TRACE_DIAGNOSTIC_CODES）。
-    mobile_session = scenario == "ovdlight" or (_num(result.get("MoveSeconds")) or 0) > 0
+    mobile_session = scenario in ("ovdlight", "cachemodes") or (_num(result.get("MoveSeconds")) or 0) > 0
     failures: list[dict[str, Any]] = []
     warnings: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
@@ -558,8 +559,8 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
 
     if mobile_session:
         segments = _movement_segments(client_log)
-        required = 2 if scenario in ("classic", "lightdiag", "flyroundtrip", "ovdlight") else 1
-        requested = 32 if scenario == "ovdlight" else int(_num(result.get("MoveSeconds")) or 0)
+        required = 2 if scenario in ("classic", "lightdiag", "flyroundtrip", "ovdlight", "cachemodes") else 1
+        requested = 32 if scenario in ("ovdlight", "cachemodes") else int(_num(result.get("MoveSeconds")) or 0)
         moved = (len(segments) >= required and all(
             item["seconds"] == requested and item["reachedTarget"]
             and item["start"][1] > item["tpRequest"][1]
@@ -641,6 +642,8 @@ def analyze_result(result: dict[str, Any], root: Path) -> dict[str, Any]:
             failures.extend(_check_ovd_generation_probe(probe, number, result.get("Ver")))
         elif scenario == "ovdlight":
             failures.extend(_check_ovd_light_probe(probe, number))
+        elif scenario == "cachemodes":
+            failures.extend(_check_ovd_light_probe(probe, number, require_generation=False))
         trace_report = _trace_analysis(probe)
         trace_reports[f"round{number}"] = trace_report
         spatial = _spatial_check(probe)

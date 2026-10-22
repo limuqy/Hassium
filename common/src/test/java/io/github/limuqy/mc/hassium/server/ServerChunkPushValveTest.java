@@ -14,6 +14,36 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class ServerChunkPushValveTest {
 
     @Test
+    void mismatchingHashWindowBuildsOnlyAdmittedSnapshots() {
+        var copies = new java.util.concurrent.atomic.AtomicInteger();
+        int fullLeft = 5;
+        int completed = 0;
+        for (int i = 0; i < PullPacingValve.hashBudget(5); i++) {
+            Integer prepared = PullPacingValve.prepareIfAdmitted(false, 32, fullLeft, copies::incrementAndGet);
+            if (prepared != null) { fullLeft--; completed++; }
+        }
+        assertEquals(5, completed);
+        assertEquals(5, copies.get(), "32 deferred mismatches must not invoke snapshot construction");
+        assertEquals(0, fullLeft);
+    }
+
+    @Test
+    void independentUnchangedQuotaAndOversizedFallbackRequireTheirOwnAdmission() {
+        var nbt = new java.util.concurrent.atomic.AtomicInteger();
+        var full = new java.util.concurrent.atomic.AtomicInteger();
+        assertEquals(1, PullPacingValve.prepareIfAdmitted(true, 1, 0, nbt::incrementAndGet));
+        org.junit.jupiter.api.Assertions.assertNull(PullPacingValve.prepareIfAdmitted(true, 0, 5, nbt::incrementAndGet));
+        // NBT projection exceeded its wire bound: FULL fallback must still respect FULL quota.
+        org.junit.jupiter.api.Assertions.assertNull(PullPacingValve.prepareIfAdmitted(true, 1, 0,
+                () -> PullPacingValve.prepareIfAdmitted(false, 1, 0, full::incrementAndGet)));
+        assertEquals(0, full.get());
+        assertEquals(1, PullPacingValve.prepareIfAdmitted(true, 1, 1,
+                () -> PullPacingValve.prepareIfAdmitted(false, 1, 1, full::incrementAndGet)));
+        assertEquals(1, nbt.get());
+        assertEquals(1, full.get());
+    }
+
+    @Test
     @DisplayName("FULL/DELTA budget defaults to 5; hash window is N+32")
     void budgets() {
         assertEquals(5, PullPacingValve.fullDeltaBudget(0));

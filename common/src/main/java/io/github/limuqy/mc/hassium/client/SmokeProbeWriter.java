@@ -221,7 +221,7 @@ public final class SmokeProbeWriter {
 
     /** Sample during flight, so a stable final snapshot cannot hide a transient light defect. */
     public static void sampleOvdMovement(net.minecraft.client.Minecraft mc) {
-        if (!"ovdlight".equals(System.getProperty("hassium.smokeScenario"))
+        if (!isLightFixtureScenario()
                 || mc == null || mc.level == null || mc.player == null) return;
         int z = mc.player.getBlockZ();
         if (z < -56 || z > 696) return;
@@ -284,7 +284,7 @@ public final class SmokeProbeWriter {
 
     /** Only the ovdlight development fixture: sample known blocks inside the current authority window. */
     private static void appendOvdLightFixture(StringBuilder sb, net.minecraft.client.Minecraft mc) {
-        if (!"ovdlight".equals(System.getProperty("hassium.smokeScenario"))) return;
+        if (!isLightFixtureScenario()) return;
         long sampled = 0L;
         long mismatches = 0L;
         String firstMismatch = null;
@@ -324,6 +324,11 @@ public final class SmokeProbeWriter {
         field(sb, "movementDarkSources", movementDarkSources);
         lastField(sb, "movementFirstMismatch", movementFirstMismatch);
         sb.append("  },\n");
+    }
+
+    private static boolean isLightFixtureScenario() {
+        String scenario = System.getProperty("hassium.smokeScenario");
+        return "ovdlight".equals(scenario) || "cachemodes".equals(scenario);
     }
 
     public record ContentCheck(long sampledChunks, long chunksWithNonAir, long minNonAir,

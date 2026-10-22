@@ -347,6 +347,10 @@ public final class ScenarioEngine {
         if (moveUntilMs <= 0L) {
             return;
         }
+        // Match the unattended INPUT runner: a native pause screen clears simulated keys.
+        mc.options.pauseOnLostFocus = false;
+        if (mc.screen instanceof net.minecraft.client.gui.screens.PauseScreen) mc.setScreen(null);
+        mc.mouseHandler.releaseMouse();
         if (mc.player == null) {
             moveUntilMs = -1L;
             movePhase = 0;
@@ -890,7 +894,9 @@ public final class ScenarioEngine {
                 LOGGER.info("HassiumSmokeTest: world delivery {} loaded={} nonAir={} pass={}",
                         roundLabel, SmokeProbeWriter.currentLoadedChunkCount(mc), content.chunksWithNonAir(), ok);
             } else {
-                ok = validateStats(plain, roundLabel);
+                boolean coldCache = step.boolParam("coldCache", true);
+                if (!coldCache) LOGGER.info("HassiumSmokeTest: {} permits an existing disk cache", roundLabel);
+                ok = validateStats(plain, roundLabel, coldCache);
             }
             if (isRound1) {
                 round1Pass = ok;
@@ -1286,6 +1292,10 @@ public final class ScenarioEngine {
      * 本地源回填生效）。不要求 ROUND2 缓存全命中。
      */
     static boolean validateStats(String plain, String roundLabel) {
+        return validateStats(plain, roundLabel, true);
+    }
+
+    private static boolean validateStats(String plain, String roundLabel, boolean coldCache) {
         if (plain == null || plain.isBlank()) {
             return false;
         }
@@ -1416,7 +1426,7 @@ public final class ScenarioEngine {
         // 4) R1 语义门禁：清缓存首进不得出现「网络全量=0 且缓存全命中>0」的假命中。
         //    （来源被 publishCachedChunk 改写 / origin 被日志开关 strip 成 null 的回归锚）
         //    SeedGen 本地生成是合法的 R1 路径：fullReq=0 + locallyGenerated>0 不算假缓存。
-        if (roundLabel != null && roundLabel.contains("ROUND1")) {
+        if (coldCache && roundLabel != null && roundLabel.contains("ROUND1")) {
             long fullReq = m.getFullChunkRequestCount();
             long fullHit = m.getCacheHitFullChunkCount();
             long localGen = m.getLocallyGeneratedChunkCount();

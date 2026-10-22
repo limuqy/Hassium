@@ -127,13 +127,19 @@ public final class JoinWorldFocus {
      */
     public static <T> void fillDistanceFirst(ConcurrentHashMap<Long, T> source,
                                              List<Map.Entry<Long, T>> batch, int limit) {
-        if (source == null || source.isEmpty() || limit <= 0) {
+        fillDistanceFirst(source, batch, limit, key -> true);
+    }
+
+    public static <T> void fillDistanceFirst(ConcurrentHashMap<Long, T> source,
+                                             List<Map.Entry<Long, T>> batch, int limit,
+                                             java.util.function.LongPredicate eligible) {
+        if (source == null || source.isEmpty() || limit <= 0 || batch.size() >= limit) {
             return;
         }
         Map.Entry<Long, T> standing = null;
         if (hasFocus) {
             for (Map.Entry<Long, T> entry : source.entrySet()) {
-                if (isStandingKey(entry.getKey())) {
+                if (isStandingKey(entry.getKey()) && eligible.test(entry.getKey())) {
                     standing = entry;
                     break;
                 }
@@ -149,7 +155,7 @@ public final class JoinWorldFocus {
             if (standing != null && standing.getKey().longValue() == entry.getKey().longValue()) {
                 continue;
             }
-            batch.add(entry);
+            if (eligible.test(entry.getKey())) batch.add(entry);
         }
     }
 }

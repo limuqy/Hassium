@@ -42,8 +42,7 @@ public final class BlockEntityCompat {
      * {@code Block entity has invalid type}）并丢弃该 BE；调用方据此在序列化前提前剔除，
      * 落盘结果不变、只是不再产生噪音日志。
      * <p>
-     * {@code DUMMY} 条目返回 {@code true}：vanilla promote 对它有独立分支（走
-     * {@code newBlockEntity}，不查注册表），必须交回 vanilla 处理。
+     * {@code DUMMY} 走 vanilla 的 {@code newBlockEntity} 分支，仅要求当前位置有 BE。
      */
     public static boolean canPromote(CompoundTag tag, BlockState state) {
         if (tag == null || state == null) {
@@ -51,7 +50,7 @@ public final class BlockEntityCompat {
         }
         String id = getString(tag, "id");
         if ("DUMMY".equals(id)) {
-            return true;
+            return state.hasBlockEntity();
         }
         if (id.isEmpty()) {
             return false;

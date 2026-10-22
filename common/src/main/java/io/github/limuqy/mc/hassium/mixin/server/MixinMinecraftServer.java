@@ -1,5 +1,7 @@
 package io.github.limuqy.mc.hassium.mixin.server;
 
+import io.github.limuqy.mc.hassium.utils.ChunkPipelineProfile;
+import static io.github.limuqy.mc.hassium.utils.ChunkPipelineProfile.*;
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher;
 import io.github.limuqy.mc.hassium.server.PlayerCompressionTracker;
@@ -25,6 +27,8 @@ import java.util.function.BooleanSupplier;
  */
 @Mixin(MinecraftServer.class)
 public class MixinMinecraftServer {
+    @org.spongepowered.asm.mixin.Unique
+    private long hassium$profileTickStart;
 
     // tickTimes[tickCount % 100] 的最新槽索引（1.20.1~1.21.11 同名私有字段）
     @Shadow
@@ -63,6 +67,7 @@ public class MixinMinecraftServer {
      */
     @Inject(method = "tickServer", at = @At("HEAD"))
     private void hassium$onServerTickStart(BooleanSupplier hasTimeLeft, CallbackInfo ci) {
+        hassium$profileTickStart = now();
         io.github.limuqy.mc.hassium.compat.SleepProbeCompat.beforeTick((MinecraftServer)(Object)this);
         io.github.limuqy.mc.hassium.server.entity.EntityUpdatePacing.onServerTickStart((MinecraftServer) (Object) this);
     }
@@ -96,6 +101,7 @@ public class MixinMinecraftServer {
         // mspt 采样（debug.dispatcherLogging 开启时每秒输出一行 [MSPT]）
         TickMonitor.finishHassiumTick();
         TickMonitor.sampleServerTick(server, tickCount);
+        serverTick(hassium$profileTickStart);
     }
 
     // review-fix: T7-59: handler 统一加 hassium$ 前缀

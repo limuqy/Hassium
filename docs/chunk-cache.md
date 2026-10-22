@@ -324,6 +324,8 @@ Sector 2+:    [length(4)][type=126][magic 0x48][hash(8)][ZSTD 压缩数据]
 
 这保证「曾加载并收到更新」的块 R2 再进应 HIT。
 
+**SeedGen 与纯缓存切换**：两种模式共用上述存档目录，模式固定于本次影子端实例，重连时重新选择。纯缓存装配不加载世界生成注册表；读盘时从原版解析视图中排除 `structures`，将原始 NBT 独立保留在区块上，保存时透传写回。结构 ID、结构起点和引用不在纯缓存模式实例化，未知 mod ID 与额外字段也原样保留。Proto→FULL、Imposter 解包和权威 FULL 替换均保留这份数据；1.21.2 起在 `SerializableChunkData.copyOf` 时一并冻结快照。切回 SeedGen 后仍走原版结构解析与保存。此兼容不改变方块、BE、生物群系、光照缓存或 `LightNeighborhoodGate` 的交付条件。
+
 ### 11.4 分段增量（缓存过期 / MISMATCH）
 
 `chunk.sectionDeltaEnabled`（默认开）。影子端 MISMATCH 且光干净时，`ShadowPullRequestC2SPacket` 携带本地 section hash + 每非空段 48×u32 平面综合征；服务端按需比对（不常驻缓存）：

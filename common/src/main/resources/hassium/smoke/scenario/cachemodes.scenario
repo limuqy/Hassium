@@ -1,0 +1,54 @@
+# Reuse one natural-world cache across SeedGen -> cache-only -> SeedGen runs.
+# Visual light acceptance: smooth vanilla creative flight through cross-chunk eaves and a cave.
+# Inspect during both OUT and BACK; automatic PASS alone is not visual acceptance.
+join label=WAIT_JOIN_1 since=start timeoutMs=${joinTimeoutMs}
+wait ms=${round1WaitMs}
+command text="gamemode creative @s"
+command text="time set noon"
+command text="weather clear"
+command text="forceload add -16 -64 16 704"
+wait ms=12000
+command text="fill -8 297 -64 8 297 704 minecraft:quartz_block"
+wait ms=500
+command text="fill -8 302 0 8 302 192 minecraft:oak_planks"
+wait ms=500
+command text="fill -8 298 256 8 310 384 minecraft:stone"
+wait ms=500
+command text="fill -8 298 385 8 310 512 minecraft:stone"
+wait ms=500
+command text="fill -4 298 256 4 302 512 minecraft:air"
+wait ms=500
+command text="setblock 4 300 320 minecraft:glowstone"
+wait ms=500
+command text="setblock -4 300 448 minecraft:glowstone"
+wait ms=500
+command text="fill -1 281 -49 1 281 -47 minecraft:quartz_block"
+wait ms=500
+command text="fill -1 281 639 1 281 641 minecraft:quartz_block"
+wait ms=500
+command text="tp @s 0 282 -48 0 0"
+wait ms=12000
+fly seconds=32 targetY=298 tag=VISUAL_OUT_
+wait ms=38000
+wait ms=5000
+dump label=ROUND1 round=1 coldCache=false
+assertProbe key=counters.clientDarkRegressionChunks op=eq value=0
+# Reconnect forces cache reads before the return traversal.
+disconnect
+reconnect delayMs=${reconnectDelayMs}
+join label=WAIT_JOIN_2 since=disconnect timeoutMs=${joinTimeoutMs}
+wait ms=${round2WaitMs}
+command text="gamemode creative @s"
+command text="time set noon"
+command text="tp @s 0 282 640 180 0"
+wait ms=2000
+fly seconds=32 targetY=298 tag=VISUAL_BACK_
+wait ms=38000
+command text="tp @s 0 298 8 0 -12"
+wait ms=18000
+command text="tp @s 0 298 272 180 0"
+wait ms=18000
+dump label=ROUND2 round=2
+assertProbe key=counters.clientDarkRegressionChunks op=eq value=0
+command text="forceload remove -16 -64 16 704"
+exit

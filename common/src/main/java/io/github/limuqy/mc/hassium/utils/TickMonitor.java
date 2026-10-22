@@ -115,6 +115,7 @@ public final class TickMonitor {
         if (ns <= 0) {
             return;
         }
+        ChunkPipelineProfile.record(ChunkPipelineProfile.Source.CLIENT, ChunkPipelineProfile.Stage.CLIENT_TICK, ns);
         clientSumNs += ns;
         clientMaxNs = Math.max(clientMaxNs, ns);
         clientLastNs = ns;

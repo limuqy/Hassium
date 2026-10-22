@@ -33,6 +33,11 @@ public final class ChunkMeshCompileLog {
     }
 
     public static void onCompiled(int originX, int originY, int originZ) {
+        if (io.github.limuqy.mc.hassium.utils.ChunkPipelineProfile.ENABLED) {
+            String dim = io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.currentDimension();
+            io.github.limuqy.mc.hassium.utils.ChunkPipelineProfile.mesh(dim,
+                    io.github.limuqy.mc.hassium.utils.DimensionKey.key(dim, originX >> 4, originZ >> 4));
+        }
         if (!enabled()) {
             return;
         }

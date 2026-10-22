@@ -43,6 +43,15 @@ public class MixinShadowBlockEntitySnapshots implements ShadowBlockEntitySnapsho
         if (hassium$beSnapshots != null) hassium$beSnapshots.remove(pos);
     }
 
+    @Inject(method = "removeBlockEntity", at = @At("RETURN"))
+    private void hassium$removeDetachedShadowEntity(BlockPos pos, CallbackInfo ci) {
+        LevelChunk self = (LevelChunk) (Object) this;
+        if (self.getLevel() instanceof net.minecraft.server.level.ServerLevel level
+                && level.getServer() instanceof io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer) {
+            io.github.limuqy.mc.hassium.compat.ShadowBlockEntityCompat.finishRemoval(self, pos);
+        }
+    }
+
     @Inject(method = "clearAllBlockEntities", at = @At("HEAD"))
     private void hassium$clearReceivedTags(CallbackInfo ci) {
         if (hassium$beSnapshots != null) hassium$beSnapshots.clear();

@@ -1,5 +1,7 @@
 package io.github.limuqy.mc.hassium.protocol;
 
+import io.github.limuqy.mc.hassium.utils.ChunkPipelineProfile;
+import static io.github.limuqy.mc.hassium.utils.ChunkPipelineProfile.*;
 import io.github.limuqy.mc.hassium.Constants;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -15,8 +17,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 public final class PullResponseDecodeQueue {
 
-    private static final byte[] POISON = new byte[0];
-    private static final LinkedBlockingQueue<byte[]> QUEUE = new LinkedBlockingQueue<>();
+    private record Work(byte[] data, long queued) {}
+    private static final Work POISON = new Work(new byte[0], 0);
+    private static final LinkedBlockingQueue<Work> QUEUE = new LinkedBlockingQueue<>();
     private static final AtomicBoolean STARTED = new AtomicBoolean();
     private static final AtomicBoolean ALIVE = new AtomicBoolean(true);
 
@@ -33,7 +36,8 @@ public final class PullResponseDecodeQueue {
         }
         byte[] copy = new byte[data.length];
         System.arraycopy(data, 0, copy, 0, data.length);
-        QUEUE.offer(copy);
+        QUEUE.offer(new Work(copy, now()));
+        peak(Counter.DECODE_PEAK, QUEUE.size());
     }
 
     /** 断连：丢弃积压并停工人；下次 enqueue 会重启。 */
@@ -56,18 +60,21 @@ public final class PullResponseDecodeQueue {
     private static void loop() {
         try {
             while (ALIVE.get() || !QUEUE.isEmpty()) {
-                byte[] data;
+                Work work;
                 try {
-                    data = QUEUE.take();
+                    work = QUEUE.take();
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     return;
                 }
-                if (data == POISON || data.length == 0) {
+                if (work == POISON || work.data().length == 0) {
                     return;
                 }
                 try {
-                    PayloadHandlers.processShadowPullResponse(data);
+                    elapsed(Source.CLIENT, Stage.DECODE_WAIT, work.queued());
+                    long decodeStart = now();
+                    try { PayloadHandlers.processShadowPullResponse(work.data()); }
+                    finally { elapsed(Source.CLIENT, Stage.DECODE_WALL, decodeStart); }
                 } catch (Throwable t) {
                     Constants.LOG.error("Hassium: pull response decode worker failed", t);
                 }

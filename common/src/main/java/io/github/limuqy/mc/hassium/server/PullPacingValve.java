@@ -19,6 +19,12 @@ public final class PullPacingValve {
     private PullPacingValve() {
     }
 
+    /** Admission happens before any NBT serialization, detached section copy, or full packet. */
+    public static <T> T prepareIfAdmitted(boolean unchanged, int unchangedLeft, int fullLeft,
+                                          java.util.function.Supplier<T> prepare) {
+        return (unchanged ? unchangedLeft : fullLeft) > 0 ? prepare.get() : null;
+    }
+
     static int fullDeltaBudget(int configured) {
         return configured > 0 ? configured : 5;
     }

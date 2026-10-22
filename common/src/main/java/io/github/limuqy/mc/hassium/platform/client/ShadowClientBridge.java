@@ -188,7 +188,7 @@ public final class ShadowClientBridge {
 
         @Override
         public <T> void fillDistanceFirst(ConcurrentHashMap<Long, T> source,
-                                          List<Map.Entry<Long, T>> batch, int limit) {
+                                          List<Map.Entry<Long, T>> batch, int limit, java.util.function.LongPredicate eligible) {
             if (source == null || limit <= 0) {
                 return;
             }
@@ -196,7 +196,7 @@ public final class ShadowClientBridge {
                 if (batch.size() >= limit) {
                     break;
                 }
-                batch.add(entry);
+                if (eligible.test(entry.getKey())) batch.add(entry);
             }
         }
 

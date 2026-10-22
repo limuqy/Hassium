@@ -1,5 +1,7 @@
 package io.github.limuqy.mc.hassium.server;
 
+import io.github.limuqy.mc.hassium.utils.ChunkPipelineProfile;
+import static io.github.limuqy.mc.hassium.utils.ChunkPipelineProfile.*;
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil;
 import io.github.limuqy.mc.hassium.compat.LevelChunkSectionCompat;
@@ -396,11 +398,18 @@ public class ServerChunkPushManager {
         try {
             boolean nbtSupported = ServerHandshakeActivation.hasCaps(pending.player().getUUID(),
                     io.github.limuqy.mc.hassium.protocol.handshake.LoginCaps.PULL_NBT);
-            ClassifiedPull classified = classifyPull(pending.entry(), chunk, level, nbtSupported);
+            long preparationStart = now();
+            ComparedPull compared = comparePull(pending.entry(), chunk, level, nbtSupported);
+            ClassifiedPull classified = PullPacingValve.prepareIfAdmitted(compared.unchanged(), unchangedLeft, fullLeft,
+                    () -> preparePull(pending.entry(), chunk, level, nbtSupported, compared, fullLeft));
+            if (classified == null) {
+                count(true, Counter.QUOTA_DEFERRED);
+                return false;
+            }
+            if (ChunkPipelineProfile.ENABLED) {
+                record(Source.SERVER, Stage.SERVER_QUEUE, preparationStart - pending.enqueueNanos());
+            }
             if (classified.unchanged()) {
-                if (unchangedLeft <= 0) {
-                    return false;
-                }
                 lastCompletedUnchanged = true;
                 releaseDemandTicket(pending);
                 unqueuePull(pending);
@@ -408,9 +417,6 @@ public class ServerChunkPushManager {
                         pending.entry().chunkX(), pending.entry().chunkZ(), pending.requestId());
                 sendPullResponse(pending.player(), pending, classified.result());
                 return true;
-            }
-            if (fullLeft <= 0) {
-                return false;
             }
             lastCompletedUnchanged = false;
             releaseDemandTicket(pending);
@@ -457,6 +463,8 @@ public class ServerChunkPushManager {
         }
     }
 
+    private record ComparedPull(boolean unchanged, long chunkHash, List<Long> sectionHashList) {}
+
     private record ClassifiedPull(boolean unchanged, ShadowPullResponseS2CPacket.Result result,
                                   ClientboundLevelChunkWithLightPacket fullPacket,
                                   SectionDeltaColumnSnap deltaSnap,
@@ -489,9 +497,10 @@ public class ServerChunkPushManager {
         return true;
     }
 
-    /** 主线程：hash + 比较 + FULL 包快照 / DELTA 列快照。encode/zstd 在 pushPool。 */
-    private ClassifiedPull classifyPull(ShadowPullRequestC2SPacket.Entry entry,
+    /** Main thread comparison only; no payload or detached snapshot before quota admission. */
+    private ComparedPull comparePull(ShadowPullRequestC2SPacket.Entry entry,
                                         LevelChunk chunk, ServerLevel level, boolean nbtSupported) {
+        long hashStart = now();
         // 逐段 hash：先查服务端**共享**缓存（跨玩家复用），未命中再现算并落缓存。
         // 贵的是 computeSectionHashes 的逐位置扫描（24 段 × 16³ = 98_304 次
         // getBlockState+Block.getId），而 UNCHANGED/DELTA/FULL 三种响应都要回带
@@ -512,35 +521,60 @@ public class ServerChunkPushManager {
         }
         boolean hashMatch = entry.chunkHash() != 0L && entry.chunkHash() == chunkHash;
         boolean sectionsMatch = sectionHashesEqual(entry.sectionHashes(), sectionHashArray);
-        if ((hashMatch || sectionsMatch) && (nbtSupported || chunk.getBlockEntities().isEmpty())) {
+        elapsed(Source.SERVER, Stage.HASH_COMPARE, hashStart);
+        return new ComparedPull((hashMatch || sectionsMatch) && (nbtSupported || chunk.getBlockEntities().isEmpty()),
+                chunkHash, sectionHashList);
+    }
+
+    /** Admitted work only. These detached snapshots are passed to the worker, never saved for a later tick. */
+    private ClassifiedPull preparePull(ShadowPullRequestC2SPacket.Entry entry, LevelChunk chunk,
+                                       ServerLevel level, boolean nbtSupported, ComparedPull compared, int fullLeft) {
+        long chunkHash = compared.chunkHash();
+        List<Long> sectionHashList = compared.sectionHashList();
+        if (compared.unchanged()) {
             try {
+                long nbtStart = now();
                 byte[] nbt = nbtSupported
                         ? io.github.limuqy.mc.hassium.protocol.BlockEntitySnapshot.encode(collectBlockEntities(chunk))
                         : new byte[0];
+                elapsed(Source.SERVER, Stage.NBT_SNAPSHOT, nbtStart);
                 return new ClassifiedPull(true, ShadowPullResponseS2CPacket.Result.unchanged(
                         entry.chunkX(), entry.chunkZ(), chunkHash, sectionHashList, nbt),
                         null, null, chunkHash, sectionHashList);
             } catch (IllegalArgumentException oversized) {
                 // A bounded projection that cannot be represented uses the existing FULL
                 // encoding; do not strand a valid terrain baseline on an ERROR response.
-                return new ClassifiedPull(false, null, buildChunkPacket(chunk, level), null, chunkHash, sectionHashList);
+                return PullPacingValve.prepareIfAdmitted(false, 0, fullLeft, () -> {
+                    long fullStart = now();
+                    ClientboundLevelChunkWithLightPacket packet = buildChunkPacket(chunk, level);
+                    elapsed(Source.SERVER, Stage.FULL_SNAPSHOT, fullStart);
+                    return new ClassifiedPull(false, null, packet, null, chunkHash, sectionHashList);
+                });
             }
         }
         SectionDeltaColumnSnap deltaSnap = null;
         if (!entry.sectionHashes().isEmpty()
                 && HassiumConfigService.getInstance().isSectionDeltaEnabled()) {
+            long deltaStart = now();
             deltaSnap = snapshotSectionDeltaColumn(chunk);
+            elapsed(Source.SERVER, Stage.DELTA_SNAPSHOT, deltaStart);
         }
+        long fullStart = now();
         ClientboundLevelChunkWithLightPacket packet = buildChunkPacket(chunk, level);
+        elapsed(Source.SERVER, Stage.FULL_SNAPSHOT, fullStart);
         return new ClassifiedPull(false, null, packet, deltaSnap, chunkHash, sectionHashList);
     }
 
     private void submitEncodedPull(PendingPull pending, ClassifiedPull classified, RegistryAccess registryAccess) {
         ensureInitialized();
         ShadowPullRequestC2SPacket.Entry entry = pending.entry();
+        long encodeQueued = now();
         pushPool.submit(() -> {
+            elapsed(Source.SERVER, Stage.ENCODE_WAIT, encodeQueued);
+            long encodeStart = now();
             try {
                 ShadowPullResponseS2CPacket.Result result = encodeClassifiedPull(pending, classified, entry, registryAccess);
+                elapsed(Source.SERVER, Stage.ENCODE_WALL, encodeStart);
                 if (pending.player() == null || pending.player().hasDisconnected()) {
                     return;
                 }
@@ -595,7 +629,11 @@ public class ServerChunkPushManager {
         var owner = PlayerCompat.getMinecraftServer(player);
         if (owner == null) return;
         if (!owner.isSameThread()) {
-            owner.execute(() -> sendPullResponse(player, pending, result));
+            long sendQueued = now();
+            owner.execute(() -> {
+                elapsed(Source.SERVER, Stage.SEND_WAIT, sendQueued);
+                sendPullResponse(player, pending, result);
+            });
             return;
         }
         if (!io.github.limuqy.mc.hassium.protocol.ShadowPullServer.isCurrentSession(player, pending.connection)
@@ -607,6 +645,7 @@ public class ServerChunkPushManager {
         FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
         boolean handedOff = false;
         try {
+            count(true, Counter.valueOf(result.kind().name()));
             response.encode(buf);
             io.github.limuqy.mc.hassium.platform.Services.NETWORK_MANAGER.sendShadowPullResponse(player, buf);
             // 所有权已转移：fabric send 直接持有 buf（不在此释放），
@@ -993,6 +1032,7 @@ public class ServerChunkPushManager {
      * 清空所有队列并关闭线程池
      */
     public void shutdown() {
+        flushServer();
         for (ArrayDeque<PendingPull> pulls : pullQueues.values()) {
             for (PendingPull pending : pulls) {
                 releaseDemandTicket(pending);

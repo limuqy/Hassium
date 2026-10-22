@@ -540,6 +540,7 @@ public class ShadowSeedServer extends MinecraftServer {
     private LevelChunk decodeInjectedPacketLocked(String dimension, long key, ChunkPos pos,
                                                   ServerLevel level,
                                                   ClientboundLevelChunkWithLightPacket packet) {
+        LevelChunk previous = this.injectedChunks.get(key);
         LevelChunk chunk = new LevelChunk(level, pos); // 空壳，不 worldgen
         // FULL 票扩散后本柱可能已有 ProtoChunk holder。replaceWithPacketData 会走
         // initializeLightSources / BE → ServerLevel.getChunk，把 Proto 强转 LevelChunk。
@@ -569,6 +570,9 @@ public class ShadowSeedServer extends MinecraftServer {
             chunk.replaceWithPacketData(retryBuf, data.getHeightmaps(),
                     data.getBlockEntitiesTagsConsumer(pos.x, pos.z));
             nonAirSections = countNonAirSections(chunk);
+        }
+        if (cacheOnly && previous != null) {
+            io.github.limuqy.mc.hassium.compat.ShadowStructureDataCompat.transfer(previous, chunk);
         }
         DebugLogger.debug(DebugLogger.LogType.ASYNC,
                 "[SHADOW_INJECT] pos=({},{}) sections={} nonAirSections={} sectionBytes={} heightmapKeys={}",
@@ -906,8 +910,8 @@ public class ShadowSeedServer extends MinecraftServer {
      *       {@code KIND_BLOCKS} → {@code section.setBlockState}（禁止 {@code level.setBlock}）</li>
      *   <li>heightmaps：逐 type {@code setHeightmap}（delta 包随附服务端 rawData——
      *       直接改 section 不会自动更新高度图）</li>
-     *   <li>blockEntity：服务端发整 chunk BE 快照 → 先清旧表，再镜像官方
-     *       replaceWithPacketData 的 consumer（IMMEDIATE 创建 + type 校验 + load）</li>
+     *   <li>blockEntity：服务端发整 chunk BE 快照 → 统一验证、清理旧 live/pending，
+     *       复用匹配实例或 IMMEDIATE 创建，再应用网络 NBT</li>
      *   <li><b>光</b>：delta 不含光照 → 变更 section 清光（{@code queueSectionData(EMPTY)}，
      *       injectChunk 同款）→ 由调用方两阶段屏障（initializeLight → lightChunk）重算</li>
      *   <li>比对 {@code expectedChunkHash}，失败返回 false（调用方回退全量）</li>
@@ -986,23 +990,9 @@ public class ShadowSeedServer extends MinecraftServer {
             for (BlockPos changed : lightChanges) {
                 lightEngine.checkBlock(changed);
             }
-            // 4) BE 全量覆盖（服务端发整 chunk BE 快照）：先清旧，再镜像官方
-            // replaceWithPacketData 的 consumer（IMMEDIATE 创建 + load）。不做 type 校验：
-            // IMMEDIATE 创建的 BE 类型必然匹配新 block state（delta 数据自洽），
-            // 且 1.21.11 Registry.get 返回 Optional，跨版本校验成本大于收益。
-            io.github.limuqy.mc.hassium.compat.ShadowBlockEntityCompat.snapshots(chunk).clear();
-            for (BlockPos bp : new ArrayList<>(chunk.getBlockEntities().keySet())) {
-                chunk.removeBlockEntity(bp);
-            }
-            for (SectionDeltaS2CPacket.BlockEntityData bed : entry.blockEntities()) {
-                net.minecraft.world.level.block.entity.BlockEntity be =
-                        chunk.getBlockEntity(bed.pos(), LevelChunk.EntityCreationType.IMMEDIATE);
-                if (be != null && bed.nbt() != null) {
-                    BlockEntityCompat.loadFromTag(be, bed.nbt(), this.overworld().registryAccess());
-                }
-                io.github.limuqy.mc.hassium.compat.ShadowBlockEntityCompat.snapshots(chunk)
-                        .put(bed.pos(), bed.type(), bed.nbt());
-            }
+            // 4) DELTA 与 UNCHANGED 都携带整柱 BE 快照：统一验证、清掉旧 live/pending、
+            // 再应用网络 NBT。影子柱未 loaded 时 removeBlockEntity 由 shadow Mixin 补齐。
+            io.github.limuqy.mc.hassium.compat.ShadowBlockEntityCompat.applySnapshot(chunk, entry.blockEntities());
             // 5) 重算 contentHash 写存储桥（R2 比对 / 断连落盘复用），并校验 expectedChunkHash
             try {
                 long contentHash = io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil
@@ -1472,8 +1462,10 @@ public class ShadowSeedServer extends MinecraftServer {
         if (dimLevel == null) {
             return null;
         }
-        return new LevelChunk(dimLevel, (net.minecraft.world.level.chunk.ProtoChunk) accChunk,
+        LevelChunk promoted = new LevelChunk(dimLevel, (net.minecraft.world.level.chunk.ProtoChunk) accChunk,
                 chunk -> { });
+        io.github.limuqy.mc.hassium.compat.ShadowStructureDataCompat.transfer(accChunk, promoted);
+        return promoted;
     }
 
     /** 注入区块表取用（主世界；未注入返回 null）。过渡期兼容签名，语义 = OVERWORLD。 */
@@ -1762,7 +1754,7 @@ public class ShadowSeedServer extends MinecraftServer {
      * 且 {@code BlockEntityType.isValid(state)} 成立）。
      * <p><b>空/非法 id 也要剔除</b>：vanilla 对该分支打的是 ERROR 级
      * {@code Block entity has invalid type}（不是 warn），同样污染门禁。
-     * {@code DUMMY} 例外——vanilla promote 有独立分支（不查注册表），必须交回 vanilla。
+     * {@code DUMMY} 走独立分支（不查注册表），仅保留在仍有 BE 的方块上。
      *
      * <p>调用方必须持 {@code chunkLock}（{@code serializeInjectedColumnLocked} 已持）。
      */

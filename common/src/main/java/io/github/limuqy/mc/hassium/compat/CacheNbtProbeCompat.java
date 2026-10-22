@@ -120,6 +120,24 @@ public final class CacheNbtProbeCompat {
         boolean wall=mc.level.getBlockState(new net.minecraft.core.BlockPos(44,66,3)).is(expectedRound==2?net.minecraft.world.level.block.Blocks.GOLD_BLOCK:net.minecraft.world.level.block.Blocks.STONE);
         Constants.LOG.info("HassiumSmokeTest:CACHE_NBT client R{} wallCorrect={} staleSigns={}",round,wall,stale);
         if(stale!=0 || !wall) throw new IllegalStateException("CACHE_NBT R"+round+" staleSigns="+stale+" wallCorrect="+wall);
+        var shadow=io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry.getInstance().get();
+        var dimension=LevelCompat.getDimensionId(mc.level);
+        int invalidShadow=ShadowPoiGate.callExclusive(shadow,()->{
+            int invalid=0;
+            for(int column:new int[]{0,2}) {
+                var chunk=shadow.injectedChunk(dimension,column,0);
+                if(chunk==null) throw new IllegalStateException("CACHE_NBT missing shadow column "+column);
+                for(var entry:chunk.getBlockEntities().entrySet())
+                    if(!entry.getValue().getType().isValid(chunk.getBlockState(entry.getKey()))) invalid++;
+                var pending=((io.github.limuqy.mc.hassium.mixin.shadow.LevelChunkPendingBeAccessor)chunk)
+                        .hassium$getPendingBlockEntities();
+                for(var entry:pending.entrySet())
+                    if(!BlockEntityCompat.canPromote(entry.getValue(),chunk.getBlockState(entry.getKey()))) invalid++;
+            }
+            return invalid;
+        });
+        Constants.LOG.info("HassiumSmokeTest:CACHE_NBT shadow R{} invalidEntities={}",round,invalidShadow);
+        if(invalidShadow!=0) throw new IllegalStateException("CACHE_NBT stale shadow block entities="+invalidShadow);
 #else
         throw new IllegalStateException("Cache NBT fixture targets 1.20.1 / 1.21.1");
 #endif
