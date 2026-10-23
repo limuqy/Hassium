@@ -25,24 +25,17 @@ import io.github.limuqy.mc.hassium.compat.LevelCompat;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
 import io.github.limuqy.mc.hassium.utils.DimensionKey;
 import java.util.ArrayList;
-import java.util.BitSet;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentLinkedQueue;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.locks.LockSupport;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientPacketListener;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
-import net.minecraft.util.Mth;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.chunk.LevelChunk;
-import net.minecraft.world.level.lighting.LevelLightEngine;
 
 /**
  * 影子区块投递/回传管线：远程压缩通道解压出的区块数据统一注入影子服务端
@@ -554,6 +547,16 @@ public final class ShadowLightCompute {
         return shadowApplyEpochs.containsKey(DimensionKey.key(dimension, pos.x, pos.z));
     }
 
+    /** Concurrent bookkeeping only; live chunk/light state is logged by the shadow owner. */
+    public static String columnWorkDiagnostics(long key) {
+        return "epoch=" + shadowApplyEpochs.containsKey(key) + " pending=" + pending.containsKey(key)
+                + " generated=" + generated.containsKey(key) + " delta=" + pendingDeltas.containsKey(key)
+                + " light=" + inflightLight.containsKey(key) + " init=" + lightInitialized.contains(key)
+                + " initPassed=" + lightInitPassed.contains(key) + " ran=" + lightRan.contains(key)
+                + " pendingAuth=" + pendingAuthoritative.containsKey(key)
+                + " networkInFlight=" + networkInFlight.contains(key);
+    }
+
     /** ShadowPull compare 路径是否可用（引擎 + 客户端缓存门 + 协商 SHADOW_PULL）。 */
     public static boolean isPullPathAvailable() {
         if (!isEnabled()) {
@@ -693,7 +696,21 @@ public final class ShadowLightCompute {
      *  避免每完成一块就一次 executor 往返）。 */
     private static final int PIPELINE_LOW_WATER = CONSUME_BATCH_LIMIT;
 
-    private record DeltaWork(String dimension, io.github.limuqy.mc.hassium.protocol.SectionDeltaS2CPacket.DeltaEntry entry, long sleepToken, long profile) {}
+    private record DeltaWork(String dimension, io.github.limuqy.mc.hassium.protocol.SectionDeltaS2CPacket.DeltaEntry entry,
+                             long sleepToken, long profile,
+                             io.github.limuqy.mc.hassium.concurrent.SnapshotContentCommit<LevelChunk> content) {
+        DeltaWork(String dimension, io.github.limuqy.mc.hassium.protocol.SectionDeltaS2CPacket.DeltaEntry entry,
+                  long sleepToken, long profile) {
+            this(dimension,entry,sleepToken,profile,new io.github.limuqy.mc.hassium.concurrent.SnapshotContentCommit<>());
+        }
+    }
+    /** LIGHT can outlive its halo ACK, but only for the exact content already committed by this work. */
+    private static boolean deltaLightCurrent(long key,DeltaWork work,ShadowSeedServer server) {
+        return work.content().applied() && SleepTerrainClient.acceptLight(key,work.sleepToken())
+                && ShadowServerRegistry.getInstance().get()==server
+                && server.shadowGeneration()==io.github.limuqy.mc.hassium.server.RuntimeServerContext.getShadowGeneration()
+                && server.injectedChunk(work.dimension(),work.entry().chunkX(),work.entry().chunkZ())==work.content().committed();
+    }
 
     private ShadowLightCompute() {}
 
@@ -848,6 +865,11 @@ public final class ShadowLightCompute {
                 || pendingDeltas.containsKey(key);
     }
 
+    /** Persistence confirmation must wait for the same-column LIGHT/content tail. */
+    public static boolean isLightConfirmationBlocked(long key) {
+        return isChunkBarrierBusy(key) || LightNeighborhoodGate.isAwaiting(key);
+    }
+
     private static boolean hasQueuedBlockWork(long key) {
         return pending.containsKey(key) || generated.containsKey(key);
     }
@@ -868,7 +890,9 @@ public final class ShadowLightCompute {
     }
 
     private static boolean canStartDelta(long key) {
-        return canStartQueuedLight(key) && !pending.containsKey(key) && !generated.containsKey(key);
+        DeltaWork work = pendingDeltas.get(key);
+        return (work==null || work.content().ready(System.nanoTime()))
+                && canStartQueuedLight(key) && !pending.containsKey(key) && !generated.containsKey(key);
     }
 
     private static boolean canStartQueuedLight(long key) {
@@ -2148,6 +2172,9 @@ public final class ShadowLightCompute {
                             hashMatches = withChunkLock(pos, () ->
                                     diskHashMatches(dimension, existing, pos, remoteHash));
                         }
+                        if (io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.Client.observesSameHashFull())
+                            io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.Client.fullIngress(
+                                    e.getKey(), pendingEntry.sleepToken(),hashMatches, pendingEntry.nbtRepair(), SleepTerrainClient.forceReplace(e.getKey()));
                         if ((!hashKnown || hashMatches) && !SleepTerrainClient.forceReplace(e.getKey())
                             && !pendingEntry.nbtRepair()) {
                             boolean needRelight = !isLightReusable(server, pos, existing);
@@ -2205,7 +2232,10 @@ public final class ShadowLightCompute {
                 // 变更 section 逐格 checkBlock（applySectionDelta 内）→ 与注入共享下方光屏障。
                 for (Map.Entry<Long, DeltaWork> e : deltaBatch) {
                     long key = e.getKey();
-                    if(!SleepTerrainClient.acceptPending(key,e.getValue().sleepToken())) { pendingDeltas.remove(key,e.getValue()); continue; }
+                    if(!(e.getValue().content().applied() ? deltaLightCurrent(key,e.getValue(),server)
+                            : SleepTerrainClient.acceptPending(key,e.getValue().sleepToken()))) {
+                        pendingDeltas.remove(key,e.getValue()); continue;
+                    }
                     // 先等旧的本地光工作结束，再换节；不得让旧 phase-1 / 回调覆盖权威增量。
                     if (!canStartDelta(key) || !pendingDeltas.remove(key, e.getValue())) {
                         continue;
@@ -2216,10 +2246,46 @@ public final class ShadowLightCompute {
                     // P1（T7）：applySectionDelta 就地覆盖注入 chunk 的 section 容器
                     // （LevelChunkSection.read → PalettedContainer 写）——与 hash 比对线程
                     // （chunkHashOf / computeSectionHashes）同 chunk 锁互斥（T7 崩溃同机制）。
-                    boolean applied;
-                    applied = withChunkLock(pos, () ->
-                            server.applySectionDelta(work.dimension(), pos, work.entry()));
-                    if (!applied) {
+                    boolean freshContent = !work.content().applied();
+                    boolean[] ownerUnavailable = {false};
+                    LevelChunk baseline = io.github.limuqy.mc.hassium.compat.ShadowPoiGate.callExclusive(server, () -> {
+                        // The legacy dispatch gate may fall back inline after shutdown/timeout.
+                        // That fallback may retry later, but must never mutate the live world.
+                        if(!server.isMainLoopThread()) { ownerUnavailable[0]=true; return null; }
+                        // Check on the same owner as native tail mutations, after waiting for it.
+                        LevelChunk committed = work.content().applyOnce(
+                                () -> (work.content().applied() ? deltaLightCurrent(key,work,server)
+                                        : SleepTerrainClient.acceptPending(key,work.sleepToken()))
+                                        && ShadowServerRegistry.getInstance().get()==server
+                                        && server.shadowGeneration()==io.github.limuqy.mc.hassium.server.RuntimeServerContext.getShadowGeneration(),
+                                () -> withChunkLock(pos, () -> {
+                                    if(!SleepTerrainClient.acceptPending(key,work.sleepToken())
+                                            || ShadowServerRegistry.getInstance().get()!=server
+                                            || server.shadowGeneration()!=io.github.limuqy.mc.hassium.server.RuntimeServerContext.getShadowGeneration()) return null;
+                                    io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.Client.deltaStage(
+                                            "content-before",work.dimension(),pos,work.sleepToken(),server);
+                                    if(!server.applySectionDelta(work.dimension(),pos,work.entry())) return null;
+                                    invalidateLightAfterContentChange(key);
+                                    io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.Client.deltaStage(
+                                            "content-after",work.dimension(),pos,work.sleepToken(),server);
+                                    return server.injectedChunk(work.dimension(),pos.x,pos.z);
+                                }));
+                        return committed==server.injectedChunk(work.dimension(),pos.x,pos.z)?committed:null;
+                    });
+                    if(!(work.content().applied() ? deltaLightCurrent(key,work,server)
+                            : SleepTerrainClient.acceptPending(key,work.sleepToken()))
+                            || ShadowServerRegistry.getInstance().get()!=server
+                            || server.shadowGeneration()!=io.github.limuqy.mc.hassium.server.RuntimeServerContext.getShadowGeneration()) continue;
+                    if(ownerUnavailable[0]) {
+                        io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.Client.deltaStage(
+                                "owner-unavailable-retry",work.dimension(),pos,work.sleepToken(),server);
+                        // Keep the same bounded work/token. Normal frame pumping can retry;
+                        // do not spin or classify unavailable owner as corrupt DELTA content.
+                        work.content().deferUntil(System.nanoTime()+1_000_000_000L);
+                        pendingDeltas.putIfAbsent(key,work);
+                        continue;
+                    }
+                    if (baseline == null) {
                         // 单柱 delta 失败不得关整台影子端（与 noteSingleColumnFailure 同语义）：
                         // 整端 fail 会连坐 OVD/缓存 publish（test1 R2 ovdLoaded=0 实证）。
                         // 该柱让给原版 tracking / 后续 compare-pull。
@@ -2229,32 +2295,44 @@ public final class ShadowLightCompute {
                         io.github.limuqy.mc.hassium.protocol.ShadowPullClient.clearCompareRequested(work.dimension(), pos);
                         io.github.limuqy.mc.hassium.protocol.ShadowPullClient.requestAuthoritativeFull(work.dimension(), List.of(pos));
                     } else {
-                        invalidateLightAfterContentChange(key);
-                        // 成功应用：部分命中 = 本地缓存整柱基线；分片 = FULL 整段 / BLOCKS 按格折算。
-                        io.github.limuqy.mc.hassium.metrics.NetworkStats.recordCacheDeltaSaved(
-                                io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_CHUNK_BYTES);
-                        net.minecraft.world.level.chunk.LevelChunk baseline =
-                                server.injectedChunk(work.dimension(), pos.x, pos.z);
-                        SleepTerrainClient.injected(key, work.sleepToken(), baseline);
-                        if (!ShadowTrackingSession.isDeliverableToClient(pos.x, pos.z))
-                            Minecraft.getInstance().execute(() -> SleepTerrainClient.haloApplied(key, work.sleepToken()));
-                        int sectionCount = baseline != null ? baseline.getSectionsCount() : 0;
-                        io.github.limuqy.mc.hassium.metrics.NetworkStats.recordCacheShard(
-                                io.github.limuqy.mc.hassium.metrics.NetworkStats.shardEquivBytes(
-                                        io.github.limuqy.mc.hassium.protocol.SectionDeltaS2CPacket.changedCells(
-                                                work.entry().changedSections()),
-                                        sectionCount));
-                        io.github.limuqy.mc.hassium.metrics.NetworkStats.recordSectionDeltaReceived(1,
-                                io.github.limuqy.mc.hassium.metrics.VanillaZlibEstimator.estimate(
-                                        (int) io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_CHUNK_BYTES));
+                        if(freshContent) {
+                            // 成功应用：部分命中 = 本地缓存整柱基线；分片 = FULL 整段 / BLOCKS 按格折算。
+                            io.github.limuqy.mc.hassium.metrics.NetworkStats.recordCacheDeltaSaved(
+                                    io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_CHUNK_BYTES);
+                            SleepTerrainClient.injected(key, work.sleepToken(), baseline);
+                            if (!ShadowTrackingSession.isDeliverableToClient(pos.x, pos.z)) {
+                                io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.Client.haloCommitted(key,work.sleepToken(),server,baseline);
+                                Minecraft.getInstance().execute(() -> SleepTerrainClient.haloApplied(key, work.sleepToken()));
+                            }
+                            int sectionCount = baseline != null ? baseline.getSectionsCount() : 0;
+                            io.github.limuqy.mc.hassium.metrics.NetworkStats.recordCacheShard(
+                                    io.github.limuqy.mc.hassium.metrics.NetworkStats.shardEquivBytes(
+                                            io.github.limuqy.mc.hassium.protocol.SectionDeltaS2CPacket.changedCells(
+                                                    work.entry().changedSections()),
+                                            sectionCount));
+                            io.github.limuqy.mc.hassium.metrics.NetworkStats.recordSectionDeltaReceived(1,
+                                    io.github.limuqy.mc.hassium.metrics.VanillaZlibEstimator.estimate(
+                                            (int) io.github.limuqy.mc.hassium.metrics.NetworkStats.ESTIMATED_CHUNK_BYTES));
+                        }
                         // 区块已变必须重算光。barrier 忙时不得静默丢弃——回队下轮再提交，
                         // 否则 R2「部分命中>0 但光照重算=0」。
+                        if(io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.Client.deferHaloLight(key,work.sleepToken(),server,baseline)) {
+                            // Explicit Forge smoke fixture only: no owner wait and no content retry.
+                            work.content().deferUntil(System.nanoTime()+50_000_000L);
+                            if(pendingDeltas.putIfAbsent(key,work)!=null)
+                                io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.Client.haloRequeueLost(key,work.sleepToken());
+                            continue;
+                        }
                         if (!isChunkBarrierBusy(key)) {
-                            lightTasks.add(new LightTask(key, LightSource.DELTA, null,
+                            lightTasks.add(new LightTask(key, LightSource.DELTA, work,
                                     baseline, server.level(work.dimension()), LightMetric.RECOMPUTE,
                                     false, traceOrigin(TraceOrigin.SECTION_DELTA), work.profile()));
                         } else {
-                            pendingDeltas.put(key, work);
+                            // Content is committed once. A busy LIGHT retry cannot overwrite native tails
+                            // or replace a newer work item that arrived while this commit was queued.
+                            pendingDeltas.putIfAbsent(key, work);
+                            io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.Client.deltaStage(
+                                    "light-only-retry",work.dimension(),pos,work.sleepToken(),server);
                         }
                     }
                 }
@@ -2312,6 +2390,11 @@ public final class ShadowLightCompute {
                 if (inflightLight.containsKey(t.key)) {
                     continue;
                 }
+                // The same token survives a deferred neighbourhood gate as well as a busy retry.
+                if(t.token instanceof DeltaWork delta
+                        && (!deltaLightCurrent(t.key,delta,server) || delta.content().committed()!=t.chunk)) continue;
+                if(t.token instanceof DeltaWork delta)
+                    io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.Client.lightPhase(t.key,delta.sleepToken(),"admitted",t.chunk);
                 // 提交即条件移除（REPLACE 守卫）：已被同 key 新投递覆盖 → 放弃本屏障。
                 switch (t.source) {
                     case PENDING:
@@ -2325,7 +2408,7 @@ public final class ShadowLightCompute {
                         }
                         break;
                     case DELTA:
-                        break; // delta 条目已在 apply 时移除
+                        break; // Content was removed/committed earlier; only LIGHT remains.
                     case GATE:
                         // 占位邻柱 relight 等无队列 token 的任务：提交时无需条件移除
                         break;
@@ -2389,6 +2472,7 @@ public final class ShadowLightCompute {
                                           LightTask t, long deadlineMs) {
         ChunkPos barrierPos = new ChunkPos(DimensionKey.chunkXOf(t.key), DimensionKey.chunkZOf(t.key));
         String barrierDim = DimensionKey.dimensionOf(t.key);
+        server.markLightConfirmation(barrierDim, barrierPos);
         if (t.metric == LightMetric.REUSE_CACHE) {
             probeBarrierReuse.incrementAndGet();
         } else {
@@ -2606,6 +2690,8 @@ public final class ShadowLightCompute {
         if (inflightLight.get(inf.key) != inf || !inf.completionQueued.compareAndSet(false, true)) {
             return false;
         }
+        if(inf.token instanceof DeltaWork delta)
+            io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.Client.lightPhase(inf.key,delta.sleepToken(),"engine-complete",inf.chunk);
         // 【#36】本会话 LIGHT 步已完成（与 I2 无关）：推送门用它，不再依赖 isLightCorrect。
         // 降级放行的柱同样在此置位——它们的光确实算过（只是缺邻，可能偏暗），必须照推。
         lightRan.add(inf.key);
@@ -2664,6 +2750,7 @@ public final class ShadowLightCompute {
         ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(task.key), DimensionKey.chunkZOf(task.key));
         ShadowSeedServer server = ShadowServerRegistry.getInstance().get();
         String dimension = DimensionKey.dimensionOf(task.key);
+        if (server != null) server.markLightConfirmation(dimension, pos);
         if (isSuperseded(task)) {
             // 同柱已有更新的整柱投递在队：本柱不单独回传。
             // 【2026-09-19】原此处以纯光包（pushLightReady）兜底，防「客户端停在 standing 首包欠光
@@ -3027,7 +3114,13 @@ public final class ShadowLightCompute {
             var activeShadow=ShadowServerRegistry.getInstance().get();
             if(activeShadow!=null && activeShadow.injectedChunk(DimensionKey.dimensionOf(key),pos.x,pos.z)!=chunk) return;
             long sleepToken=SleepTerrainClient.snapshotToken(key,chunk);
-            if(sleepToken<0) return;
+            if(sleepToken<0) {
+                if(Boolean.getBoolean("hassium.chunkCoverageDiagnostics"))
+                    io.github.limuqy.mc.hassium.Constants.LOG.info("[CHUNK-COVERAGE] pack-rejected ({}, {}) {} {}",
+                            pos.x,pos.z,columnWorkDiagnostics(key),
+                            io.github.limuqy.mc.hassium.client.PullSnapshotTailClient.columnDiagnostics(key));
+                return;
+            }
             ClientboundLevelChunkWithLightPacket packet;
             long packStart = now();
             packet = withChunkLock(pos, () -> SeedGenChunkCodec.buildPacket(chunk, level));
@@ -3127,8 +3220,16 @@ public final class ShadowLightCompute {
         if (packet == null || dimension == null) {
             return false;
         }
-        int x = packet.getX();
-        int z = packet.getZ();
+        ShadowSeedServer source = ShadowServerRegistry.getInstance().get();
+        return source != null && offerBuiltChunkPacket(dimension,
+                source.injectedChunk(dimension, packet.getX(), packet.getZ()));
+    }
+
+    /** Official B ingress builds current content and captures its identity under one owner/lock boundary. */
+    public static boolean offerBuiltChunkPacket(String dimension, LevelChunk sourceChunk) {
+        if (dimension == null || sourceChunk == null || !isEnabled()) return false;
+        int x = sourceChunk.getPos().x;
+        int z = sourceChunk.getPos().z;
         // B6 统一交付门：与 pushReady 同一判据（ServerVD + 余量 ∪ OVD）
         if (!ShadowTrackingSession.isDeliverableToClient(x, z)) {
             DebugLogger.info(DebugLogger.LogType.LIGHT,
@@ -3144,10 +3245,21 @@ public final class ShadowLightCompute {
             return false;
         }
         long key = DimensionKey.key(dimension, x, z);
+        ShadowSeedServer source = ShadowServerRegistry.getInstance().get();
+        if (source == null || !source.isSameThread()) return false;
+        var built = withChunkLock(sourceChunk.getPos(), () ->
+                io.github.limuqy.mc.hassium.protocol.SnapshotPacketAdmission.buildCurrent(
+                        sourceChunk, source.injectedChunk(dimension, x, z), true,
+                        io.github.limuqy.mc.hassium.client.PullSnapshotTailClient.active(key),
+                        () -> SleepTerrainClient.snapshotToken(key, sourceChunk),
+                        () -> new ClientboundLevelChunkWithLightPacket(sourceChunk,
+                                source.level(dimension).getLightEngine(), null, null)));
+        if (built == null) return false; // Active Pull is delivered by its versioned A path.
+        io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.Client.officialBuilt(built.packet());
         long profile = begin(dimension, key, Source.CACHE);
         ChunkPipelineProfile.ready(profile);
         SmokeChunkTrace.recordShadowReady(dimension, new ChunkPos(x, z));
-        ready.offer(new ReadyItem(packet, false, TraceOrigin.SHADOW_MEMORY_CACHE, 0, profile),
+        ready.offer(new ReadyItem(built.packet(), false, TraceOrigin.SHADOW_MEMORY_CACHE, built.token(), profile),
                 new KeyedPriorityQueue.Key(ChunkPos.asLong(x, z),
                         io.github.limuqy.mc.hassium.concurrent.MainThreadDispatcher.OP_CHUNK_APPLY,
                         dimension),
@@ -3188,9 +3300,6 @@ public final class ShadowLightCompute {
         client().runProbeRecheck(Minecraft.getInstance() == null
                 ? null : Minecraft.getInstance().level);
         ShadowSeedServer server = ShadowServerRegistry.getInstance().get();
-        if (server != null && server.isLightConverged()) {
-            server.confirmLightsCorrectIfConverged();
-        }
         ShadowLightProbe.onEngineTick(); // T3 探针：引擎终态周期快照（debug.lightVerify 门控）
         sweepLightTimeouts(); // per-chunk 光屏障 5s 超时兜底（主扫描点；低帧率由消费轮顶兜底）
         // 齐套门控扫描：邻柱后到 / 超时降级。无新工作时 consumeLoop 不会被 pump，
@@ -3308,7 +3417,13 @@ public final class ShadowLightCompute {
         }
         ChunkPos chunkPos = new ChunkPos(chunkX, chunkZ);
         long chunkKey = DimensionKey.key(entry.key().dimension(), chunkX, chunkZ);
-        if(!SleepTerrainClient.acceptReady(chunkKey,item.sleepToken())) return true;
+        if(!SleepTerrainClient.acceptReady(chunkKey,item.sleepToken())) {
+            if(Boolean.getBoolean("hassium.chunkCoverageDiagnostics"))
+                io.github.limuqy.mc.hassium.Constants.LOG.info("[CHUNK-COVERAGE] apply-rejected ({}, {}) token={} {}",
+                        chunkX,chunkZ,item.sleepToken(),
+                        io.github.limuqy.mc.hassium.client.PullSnapshotTailClient.columnDiagnostics(chunkKey));
+            return true;
+        }
         if(SleepTerrainClient.deferTestApply(chunkKey)) return false;
         client().logShadowChunkApplyEvent("shadow_attempt", chunkPos, item.renderOnly(), item.traceOrigin());
         ShadowClientApi pipeline = client();
@@ -3320,8 +3435,11 @@ public final class ShadowLightCompute {
             pipeline.setApplyInProgress(false);
         }
         if (hasClientChunk(mc, chunkX, chunkZ)) {
+            io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.Client.officialApplied(item.chunkPacket);
             applied(item.profile());
             SleepTerrainClient.applied(chunkKey,item.sleepToken());
+            io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.Client.legacySnapshotApplied(
+                    chunkKey,item.sleepToken(),item.traceOrigin());
             ignoredApplyRetries.remove(chunkKey);
             client().logShadowChunkApplyEvent("shadow_applied", chunkPos, item.renderOnly(), item.traceOrigin());
             shadowApplyEpochs.put(chunkKey, shadowApplyEpoch.incrementAndGet());
@@ -3610,7 +3728,7 @@ public final class ShadowLightCompute {
     private static class LightTask {
         final long key;
         final LightSource source;
-        /** PENDING: 提交的 packet；GENERATED: 提交的 GenEntry；DELTA: null。 */
+        /** PENDING: PendingEntry; GENERATED: GenEntry; DELTA: committed DeltaWork. */
         final Object token;
         final net.minecraft.world.level.chunk.LevelChunk chunk;
         final net.minecraft.server.level.ServerLevel level;

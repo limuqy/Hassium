@@ -29,6 +29,15 @@ public final class ShadowOfficialPacketBridge {
     /** 是否允许桥接（S3；false 时回落 publish 管线）。 */
     public static volatile boolean enabled = true;
 
+    public static boolean forwardChunkToRealClient(net.minecraft.world.level.chunk.LevelChunk chunk, String dimension) {
+        io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.Client.officialAttempt();
+        if (!enabled || chunk == null || dimension == null) return false;
+        Minecraft mc = Minecraft.getInstance();
+        if (mc == null || mc.level == null || mc.getConnection() == null
+                || !dimension.equals(io.github.limuqy.mc.hassium.compat.LevelCompat.getDimensionId(mc.level))) return false;
+        return io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.offerBuiltChunkPacket(dimension, chunk);
+    }
+
     /**
      * 影子端官方包 → 真实客户端。
      * <p>

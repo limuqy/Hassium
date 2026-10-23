@@ -231,6 +231,9 @@ public final class ScenarioEngine {
             case COMMAND -> execCommand(step, mc, now);
             case INPUT -> execInput(step, mc, now);
             case SLEEP -> execSleep(step,mc,now);
+            case PULL_ORDER -> io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.Client.scenarioStep(
+                    step.param("action"),(int)step.longParam("x",3),now-stepStartMs,step.longParam("timeoutMs",15000))
+                    ? Outcome.DONE : Outcome.RUNNING;
             case DIMENSION -> execDimension(step, mc, now);
             case DISCONNECT -> execDisconnect(mc, now);
             case RECONNECT -> execReconnect(step, mc, now);
@@ -578,7 +581,10 @@ public final class ScenarioEngine {
                 if(io.github.limuqy.mc.hassium.compat.ChunkShapeCompat.contains(center.x,center.z,vd,x,z)
                         && !io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.visible(x,z)) {
                     pendingVisible++;
-                    if(pendingColumns.size()<16) pendingColumns.add(x+","+z);
+                    if(pendingColumns.size()<16) pendingColumns.add(x+","+z+" {"+
+                            io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.snapshotState(
+                                    io.github.limuqy.mc.hassium.utils.DimensionKey.key(
+                                            io.github.limuqy.mc.hassium.compat.LevelCompat.getDimensionId(mc.level),x,z))+"}");
                 }
             if(now-stepStartMs>10_000) throw new IllegalStateException("In-place resume timed out: state="+state
                     +" pending="+pendingVisible+" sample="+pendingColumns);
@@ -1061,6 +1067,20 @@ public final class ScenarioEngine {
         io.github.limuqy.mc.hassium.shadow.light.SmokeChunkTrace.Snapshot trace =
                 io.github.limuqy.mc.hassium.shadow.light.SmokeChunkTrace.snapshot(dim);
         return switch (key) {
+            case "pullOrder.passes" -> (long)io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.Client.passes();
+            case "pullOrder.failures" -> (long)io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.Client.failures();
+            case "pullOrder.inflight" -> (long)io.github.limuqy.mc.hassium.client.PullSnapshotTailClient.activeCount();
+            case "pullOrder.targetInflight" -> (long)io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.Client.targetInflight();
+            case "pullOrder.reservedBytes" -> io.github.limuqy.mc.hassium.client.PullSnapshotTailClient.reservedBytes();
+            case "pullOrder.officialLanded" -> (long)io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.Client.officialLanded();
+            case "pullOrder.officialExerciseLanded" -> (long)io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.Client.officialExerciseLanded();
+            case "pullOrder.sameHashFull" -> (long)io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.Client.sameHashFull();
+            case "pullOrder.haloPhases" -> (long)io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.Client.haloPhases();
+            case "pullOrder.nativeFulls" -> (long)io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.Client.nativeFulls();
+            case "pullOrder.responses" -> (long)io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.Client.responses();
+            case "pullOrder.afterReceipts" -> (long)io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.Client.afterReceipts();
+            case "pullOrder.applications" -> (long)io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.Client.applications();
+            case "pullOrder.checks" -> (long)io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.Client.checks();
             case "trace.ovdGenerated" -> (long) io.github.limuqy.mc.hassium.shadow.light.SmokeChunkTrace.ovdGenerated(dim).size();
             case "trace.ovdGeneratedApplied" -> (long) io.github.limuqy.mc.hassium.shadow.light.SmokeChunkTrace.ovdGeneratedApplied(dim).size();
             case "isolation.integrated" -> mc.getSingleplayerServer() != null ? 1L : 0L;

@@ -40,19 +40,19 @@ public class MixinLevelChunk {
             at = @At("RETURN"))
     private void hassium$invalidateAuthorityHash(BlockPos pos, BlockState state, boolean isMoving,
                                                  CallbackInfoReturnable<BlockState> cir) {
-        hassium$invalidateAuthorityHash0(cir);
+        hassium$invalidateAuthorityHash0(pos, cir);
     }
 #else
     @Inject(method = "setBlockState(Lnet/minecraft/core/BlockPos;Lnet/minecraft/world/level/block/state/BlockState;I)Lnet/minecraft/world/level/block/state/BlockState;",
             at = @At("RETURN"))
     private void hassium$invalidateAuthorityHash(BlockPos pos, BlockState state, int flags,
                                                  CallbackInfoReturnable<BlockState> cir) {
-        hassium$invalidateAuthorityHash0(cir);
+        hassium$invalidateAuthorityHash0(pos, cir);
     }
 #endif
 
     @Unique
-    private void hassium$invalidateAuthorityHash0(CallbackInfoReturnable<BlockState> cir) {
+    private void hassium$invalidateAuthorityHash0(BlockPos pos, CallbackInfoReturnable<BlockState> cir) {
         if (cir.getReturnValue() == null) {
             return; // 原版语义：返回 null = 该位置状态未变
         }
@@ -63,6 +63,7 @@ public class MixinLevelChunk {
         if (!(self.getLevel() instanceof ServerLevel level) || level.getServer() instanceof io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer) {
             return;
         }
-        ChunkAuthorityHashes.invalidate(LevelCompat.getDimensionId(level), self.getPos());
+        ChunkAuthorityHashes.invalidateSection(LevelCompat.getDimensionId(level), self.getPos(),
+                self.getSectionIndex(pos.getY()));
     }
 }

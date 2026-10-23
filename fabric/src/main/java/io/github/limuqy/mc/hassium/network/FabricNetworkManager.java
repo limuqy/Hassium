@@ -3,7 +3,6 @@ package io.github.limuqy.mc.hassium.network;
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.compat.HassiumChannels;
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
-import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 import io.github.limuqy.mc.hassium.protocol.AggregationReadyPayload;
 import io.github.limuqy.mc.hassium.protocol.DictionaryManager;
 import io.github.limuqy.mc.hassium.protocol.DictionarySnapshot;
@@ -174,15 +173,24 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
 
     @Override
     public void sendShadowPullRequest(FriendlyByteBuf buf) {
-        if (Minecraft.getInstance().getConnection() != null) {
+        trySendShadowPullRequest(buf);
+    }
+    @Override
+    public boolean trySendShadowPullRequest(FriendlyByteBuf buf) {
+        if(buf==null) return false;
+        boolean[] handedOff={false};
+        try {
+            var minecraft=Minecraft.getInstance();var connection=minecraft.getConnection();
+            return PreparedClientSend.trySend(connection,minecraft::getConnection,
+                    ()->connection.getConnection().isConnected() && buf.isReadable(),()->{
 #if MC_VER < MC_1_21_1
-            ClientPlayNetworking.send(SHADOW_PULL_REQUEST_C2S, buf);
+                ClientPlayNetworking.send(SHADOW_PULL_REQUEST_C2S, buf);
 #else
-            ClientPlayNetworking.send(FabricPayloadRegistry.toPayload(FabricPayloadRegistry.SHADOW_PULL_REQUEST_C2S_TYPE, buf));
+                ClientPlayNetworking.send(FabricPayloadRegistry.toPayload(FabricPayloadRegistry.SHADOW_PULL_REQUEST_C2S_TYPE, buf));
 #endif
-        } else if (buf != null && buf.refCnt() > 0) {
-            buf.release();
-        }
+                handedOff[0]=true;
+            },e->Constants.LOG.warn("Hassium: Failed to send shadowPullV1 request",e));
+        } finally { if(!handedOff[0] && buf.refCnt()>0) buf.release(); }
     }
 
     @Override

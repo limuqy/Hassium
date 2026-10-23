@@ -1,7 +1,6 @@
 package io.github.limuqy.mc.hassium.mixin.server;
 
 import com.mojang.authlib.GameProfile;
-import io.github.limuqy.mc.hassium.server.PlayerCompressionTracker;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.protocol.Packet;
 import net.minecraft.server.level.ServerPlayer;
@@ -60,10 +59,11 @@ public abstract class MixinServerPlayer extends Player {
         if ((io.github.limuqy.mc.hassium.compat.PlayerCompat.getMinecraftServer((ServerPlayer) (Object) this) instanceof io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer)) {
             // S3 接法 B：影子专用服官方包 → 真实客户端（带来源维度，桥侧做维度闸）
             if (chunkPacket != null) {
-                io.github.limuqy.mc.hassium.shadow.track.ShadowOfficialPacketBridge
-                        .forwardToRealClient(chunkPacket,
-                                io.github.limuqy.mc.hassium.compat.LevelCompat
-                                        .getDimensionId(self.level()));
+                var shadow = (io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer)
+                        io.github.limuqy.mc.hassium.compat.PlayerCompat.getMinecraftServer(self);
+                String dimension = io.github.limuqy.mc.hassium.compat.LevelCompat.getDimensionId(self.level());
+                io.github.limuqy.mc.hassium.shadow.track.ShadowOfficialPacketBridge.forwardChunkToRealClient(
+                        shadow.injectedChunk(dimension, pos.x, pos.z), dimension);
             }
             ci.cancel();
             return;

@@ -3,9 +3,7 @@ package io.github.limuqy.mc.hassium.mixin.shadow;
 import io.github.limuqy.mc.hassium.compat.LevelCompat;
 import io.github.limuqy.mc.hassium.compat.ShadowChunkMapCompat;
 import io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer;
-import io.github.limuqy.mc.hassium.server.PlayerCompressionTracker;
 import java.util.concurrent.CompletableFuture;
-import net.minecraft.network.protocol.Packet;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.ChunkPos;
 import net.minecraft.world.level.chunk.ChunkAccess;
@@ -29,12 +27,8 @@ import org.spongepowered.asm.mixin.injection.ModifyVariable;
 import com.mojang.datafixers.util.Either;
 import net.minecraft.server.level.ChunkHolder;
 import net.minecraft.world.level.chunk.ChunkStatus;
-import net.minecraft.world.level.chunk.ImposterProtoChunk;
 #else
-import net.minecraft.server.level.GenerationChunkHolder;
-import net.minecraft.util.StaticCache2D;
 import net.minecraft.world.level.chunk.status.ChunkStatus;
-import net.minecraft.world.level.chunk.status.ChunkStep;
 #endif
 
 /**
@@ -93,18 +87,8 @@ public class MixinChunkMap {
         // 先物化：seedGen defer 分支会写 SeedGenCompareGate，再决定是否桥接
         hassium$notifyShadowMaterialized(chunk);
         // S3 接法 B：官方包桥接真实客户端（awaiting-compare 时 forward 内也会拒）
-        Packet<?> packet = holder != null ? holder.getValue() : null;
-        if (packet == null && lightEngine != null) {
-            // 与 flush 序列化共用 chunkLock：否则 PalettedContainer ThreadingDetector
-            //（pack 线程 vs 本钩子 extractChunkData，1.20.1 实测 s3flyrt）。
-            final var engine = this.lightEngine;
-            packet = io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.withChunkLock(
-                    chunk.getPos(),
-                    () -> (Packet<?>) new ClientboundLevelChunkWithLightPacket(
-                            chunk, engine, null, null));
-        }
         io.github.limuqy.mc.hassium.shadow.track.ShadowOfficialPacketBridge
-                .forwardToRealClient(packet,
+                .forwardChunkToRealClient(chunk,
                         io.github.limuqy.mc.hassium.compat.LevelCompat
                                 .getDimensionId(player.level()));
         ci.cancel();
@@ -314,6 +298,9 @@ public class MixinChunkMap {
 
     @Inject(method = "save(Lnet/minecraft/world/level/chunk/ChunkAccess;)Z", at = @At("RETURN"))
     private void hassium$unlockShadowSave(ChunkAccess chunk, CallbackInfoReturnable<Boolean> cir) {
+        if (!(level.getServer() instanceof ShadowSeedServer) || chunk == null) {
+            return;
+        }
         int depth = hassium$saveLockDepth.get();
         if (depth <= 0) {
             return;

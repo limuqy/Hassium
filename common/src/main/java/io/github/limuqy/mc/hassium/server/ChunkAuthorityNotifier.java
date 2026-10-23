@@ -4,7 +4,6 @@ import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil;
 import io.github.limuqy.mc.hassium.compat.LevelCompat;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
-import io.github.limuqy.mc.hassium.protocol.handshake.LoginCaps;
 import io.github.limuqy.mc.hassium.platform.Services;
 import io.netty.buffer.Unpooled;
 import java.util.ArrayList;
@@ -310,9 +309,7 @@ public final class ChunkAuthorityNotifier {
                 return 0L;
             }
             hashBudget[0]--;
-            sections = ChunkContentHashUtil.sectionHashesToArray(
-                    ChunkContentHashUtil.computeSectionHashes(chunk));
-            ChunkAuthorityHashes.putSections(level, dimension, pos, sections);
+            sections = ChunkAuthorityHashes.resolveSections(level, dimension, chunk);
         }
         return ChunkContentHashUtil.combineSectionHashesFromArray(sections);
     }

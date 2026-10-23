@@ -1,7 +1,6 @@
 package io.github.limuqy.mc.hassium.client;
 
 import io.github.limuqy.mc.hassium.platform.client.TraceOrigin;
-import io.github.limuqy.mc.hassium.shadow.light.ShadowVanillaLightPipeline;
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.metrics.NetworkStats;
 import io.github.limuqy.mc.hassium.utils.DebugLogger;
@@ -13,11 +12,6 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.SectionPos;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.LightLayer;
-
-
-import java.util.List;
-
-
 
 /**
  * 客户端区块处理器门面（Phase 0 隔离重构后）。
@@ -113,14 +107,24 @@ public class ClientChunkHandler {
         net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
         net.minecraft.client.multiplayer.ClientPacketListener listener = mc.getConnection();
         var sourceLevel = mc.level;
-        if (listener == null) {
+        if (listener == null || sourceLevel == null) {
             return false;
         }
         mc.execute(() -> {
+            long key = io.github.limuqy.mc.hassium.utils.DimensionKey.key(
+                    io.github.limuqy.mc.hassium.compat.LevelCompat.getDimensionId(sourceLevel), packet.getX(), packet.getZ());
             try {
                 if (mc.getConnection() != listener || mc.level != sourceLevel || !current.getAsBoolean()) return;
                 beforeApply.run();
-                if (nbtRepair && io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.shouldInterceptVanillaChunks()) {
+                boolean direct = io.github.limuqy.mc.hassium.client.PullSnapshotTailClient.mustApplyDirect(key);
+                if (direct) {
+                    var pipeline = ClientChunkPipeline.getInstance();
+                    boolean previous = pipeline.isApplyInProgress();
+                    pipeline.setApplyInProgress(true);
+                    try { listener.handleLevelChunkWithLight(packet); }
+                    finally { pipeline.setApplyInProgress(previous); }
+                    io.github.limuqy.mc.hassium.client.PullSnapshotTailClient.directlyApplied(key);
+                } else if (nbtRepair && io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.shouldInterceptVanillaChunks()) {
                     io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.submitVisible(
                             io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.currentDimension(),
                             new ChunkPos(packet.getX(), packet.getZ()), packet, TraceOrigin.REMOTE_PULL, true);
@@ -128,6 +132,10 @@ public class ClientChunkHandler {
                     markPullApply(packet.getX(), packet.getZ());
                     listener.handleLevelChunkWithLight(packet);
                 }
+            } catch (Throwable failed) {
+                Constants.LOG.warn("[SHADOW_PULL] FULL ingestion failed ({}, {})", packet.getX(), packet.getZ(), failed);
+                if (mc.level == sourceLevel && mc.getConnection() == listener && current.getAsBoolean())
+                    io.github.limuqy.mc.hassium.client.PullSnapshotTailClient.fallbackToNative(key);
             } finally { ingested.run(); }
         });
         return true;

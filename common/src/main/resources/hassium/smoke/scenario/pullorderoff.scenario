@@ -1,0 +1,37 @@
+join label=PULL_ORDER_OFF_JOIN since=start timeoutMs=120000
+wait ms=15000
+command text="gamemode creative"
+command text="fill -16 139 -16 16 139 16 bedrock"
+command text="tp @s 0.5 140 0.5 0 20"
+command text="gamerule doMobSpawning false"
+command text="gamerule randomTickSpeed 0"
+command text="fill 48 100 0 63 139 15 stone"
+command text="setblock 50 140 6 stone"
+command text="setblock 51 140 6 oak_sign"
+command text="setblock 52 140 6 stone"
+wait ms=20000
+pullOrder action=b timeoutMs=15000
+assertProbe key=pullOrder.officialLanded op=ge value=1
+assertProbe key=pullOrder.officialExerciseLanded op=ge value=1
+assertProbe key=pullOrder.failures op=eq value=0
+pullOrder action=request x=3
+pullOrder action=chain x=3 timeoutMs=15000
+assertProbe key=pullOrder.responses op=ge value=1
+assertProbe key=pullOrder.afterReceipts op=ge value=1
+assertProbe key=pullOrder.applications op=ge value=1
+assertProbe key=pullOrder.checks op=ge value=1
+assertProbe key=pullOrder.passes op=ge value=1
+assertProbe key=pullOrder.nativeFulls op=ge value=1
+assertProbe key=pullOrder.failures op=eq value=0
+pullOrder action=quiescent timeoutMs=15000
+assertProbe key=pullOrder.targetInflight op=eq value=0
+assertProbe key=pullOrder.inflight op=eq value=0
+assertProbe key=pullOrder.reservedBytes op=eq value=0
+dump label=ROUND1 round=1 world=true
+wait ms=3000
+pullOrder action=quiescent timeoutMs=15000
+assertProbe key=pullOrder.targetInflight op=eq value=0
+assertProbe key=pullOrder.inflight op=eq value=0
+assertProbe key=pullOrder.reservedBytes op=eq value=0
+dump label=ROUND2 round=2 world=true
+exit rounds=2

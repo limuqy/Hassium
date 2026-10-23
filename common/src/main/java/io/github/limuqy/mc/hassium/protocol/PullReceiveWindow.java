@@ -18,10 +18,14 @@ final class PullReceiveWindow<T> {
         this.capacity = capacity; this.deferredCapacity = deferredCapacity;
     }
     synchronized boolean offer(long key, T value) {
-        if (active.containsKey(key) || deferred.containsKey(key)) return true;
-        if (deferred.size() >= deferredCapacity) return false;
+        return offerStatus(key,value)!=Offer.FULL;
+    }
+    enum Offer { ADDED, EXISTING, FULL }
+    synchronized Offer offerStatus(long key,T value) {
+        if (active.containsKey(key) || deferred.containsKey(key)) return Offer.EXISTING;
+        if (deferred.size() >= deferredCapacity) return Offer.FULL;
         deferred.put(key, value);
-        return true;
+        return Offer.ADDED;
     }
     synchronized List<Admission<T>> drain() {
         List<Admission<T>> result = new ArrayList<>();
@@ -69,8 +73,22 @@ final class PullReceiveWindow<T> {
         });
         return expired;
     }
-    synchronized void cancel(long key) { deferred.remove(key); active.remove(key); }
+    synchronized T cancel(long key) {
+        T queued=deferred.remove(key); Active<T> removed=active.remove(key);
+        return removed==null?queued:removed.admission.value();
+    }
+    /** Reject an unsent prepared intent without touching a replacement admission. */
+    synchronized boolean discard(long key,long token) {
+        if(!matchesAdmission(key,token)) return false;
+        active.remove(key); return true;
+    }
     synchronized boolean queued(long key) { return deferred.containsKey(key); }
+    synchronized String diagnostics(long key) {
+        Active<T> slot = active.get(key);
+        return "queued=" + deferred.containsKey(key) + (slot == null ? " receive=none"
+                : " request=" + slot.requestId + " received=" + slot.received
+                    + " receiveAgeMs=" + (System.nanoTime() - slot.sentAt) / 1_000_000L);
+    }
     synchronized List<Admission<T>> active() { return active.values().stream().map(Active::admission).toList(); }
     synchronized void clear() { deferred.clear(); active.clear(); }
 }

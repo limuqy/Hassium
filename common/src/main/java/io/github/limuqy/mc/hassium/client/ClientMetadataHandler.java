@@ -35,6 +35,13 @@ public class ClientMetadataHandler {
      */
     public static void forwardBlockUpdate(net.minecraft.network.protocol.Packet<?> packet) {
         Minecraft mc = Minecraft.getInstance();
+        // These HEAD hooks also run on Netty before vanilla's ensureRunningOnSameThread.
+        // Only the render-owner invocation has passed the snapshot fence. Mirroring the
+        // first invocation would mutate shadow state before capture and duplicate replay.
+        if (!mc.isSameThread()) {
+            io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.Client.packetStage("off-owner-not-mirrored",null,packet);
+            return;
+        }
         if (mc.player == null || mc.level == null) {
             return;
         }
@@ -48,6 +55,7 @@ public class ClientMetadataHandler {
         }
         try {
             io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.noteBlockUpdateForwarded();
+            io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.Client.packetStage("mirror-queued",currentDimension(mc),packet);
             server.applyBlockUpdate(currentDimension(mc), packet);
         } catch (Throwable ignored) {
             // 纯转发：转发异常不得影响 vanilla 包处理（防恶意包）

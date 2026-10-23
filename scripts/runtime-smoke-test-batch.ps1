@@ -31,7 +31,10 @@ param(
     [int]$ReconnectDelayMs = 3000,
     # classic 口径：滑块 = Vd1 = 20；OVD 仍由 chunk.maxRenderDistance=16 钳制
     [int]$ClientRenderDistance = 20,
-    [string]$SessionSuffix
+    [string]$SessionSuffix,
+    [ValidateSet('Auto','Required','Off')][string]$CpuIsolation = 'Auto',
+    [ValidateRange(0,63)][int]$ServerCcd = 0,
+    [ValidateRange(0,63)][int]$ClientCcd = 1
 )
 
 $ErrorActionPreference = "Continue"
@@ -190,6 +193,7 @@ function Invoke-Session {
             ServerReadyTimeoutSec = $ServerReadyTimeoutSec; ClientTimeoutSec = $ClientTimeoutSec
             DelayMs = $DelayMs; ReconnectDelayMs = $ReconnectDelayMs
             ClientRenderDistance = $ClientRenderDistance
+            CpuIsolation = $CpuIsolation; ServerCcd = $ServerCcd; ClientCcd = $ClientCcd
         }
         if ($Scenario -ne "classic") { $sessionArgs.Scenario = $Scenario }
         # 单会话脚本用 Write-Host + exit，不会把 "PASS" 写回管道。
@@ -374,14 +378,15 @@ foreach ($entry in $scenarioPlan) {
             Write-Host "[$jobName] 启动进程 (port=$port, ReuseWorld)..."
 
             $procArgs = @(
-                "-NoProfile", "-ExecutionPolicy", "Bypass",
+                "-ExecutionPolicy", "Bypass",
                 "-File", $scriptPath,
                 "-Ver", $ver, "-Loader", $loader, "-Phase", $Phase,
                 "-SessionId", $jobName,
                 "-ServerPort", $port,
                 "-ServerReadyTimeoutSec", $ServerReadyTimeoutSec,
                 "-ClientTimeoutSec", $ClientTimeoutSec,
-                "-ClientRenderDistance", "$ClientRenderDistance"
+                "-ClientRenderDistance", "$ClientRenderDistance",
+                "-CpuIsolation", $CpuIsolation, "-ServerCcd", "$ServerCcd", "-ClientCcd", "$ClientCcd"
             )
             if ($scenario -ne "classic") {
                 $procArgs += @("-Scenario", $scenario)

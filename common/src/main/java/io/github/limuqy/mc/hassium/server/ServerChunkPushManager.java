@@ -95,6 +95,7 @@ public class ServerChunkPushManager {
         boolean ticketed;
         long ticketNanos;
         volatile io.github.limuqy.mc.hassium.concurrent.WorkBudget<UUID>.Lease work;
+        PullSnapshotTailServer.Token updateTail;
 
         PendingPull(ServerPlayer player, ServerLevel level, String dimension,
                     ShadowPullRequestC2SPacket.Entry entry, long requestId, long epoch) {
@@ -402,7 +403,8 @@ public class ServerChunkPushManager {
         }
         // Reserve before allocating detached sections, packet data or NBT. Count and estimated
         // bytes cover the worker AND the main-thread response mailbox until send/discard.
-        long estimate = Math.min(32L << 20, (64L << 10) + chunk.getSections().length * (32L << 10)
+        long estimate = Math.min(32L << 20, io.github.limuqy.mc.hassium.protocol.ColumnSnapshotFence.RESERVATION_BYTES
+                + (64L << 10) + chunk.getSections().length * (32L << 10)
                 + chunk.getBlockEntitiesPos().size() * (8L << 10));
         pending.work = encodeBudget.tryAcquire(pending.player().getUUID(), estimate);
         if (pending.work == null) { count(true, Counter.BACKPRESSURE_DEFERRED); return false; }
@@ -411,6 +413,7 @@ public class ServerChunkPushManager {
             boolean nbtSupported = ServerHandshakeActivation.hasCaps(pending.player().getUUID(),
                     io.github.limuqy.mc.hassium.protocol.handshake.LoginCaps.PULL_NBT);
             long preparationStart = now();
+            io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.beforeCompare(pending.player(), chunk);
             ComparedPull compared = comparePull(pending.entry(), chunk, level, nbtSupported);
             ClassifiedPull classified = PullPacingValve.prepareIfAdmitted(compared.unchanged(), unchangedLeft, fullLeft,
                     () -> preparePull(pending.entry(), chunk, level, nbtSupported, compared, fullLeft));
@@ -431,10 +434,18 @@ public class ServerChunkPushManager {
                 return true;
             }
             lastCompletedUnchanged = false;
+            pending.updateTail = PullSnapshotTailServer.begin(pending.player(),
+                    pending.entry().chunkX(), pending.entry().chunkZ(), pending.requestId());
+            if (pending.updateTail == null) {
+                releaseDemandTicket(pending); unqueuePull(pending);
+                return true; // A newer same-column request already owns delivery.
+            }
             releaseDemandTicket(pending);
             unqueuePull(pending);
             io.github.limuqy.mc.hassium.server.sleep.SleepTerrainServer.snapshot(pending.player(),
                     pending.entry().chunkX(),pending.entry().chunkZ(),pending.requestId());
+            io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.captured(pending.player(),
+                    pending.entry().chunkX(), pending.entry().chunkZ(), pending.requestId());
             submitEncodedPull(pending, classified, level.registryAccess());
             handedOff = true;
             return true;
@@ -525,9 +536,7 @@ public class ServerChunkPushManager {
         ChunkPos pos = chunk.getPos();
         long[] sectionHashArray = ChunkAuthorityHashes.getSections(dimension, pos);
         if (sectionHashArray == null) {
-            sectionHashArray = ChunkContentHashUtil.sectionHashesToArray(
-                    ChunkContentHashUtil.computeSectionHashes(chunk));
-            ChunkAuthorityHashes.putSections(level, dimension, pos, sectionHashArray);
+            sectionHashArray = ChunkAuthorityHashes.resolveSections(level, dimension, chunk);
         }
         long chunkHash = ChunkContentHashUtil.combineSectionHashesFromArray(sectionHashArray);
         List<Long> sectionHashList = new ArrayList<>(sectionHashArray.length);
@@ -569,7 +578,8 @@ public class ServerChunkPushManager {
         }
         SectionDeltaColumnSnap deltaSnap = null;
         if (!entry.sectionHashes().isEmpty()
-                && HassiumConfigService.getInstance().isSectionDeltaEnabled()) {
+                && HassiumConfigService.getInstance().isSectionDeltaEnabled()
+                && !PullDeltaAdmission.mustUseFull(sectionHashList, entry.sectionHashes(), entry.planes())) {
             long deltaStart = now();
             deltaSnap = snapshotSectionDeltaColumn(chunk);
             elapsed(Source.SERVER, Stage.DELTA_SNAPSHOT, deltaStart);
@@ -586,6 +596,7 @@ public class ServerChunkPushManager {
     }
 
     private static void releaseWork(PendingPull pending) {
+        PullSnapshotTailServer.discard(pending.updateTail);
         if (pending.work != null) pending.work.close();
     }
 
@@ -608,6 +619,8 @@ public class ServerChunkPushManager {
             elapsed(Source.SERVER, Stage.ENCODE_WAIT, encodeQueued);
             long encodeStart = now();
             try {
+                io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.awaitWorker(
+                        pending.entry().chunkX(), pending.entry().chunkZ(), pending.requestId());
                 ShadowPullResponseS2CPacket.Result result = encodeClassifiedPull(pending, classified, entry, registryAccess);
                 elapsed(Source.SERVER, Stage.ENCODE_WALL, encodeStart);
                 if (pending.player() == null || pending.player().hasDisconnected()) {
@@ -676,8 +689,24 @@ public class ServerChunkPushManager {
             if (pending.work != null && !pending.work.active()) return;
             if (!io.github.limuqy.mc.hassium.protocol.ShadowPullServer.isCurrentSession(player, pending.connection)
                     || PlayerCompat.getServerLevel(player) != pending.level()) return;
+            if (!io.github.limuqy.mc.hassium.protocol.ShadowPullRequestValidator.inRange(pending.entry(),
+                    player.chunkPosition().x, player.chunkPosition().z,
+                    PlayerCompat.getViewDistance(player) + io.github.limuqy.mc.hassium.protocol.ShadowPullRadii.AUTHORITY_MARGIN)) return;
+            if (pending.updateTail != null && !PullSnapshotTailServer.current(pending.updateTail)) return;
             if(!io.github.limuqy.mc.hassium.server.sleep.SleepTerrainServer.responseAllowed(player,
                     pending.entry().chunkX(),pending.entry().chunkZ(),pending.requestId())) return;
+            if (pending.updateTail != null && PullSnapshotTailServer.overflowed(pending.updateTail)
+                    && result.kind() != ShadowPullResponseS2CPacket.Kind.ERROR) {
+                // The original updates were already live. Never replay a truncated history over them.
+                enqueuePendingPull(player, pending.level(), new ShadowPullRequestC2SPacket(
+                        pending.dimension(), pending.epoch(), pending.requestId(), List.of(pending.entry())),
+                        pending.entry(), pending.dimension());
+                return;
+            }
+            var updateTail = pending.updateTail == null || result.kind() == ShadowPullResponseS2CPacket.Kind.ERROR
+                    ? List.<io.github.limuqy.mc.hassium.compat.PacketCodecCompat.CapturedPacket>of()
+                    : PullSnapshotTailServer.finish(pending.updateTail);
+            if (updateTail == null) return;
             ShadowPullResponseS2CPacket response = new ShadowPullResponseS2CPacket(
                     pending.dimension(), pending.epoch(), pending.requestId(), List.of(result));
             FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
@@ -689,6 +718,9 @@ public class ServerChunkPushManager {
                 // 所有权已转移：fabric send 直接持有 buf（不在此释放），
                 // forge/neoforge 实现内部已拷贝并释放。
                 handedOff = true;
+                for (var update : updateTail) player.connection.send(update.restore(pending.level().registryAccess()));
+                io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.sent(player,
+                        pending.entry().chunkX(), pending.entry().chunkZ(), pending.requestId(), result.kind(), updateTail.size());
             } finally {
                 if (!handedOff && buf.refCnt() > 0) {
                     buf.release();
@@ -791,6 +823,7 @@ public class ServerChunkPushManager {
             return;
         }
         ensureInitialized();
+        io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.tick(server);
         pumpPendingPulls();
         ChunkAuthorityNotifier.onServerTick(server);
     }
@@ -1057,6 +1090,7 @@ public class ServerChunkPushManager {
     }
 
     public void removePlayer(UUID playerId) {
+        PullSnapshotTailServer.removePlayer(playerId);
         if (pushPool != null) {
             for (Runnable task : pushPool.getQueue()) {
                 if (task instanceof PushJob job && job.pending.player().getUUID().equals(playerId)
@@ -1087,6 +1121,8 @@ public class ServerChunkPushManager {
         pullQueues.clear();
         pullQueuedKeys.clear();
         demandTicketRefs.clear();
+        PullSnapshotTailServer.clear();
+        io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.clear();
         initialPlayerChunkPos.clear();
         playerLightComputeSupported.clear();
         if (pushPool != null) {

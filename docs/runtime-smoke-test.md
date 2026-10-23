@@ -69,6 +69,8 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 | `-PregenOnly` | 否 | false | **已退役**。传入时跳过，不再起服预生成 / 恢复 `pregen-world` |
 | `-SmokeHost` | 否 | 空 | 客户端连服完整地址（如 `127.0.0.1:25566`）；指定后优先于 `-ServerPort` |
 | `-ServerPort` | 否 | `25565` | 服务端监听端口（并行模式由 batch 脚本分配：fabric=BasePort, neoforge=BasePort+1） |
+| `-CpuIsolation` | 否 | `Auto` | Windows 按真实 L3 共享域隔离双端；`Required` 无法隔离时直接失败，`Off` 关闭。batch 同名参数透传 |
+| `-ServerCcd` / `-ClientCcd` | 否 | `0` / `1` | 按 L3 mask 升序编号的共享域。Ryzen 双 CCD 主机对应 CCD0/CCD1，编号不按逻辑核总数猜测 |
 | `-DelayMs` | 否 | `10000` | 进世界后等待毫秒（classic ROUND1 窗口=DelayMs×2=20s，ROUND2=max(3000, DelayMs)） |
 | `-ReconnectDelayMs` | 否 | `3000` | 第一轮断开后到重连的毫秒 |
 | `-JoinTimeoutMs` | 否 | `0`（→ Java 侧 120s） | 客户端进服等待超时；调大 `-DelayMs` 时须同步调大 |
@@ -82,6 +84,25 @@ Hassium 跨版本（1.20.1–1.21.11）× 多加载器（fabric / neoforge）的
 | `-SmokePhases` | 否 | `classic` | Java 侧阶段：`classic`（经典两轮）/ `pregen`（预生成，经 `-PregenOnly` 使用） |
 | `-ManualLogout` | 否 | false | ROUND1 断开改走真实手动登出路径（`Minecraft.disconnect(Screen[,Z])` / `clearLevel`），验证手动登出光照/方块落盘 |
 | `-DryRun` 类遗留参数 | 已删除 | — | UdpFailover / Nginx 相关参数已随退役链路整体删除（见文末「退役说明」） |
+
+### MSPT 与 CCD 隔离
+
+双 CCD 测试机默认将服务端放 CCD0、客户端（含影子端及 observer）放 CCD1；在创建 Gradle 启动进程前设置亲和性，单次 daemon、游戏 JVM 和其工作线程继承限制。启动后校验本会话游戏 JVM 的实际 mask；拓扑、PID 和验证结果写入 `results/cpu-isolation_<SessionId>.json` 及结果的 `CpuIsolation` 字段，校验失败使本场 FAIL。`Auto` 在单 L3/不支持的拓扑上明确记录未隔离原因；正式性能对照使用 `Required`。
+
+本机 Ryzen 9 8940HX 实测两个 32 MiB L3 域：CCD0 为逻辑 CPU 0–15（mask `0xFFFF`），CCD1 为 16–31（`0xFFFF0000`），各含 8 个物理核及 SMT。其他机器必须重新探测。当前实现支持 Windows x64 单 processor group；不将 NUMA 节点直接当成 CCD。隔离减少双端争抢核心和 L3，仍共享内存带宽、封装功耗与温度预算。
+
+```pwsh
+.\scripts\smoke\describe-cpu-isolation.ps1 -Policy Required
+.\scripts\runtime-smoke-test.ps1 -Ver 1.20.1 -Loader forge -Phase I -SessionId 'ccd_1201_forge' -CpuIsolation Required
+```
+
+服务端性能以 **MSPT（tickServer 墙钟耗时）mean / P50 / P95 / P99、超过 50 ms 的 tick 数**为主要判断，结合 TPS、包量、区块覆盖与交付排队；CPU 占用仅作辅助诊断。`scripts/spark-benchmark.py` 同样默认 `--cpu-isolation Auto --server-ccd 0 --client-ccd 1`，正式对照加 `--cpu-isolation Required`，并将拓扑写入每臂 `inputs.json`、实际 mask 写入 `result.json`。`spark-report.py` 保留原有字段并增加显式 MSPT 字段；该口径不包含 tickServer 外的主线程任务，也不把客户端 frame 当 MSPT。普通正确性 smoke 不额外安装性能插桩。
+
+旧八场 frozen-v3 未隔离 CCD，保留原始制品和结果；不能与隔离后的新场混算。新对照的前后组必须使用同一拓扑、亲和性、JVM 并行度、预热与场景设置；跨轮比较也须注明这些条件。
+
+排查持续缺柱时，可在客户端 JVM 添加 `-Dhassium.chunkCoverageDiagnostics=true`（默认关闭）。`[CHUNK-COVERAGE]` 每秒记录实际持柱与原版形状预期数，并对最多 32 个缺柱列出 compare 请求/去重、NBT 提交、光照队列和快照围栏状态；失败、交付拒绝与失活 compare 的重试另记边沿。客户端持柱在 Render 读取，活影子柱状态在影子主循环读取。该开关用于正确性诊断，开启后的耗时不作为正常性能数据。实例见 [Forge 覆盖排查](handoff/spark-optimization-20261023/forge-coverage-fix.md)。
+
+2026-10-23 工具验收：Windows 真实子孙进程继承、CCD 交换、失败启动后父进程恢复等四项检查通过；PowerShell 参数保留/失败恢复检查通过；新报告对历史原始数据的独立副本复算通过。[Forge 1.20.1 两轮冒烟](../build/smoke-test/results/result_ccd_isolation_1201_forge_20261023_1.json)与 [NeoForge 1.21.1 两轮冒烟](../build/smoke-test/results/result_ccd_isolation_1211_neo_20261023_1.json)均 PASS，实际服务端/客户端 mask 分别为 `0xFFFF` / `0xFFFF0000`，无 affinity failure。随后完成两版新的八场 CCD 性能 ABBA，结果与工作量/尾延迟限制见[优化验证报告](handoff/spark-optimization-results-20261023.md)。
 
 ### 批量参数（`scripts/runtime-smoke-test-batch.ps1`）
 

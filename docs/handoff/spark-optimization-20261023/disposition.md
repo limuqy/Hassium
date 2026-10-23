@@ -1,0 +1,40 @@
+# Spark 主线程候选处置覆盖表（2026-10-23）
+
+本文把 [基线报告](../spark-main-thread-20261023.md) 的主线程优化及异步候选逐项映射到实现代理交付、审查结论和最终验收。占比是线程墙钟采样归因，包含下游调用；父子节点不相加，也不等于 CPU 成本或可回收收益。8 个正式基线场次不代表优化后复测。
+
+最终源状态的两重点版本构建、指定回归、正确性 runtime 与八场性能对照已完成，结果经独立最终复核接受。下表保留未扩展的研究项与各场次的验收边界。**已实施**表示实现及规定验证已完成；**保持**表示评估后保留现状或已有机制；**部分实施**表示仅实现安全子集，剩余项需专门证据。性能改善与实测权衡见[总报告](../spark-optimization-results-20261023.md)。
+
+| 原报告候选 | 最终处置 | 负责交付 / 依据 | 仍需的最终验收 |
+|---|---|---|---|
+| 客户端光照收敛后的全表确认（均值 2.367%，最大 2.798%） | **已实施**：renderer 每帧全表检查改为影子主循环有界脏票确认；同柱合并、容量上限、overflow 增量扫描及跨轮公平轮换保留重试。LightNeighborhoodGate、3×3 完整性、surface 判据、推送门及落盘语义保留。 | [light-client.md](light-client.md)，R1/R10/R11 与最终场次见 [review.md](review.md)。 | 两重点版本测试通过；双版屋檐/洞穴移动光照场景通过，Forge R13 strict-gated 延后 LIGHT halo 场景证明尾部完成后同一凭据仍可获准；R10 有界 quiescence 和资源门通过。冻结性能 after 两臂均无 overflow/API 错误。Neo after movement_load 末尾各有一票约 0.30s，identity/state/reason 未记录，不能称为结清。 |
+| 服务端实体 pacing 配置解析（build 均值 0.670%，最大 0.830%） | **已实施**：按不可变 HassiumConfig 身份缓存解析结果；配置对象替换后重建，server clear 释放旧引用。网络 gate、密度、包数及压力仍逐 tick 更新。 | [small-hotpaths.md](small-hotpaths.md)，T3 审查见 [review.md](review.md)。 | EntityPacingConfigCache 两锚点回归、Forge/NeoForge 编译通过；冻结 v3 压力包量前后相当。 |
+| Pull 比较未命中时整柱 section hash 重算（均值 0.153%，最大 0.211%） | **已实施**：按 `setBlockState` section dirty 增量刷新；dirty 段不命中，捕获期间失效/clear/淘汰拒绝旧结果；共享缓存保持有界。 | [server-pull.md](server-pull.md) T2 实现与审查。 | 两锚点 cache/admission 及相关 hash、planner、packet、session、WorkBudget 回归通过；两版 runtime 的 FULL/DELTA 内容与序次通过。直接绕开 `setBlockState` 的第三方 section 写仍是明确覆盖限制。 |
+| 对 detached Pull 快照异步 hash | **保持同步**：主线程/所有者捕获仍是正确性边界，增量失效已直接削减工作；当前采样收益证据弱。没有把活动 PalettedContainer 交给 worker。 | [server-pull.md](server-pull.md) T2 逐项处置；异步边界见基线报告。 | 若将来重开，需先量化 hash miss 及整体线程/worker 排队成本；只允许对所有者捕获的独立快照做纯计算，并在返回时核对 session、dimension、column revision/token。不得等待 worker 或发布陈旧结果。 |
+| UNCHANGED 路径的 BlockEntity NBT 纯字节编码 | **保持同步**：读取活跃 BlockEntity update-tag 仍在所有者线程，拆分编码会扩大旧快照覆盖 NBT-only 更新的窗口；当前没有密集 BE 画像。 | [server-pull.md](server-pull.md) T2 逐项处置与 T7 快照尾部说明。 | 只有密集 BlockEntity/NBT 更新场景显示主线程成本后，才评估把独立 NBT 副本的纯编码交给既有有界工作池；需验证旧 session 丢弃、同柱包序、更新尾部和 ACK。原版 BlockEntity 状态不能任意后台读取或应用。 |
+| DELTA 与 FULL 重复准备 | **部分实施**：`PullDeltaAdmission` 在 hash/planes 已证明达到 75% FULL 回退阈值时跳过必失败 DELTA 快照准备；其余仍走原路径，未用缺字段的共享表示替代 FULL。 | [server-pull.md](server-pull.md) T2 与独立审查。 | admission 阈值/空柱/随机 planner 回归、两锚点构建和 FULL/DELTA 正例通过。可能成功的 DELTA 与 FULL 通用快照复用仍未实施；当前无证据支持增加内容表示复杂度。 |
+| 既有 Pull worker、队列与 WorkBudget | **保持有界异步设计**：DELTA 规划/编码和 FULL ZSTD 在 worker；租约跨 worker→owner 邮箱释放，无主线程 get/join。T7 增加同柱快照 fence 与 native 更新尾部顺序，修正旧快照覆盖较新 block/BE 更新的基线正确性缺陷。 | [server-pull.md](server-pull.md) T2/T7；R2–R13 见 [review.md](review.md)。 | 双版 FULL legacy 有效负对照、FULL/DELTA 正例、same-hash、off/fail、sleepresume、dimension、移动光照和 Forge strict halo 已按限定场景验收；两锚点测试/编译/版本扫描通过。DELTA legacy 负例未运行。R9 前错关联 PASS 已撤回；R10 旧 global=6 场未证明身份/释放，不作为 PASS，后续稳定 quiescence 场已提供新的有效证据。 |
+| EntityDensityIndex.rotate（均值 0.189%，最大 0.277%） | **保持双缓冲**：交换前后 fastutil map 并清空复用页，避免每 tick 重分配；逐 level 翻页定义上一 tick 输入。没有安全证据支持省略状态、改事件维护或并行翻页。 | [small-hotpaths.md](small-hotpaths.md)，T3 审查见 [review.md](review.md)。 | 不要求新增实现。最终回归应确保 tick 起点翻页及 clear 生命周期未改变；如未来按 level 事件清理，需证明 level 销毁与 shadow 生命周期不会漏删/串页。 |
+| EntityPacketCounters.drainGameInto（均值 0.133%，最大 0.217%） | **保持**：复用输出 Map，保留并发计数表遍历、游戏态筛选与每连接 `getAndSet(0)` 的 tick 切面。改为后台归集或另一份连接集合没有足够收益依据，可能改变边界计数。 | [small-hotpaths.md](small-hotpaths.md)，T3 审查见 [review.md](review.md)。 | 不要求新增实现；压测需继续检查跨 tick 计数、connection forget/clear 和原版客户端覆盖。不要为小额归集加任务队列。 |
+| EntityPressureBook.retainOnly（均值 0.047%，最大 0.072%） | **保持**：每 tick 以当帧实测的游戏态观察者集合清理离线/无有效计数观察者；账本按玩家规模。事件式清理需额外连接到玩家映射及注销路径，收益不足。 | [small-hotpaths.md](small-hotpaths.md)，T3 审查见 [review.md](review.md)。 | 不要求新增实现；重连、断线、无有效计数连接和 server clear 应保持账本不留旧状态。 |
+| MixinChunkMap 保存 RETURN 解锁（仅 Forge 两份 profile 采到，均值 0.121%，峰值 0.487%） | **已实施**：RETURN 先排除非影子服务端/空 chunk，再读 ThreadLocal 深度；shadow 减深度并对同一柱成对解锁，保留重入锁。 | [small-hotpaths.md](small-hotpaths.md)，T3 审查见 [review.md](review.md)。 | Forge/NeoForge 编译和成对锁源码复核通过。采样峰值是局部 ThreadLocal 首次访问，不是存盘等待；没有单独声称该微调有可测性能收益。 |
+| 客户端 `applyReadyChunk` 重复落地（均值 0.060%，最大 0.092%，self=0） | **保持现有合并**：`KeyedPriorityQueue.REPLACE` 合并未落地的同柱同操作，消费前检查 current；不按坐标吞掉后续 LIGHT/权威快照、sleep 恢复或 BE 更新。 | [light-client.md](light-client.md) “其余客户端候选”。 | 双版 FULL/DELTA、sleep/resume、same-hash、光照场景已通过其限定的实际顺序与覆盖断言。该旧采样全在下游原版方法，不能当 wrapper 自耗。 |
+| 全柱 `markChunkSectionsDirty`（均值 0.0099%，最大 0.0198%，self=0） | **保持**：整柱包可携 section、heightmap、光照变化；没有准确 changed-section 清单，未证明局部 dirty 可保持边界正确。 | [light-client.md](light-client.md) “其余客户端候选”。 | 双版移动屋檐/洞穴光照运行覆盖通过；没有把标脏缩到局部或异步化。未来若优化，仍需实测重复标脏与 mesh 边界/邻柱依赖。 |
+| 客户端 NBT 快照与应用异步化 | **保持已有 `AsyncSnapshotCommit` 所有权链**：可见世界更新按包序在 render owner 应用；影子提交转 shadow owner，成功后再 ACK/发布并核 session、level、baseline、token。未把活跃 BE 读取或世界写入交给 worker。 | 基线报告异步评估；T7 边界见 [server-pull.md](server-pull.md)。 | sleep/resume、same-hash、完整尾部、BE 状态与 ACK 场景通过；其他 NBT 专项无密集 BE 性能画像，不增加纯编码 worker。 |
+| Tracking 状态发布（均值 0.0156%，最大 0.0593%） | **保持已有所有权拆分**：render/client tick 捕获位置朝向等轻快照；柱选择与簿记在影子主循环消费。 | [light-client.md](light-client.md) “其余客户端候选”。 | 双版移动、维度和睡眠恢复场景通过；未增加 worker 往返。性能报告的区块覆盖是中位数范围，不能扩展为全世界覆盖证明。 |
+| Tracking 重工作异步化 | **保持现有影子主循环消费**：正确 owner 执行选柱、ChunkMap 和 acquire 工作；渲染线程不扫描完整权威窗。 | 基线报告“可拆分的计算与已有异步路径”；[light-client.md](light-client.md)。 | 双版移动、切维、sleep/resume 运行已覆盖基本所有权与交付链；不新增 worker。正式性能覆盖为代表性场景，不外推全世界工作量。 |
+| 休眠可见性 wrapper（inclusive 均值 1.051%，最大 1.271%，self=0） | **保持**：全部样本落在下游原版 compiled getter，不能把 inclusive 约 1% 计作 wrapper 自耗。wake 期间仍门控未完成柱。 | 基线归因修正；[light-client.md](light-client.md)。 | 双版 sleep/resume 运行通过；没有单独测得 wrapper 自耗，故不声称此候选节省约 1%。 |
+| Aggregation 入口 / `flushAll`（均值 0.030% / 0.009%） | **保持已有异步路径**：主线程样本只有少量准入/提交；FIFO 与压缩已分给 Netty/worker。当前不支持把压缩当作主线程热点。 | 基线报告“主线程逻辑完整复核与异步评估”。 | 要评价总 CPU/背压，需额外采 Netty 和压缩 worker 的 CPU、排队、字节与端到端发送延迟；保持 FIFO 与有界缓冲。不能用主线程采样推断 worker 成本。 |
+| TickMonitor 的 debug 关闭格式化（finish/flush 采样约 0.008% / 0.007%） | **已实施**：三类 flush 仅在 dispatcher 日志开启时格式化；采样、20 tick 窗口和清零位置不变。 | [small-hotpaths.md](small-hotpaths.md)，T3 审查见 [review.md](review.md)。 | 两锚点 focused test/build 通过，源码复核确认 gate 不包住采样或 reset。当前固定窗口的性能变化不作为独立收益声明。 |
+| MainThreadDispatcher 无界时间窗口的回调循环 | **保持现状，待专门负载证据**：报告提出队列压测评估尖峰；其中世界操作属于所有者线程。未把回调拆成任意异步任务，也未发现本轮采样形成显著热点。 | 基线报告“诊断、回调调度”及异步边界。 | 构造回调队列压力并测 backlog、单轮耗时、最长等待和端到端完成；若拆分，需定义公平推进和有界预算，世界状态仍在 owner 执行。 |
+
+## 不是性能候选的正确性修正
+
+T7 将 Pull 捕获与其后原版 block/section/BE 更新建立有界、带版本的尾部围栏，避免 worker 返回旧 FULL/DELTA 覆盖较新更新。这是基线发现的正确性缺陷修复，不把它计作本次主线程优化收益；R2–R9 是稳定实现和 fixture 过程中发现的集成缺口修正（官方 B 包有效 token、sleep/ordinary opaque 身份、same-hash fence、引擎降级收口、NBT token、NeoForge owner 顺序、影子 DELTA 状态合并、精确事务关联），需按 review 文档的有效证据范围验收。早期错误关联的 PASS 已撤回。
+
+R1 是新 light confirmation queue 的软预算公平性修正，源码/回归审查与集中测试通过。R10 是只读有界资源观察和 quiescence 验收修订；新的 same-hash 双版运行在 15 秒内达到资源全零稳定窗口，repair/expire=0。此前 global inflight=6 的归档仍无法证明六项身份/释放，保留为证据不足的旧场，不宣称六项是孤儿或沿用其 PASS。R11 是 halo DELTA 正常尾部完成对后续 LIGHT 凭据的修复；R13 Forge 专用 strict-gated 运行证明尾部后同一完整 identity 可继续 LIGHT，Neo `pullordersame_1211_neo_r11stable1-pass` 的自然尾部也留有真实后续 LIGHT 证据。两版移动光照场景均通过；Forge strict halo 是单版专用交错证据，不扩大成两版完全相同的强制交错矩阵。
+
+## 异步边界与最终验收
+
+异步工作只接收所有者线程捕获的独立快照或不可变数据，worker 只做纯计算；结果回 owner 后核对 session、dimension、柱修订/opaque token，再按既有同柱顺序提交。主线程/渲染线程不等待 worker。不得把活动 `PalettedContainer`、BlockEntity、客户端世界、渲染状态或影子 POI/SectionStorage/注册表状态任意交给后台线程；世界和渲染状态仍由各自 owner 串行修改。沿用现有有界任务/字节预算、回压、FULL 回退与 tail ACK，不用无界 Future 掩盖主线程时间。
+
+最终源状态的两重点版本构建、指定回归与正确性 runtime 已通过，结果见 [validation.md](validation.md)；R12 fullfocused 与 R13 专项验收范围不同，详细矩阵按验证记录为准。冻结 v3 八臂矩阵也已完成；其对照仅是旧 Hassium JAR 与最终 Hassium JAR，不能与原始 no-Hassium 八场画像拼接成精确原版损失。Neo SERVER_QUEUE p95 与 Forge FULL GATE_WAIT p95 在两次 after 均高于两次 before，属于累计含 warmup 阶段数据且未归因；Forge 主线程 CPU 两种场景也上升，Neo 方向不一。性能结论必须同时呈现循环均值/P99 改善、CPU 未全面下降和上述等待上升，不能写成整体性能全面提高或所有队列阶段均无退化。Neo movement_load 末次仍有一张约 0.3 秒确认票，identity/state/reason 未记录。`EntityPacketCounters.drainGameInto` 的 Forge self 采样两次 after 都增加，但 Java 样本小且不是 CPU 因果证据；保持其 tick 计数语义。Pull/hash/fence 的采样与阶段限制见 [perf-disposition.md](perf-disposition.md)。独立最终数据复核已通过；结论受有限重复、路线/客户端覆盖、未归因阶段上升和末票可观测性限制。原始报告的 8 场 PASS 是另一轮 no-Hassium→旧 Hassium 基线，不能替代优化后验证；已撤回的错关联 PASS 不恢复。

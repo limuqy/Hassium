@@ -73,6 +73,10 @@ param(
     # Always restore a new isolated copy of a supplied world. The source archive is read-only.
     [string]$WorldZip = "",
     [switch]$Offline,
+    # Auto: isolate distinct L3/CCD domains when available; Required fails if unavailable.
+    [ValidateSet('Auto','Required','Off')][string]$CpuIsolation = 'Auto',
+    [ValidateRange(0,63)][int]$ServerCcd = 0,
+    [ValidateRange(0,63)][int]$ClientCcd = 1,
     # FULL compare 取证：非空时经 -PhassiumCompareFullDumpDir → buildSrc 三端映射为客户端
     # JVM 属性 hassium.compareFullDumpDir。CompareFullDump 对每个 FULL 落盘
     # server-full.bin（服务端解压后的原版区块包）+ local-baseline.bin（影子端本地生成柱，
@@ -170,6 +174,20 @@ if ($supportedLoaders.Count -gt 0 -and ($supportedLoaders -notcontains $Loader))
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 New-Item -ItemType Directory -Force -Path $statsDir | Out-Null
 New-Item -ItemType Directory -Force -Path $resultsDir | Out-Null
+
+. (Join-Path $PSScriptRoot 'smoke/cpu-isolation.ps1')
+$cpuPlan = New-SmokeCpuPlan -Policy $CpuIsolation -ServerCcd $ServerCcd -ClientCcd $ClientCcd
+$cpuEvidence = @{ server = @(); client = @(); observer = @() }
+$cpuAffinityFailures = @()
+$cpuEvidencePath = Join-Path $resultsDir "cpu-isolation_${SessionId}.json"
+$cpuPlan | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $cpuEvidencePath -Encoding utf8
+$serverAffinity = if ($cpuPlan.enabled) { $cpuPlan.server.mask } else { $null }
+$clientAffinity = if ($cpuPlan.enabled) { $cpuPlan.client.mask } else { $null }
+if ($cpuPlan.enabled) {
+    Write-Host "[$SessionId] CPU isolation: server L3/CCD$ServerCcd=$serverAffinity; client L3/CCD$ClientCcd=$clientAffinity"
+} else {
+    Write-Host "[$SessionId] CPU isolation unavailable/off: $($cpuPlan.reason)" -ForegroundColor Yellow
+}
 
 Set-Location $projectRoot
 
@@ -719,11 +737,11 @@ if ($PSBoundParameters.ContainsKey('Scenario')) {
     $serverArgs += "-PhassiumServerSmokeScenario=$Scenario"
 }
 $serverArgs += $egressStressArgs
-$server = Start-Process -FilePath $gradlew `
+$server = Start-SmokePinnedProcess -FilePath $gradlew -AffinityMask $serverAffinity `
     -ArgumentList $serverArgs `
     -RedirectStandardOutput $serverLog `
     -RedirectStandardError $serverErr `
-    -PassThru -WindowStyle Hidden
+    -WorkingDirectory $projectRoot
 
 # 6. 等待服务端就绪（Done! 行出现）
 Write-Host "[$SessionId] [5/9] 等待服务端 Done! (超时 ${ServerReadyTimeoutSec}s)..."
@@ -767,6 +785,13 @@ if (-not $serverReady) {
 }
 
 
+if ($cpuPlan.enabled) {
+    try {
+        $cpuEvidence.server = @(Get-SmokeJavaAffinityEvidence -LauncherId $server.Id -AffinityMask $serverAffinity)
+        if (-not $cpuEvidence.server.Count) { throw 'No owned server game JVM found for CPU affinity verification.' }
+    } catch { $cpuAffinityFailures += $_.Exception.Message }
+}
+
 # T2 PROBE JSON v1：客户端探针输出目录（JVM 属性 hassium.smokeTest.probeDir 指向）。
 # 启动客户端前创建；ClientSmokeTest 每轮写 roundN.json，harness 解析结果时优先读这里。
 $probeDir = Join-Path $logRoot "probe\$SessionId"
@@ -805,11 +830,11 @@ if ($JoinTimeoutMs -gt 0) {
     $clientArgs += "-PhassiumSmokeJoinTimeoutMs=$JoinTimeoutMs"
 }
 $clientArgs += $egressStressArgs
-$clientProc = Start-Process -FilePath $gradlew `
+$clientProc = Start-SmokePinnedProcess -FilePath $gradlew -AffinityMask $clientAffinity `
     -ArgumentList $clientArgs `
     -RedirectStandardOutput $clientLog `
     -RedirectStandardError $clientErr `
-    -PassThru -WindowStyle Hidden
+    -WorkingDirectory $projectRoot
 
 $observerProc = $null
 if ($Scenario -in @('egressload','egressstress')) {
@@ -824,7 +849,7 @@ if ($Scenario -in @('egressload','egressstress')) {
         "-PhassiumSmokeClientRunDir=$observerDir", "-PhassiumSmokeProbeDir=$observerProbeDir", '-PhassiumSmokePhases=classic')
     $observerArgs += $egressStressArgs
     if ($Offline) { $observerArgs += '--offline' }
-    $observerProc = Start-Process -FilePath $gradlew -ArgumentList $observerArgs -WindowStyle Hidden -PassThru `
+    $observerProc = Start-SmokePinnedProcess -FilePath $gradlew -ArgumentList $observerArgs -AffinityMask $clientAffinity `
         -RedirectStandardOutput (Join-Path $logDir "observer_$SessionId.log") -RedirectStandardError (Join-Path $logDir "observer_$SessionId.err.log")
 }
 if ($Scenario -eq 'sleepmixed') {
@@ -850,8 +875,19 @@ while (-not $clientProc.HasExited -and (Get-Date) -lt $clientDeadline) {
     Start-Sleep -Seconds 1
     if ($Scenario -eq 'sleepmixed' -and -not $observerProc -and
             (Select-String -LiteralPath $clientLog -Pattern 'MIXED_JOIN player entered world' -Quiet -ErrorAction SilentlyContinue)) {
-        $observerProc = Start-Process -FilePath $gradlew -ArgumentList $observerArgs -WindowStyle Hidden -PassThru `
+        $observerProc = Start-SmokePinnedProcess -FilePath $gradlew -ArgumentList $observerArgs -AffinityMask $clientAffinity `
             -RedirectStandardOutput (Join-Path $logDir "observer_$SessionId.log") -RedirectStandardError (Join-Path $logDir "observer_$SessionId.err.log")
+    }
+    if ($cpuPlan.enabled) {
+        foreach ($side in @('client','observer')) {
+            $launcher = if ($side -eq 'client') { $clientProc } else { $observerProc }
+            if (-not $launcher -or $cpuEvidence[$side].Count -or $launcher.HasExited) { continue }
+            try { $cpuEvidence[$side] = @(Get-SmokeJavaAffinityEvidence -LauncherId $launcher.Id -AffinityMask $clientAffinity) }
+            catch {
+                $cpuAffinityFailures += $_.Exception.Message
+                $cpuEvidence[$side] = @(@{ verified = $false; error = $_.Exception.Message })
+            }
+        }
     }
     $logBytes = if (Test-Path $clientLog) { (Get-Item $clientLog).Length } else { 0 }
     if ($logBytes -ne $lastLogBytes) {
@@ -1052,12 +1088,23 @@ if ($logAuditFailures.Count -gt 0) {
 $serverSwitched = if (Test-Path $serverLog) {
     (Get-Content $serverLog -Raw) -match "view-distance switched to 10"
 } else { $false }
+if ($cpuPlan.enabled) {
+    foreach ($side in @('server','client')) {
+        if (-not $cpuEvidence[$side].Count) { $cpuAffinityFailures += "Missing $side JVM affinity evidence." }
+    }
+    if ($observerProc -and -not $cpuEvidence.observer.Count) { $cpuAffinityFailures += 'Missing observer JVM affinity evidence.' }
+}
+$logAuditFailures += @($cpuAffinityFailures | ForEach-Object { "CPU_AFFINITY: $_" })
+foreach ($failure in $cpuAffinityFailures) { Write-Host "[$SessionId] CPU affinity verification failed: $failure" -ForegroundColor Red }
+$cpuRecord = @{ plan = $cpuPlan; processes = $cpuEvidence; failures = $cpuAffinityFailures }
+$cpuRecord | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $cpuEvidencePath -Encoding utf8
 $resultObj = @{
     SessionId = $SessionId
     Ver = $Ver
     Loader = $Loader
     Phase = $Phase
     Scenario = $Scenario
+    CpuIsolation = $cpuRecord
     Result = "UNKNOWN"
     ClientExitCode = $clientExit
     ClientCount = $ClientCount

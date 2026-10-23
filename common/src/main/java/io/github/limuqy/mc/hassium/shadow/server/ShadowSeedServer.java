@@ -4,7 +4,6 @@ import io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession;
 import io.github.limuqy.mc.hassium.shadow.track.ShadowChunkSource;
 import io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute;
 import io.github.limuqy.mc.hassium.shadow.light.ShadowLightProbe;
-import io.github.limuqy.mc.hassium.shadow.light.ShadowVanillaLightPipeline;
 import io.github.limuqy.mc.hassium.shadow.light.SeedGenChunkCodec;
 import io.github.limuqy.mc.hassium.shadow.storage.ShadowCacheEviction;
 import io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageManager;
@@ -48,7 +47,6 @@ import net.minecraft.network.protocol.game.ClientboundLevelChunkPacketData;
 import net.minecraft.network.protocol.game.ClientboundLevelChunkWithLightPacket;
 import net.minecraft.network.protocol.game.ClientboundSectionBlocksUpdatePacket;
 import net.minecraft.server.level.ServerLevel;
-import java.util.UUID;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.level.chunk.LevelChunkSection;
 import net.minecraft.server.Services;
@@ -62,7 +60,6 @@ import net.minecraft.world.level.chunk.ChunkAccess;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.Heightmap;
 import net.minecraft.world.level.lighting.LevelLightEngine;
-import net.minecraft.world.level.lighting.LightEngine;
 import net.minecraft.world.level.storage.LevelStorageSource;
 import org.slf4j.Logger;
 
@@ -125,6 +122,9 @@ public class ShadowSeedServer extends MinecraftServer {
     private final java.util.concurrent.ConcurrentHashMap<Long, net.minecraft.world.level.chunk.LevelChunk>
             injectedChunks = new java.util.concurrent.ConcurrentHashMap<>();
 
+    private final LightConfirmationQueue lightConfirmations = new LightConfirmationQueue(4096);
+    private long nextLightConfirmationNs;
+
     /**
      * ChunkCache 实例 → 维度 id（懒解析后缓存；仅影子上下文使用）。
      * <p>
@@ -163,6 +163,7 @@ public class ShadowSeedServer extends MinecraftServer {
     /** 关停保存开始（SeedGenLevelCompat.shutdown 首步调用）：写 gate 对本端保存放行。 */
     void beginShutdownSave() {
         this.ownShutdownInProgress = true;
+        lightConfirmations.close();
     }
 
     private boolean canWriteStorage() {
@@ -515,6 +516,7 @@ public class ShadowSeedServer extends MinecraftServer {
             }
             io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes.markContentDirty(key);
             chunk.setLightCorrect(false);
+            markLightConfirmation(dimension, pos);
             ShadowCacheEviction.recordAccess(dimension, pos);
             // 悬置柱放行：数据到位后原版加载链恢复推进（LIGHT→FULL→playerLoadedChunk 桥，
             // R2 重连比对触达的前提；holder 永卡 EMPTY 会让 tracking 静默失明）
@@ -895,6 +897,7 @@ public class ShadowSeedServer extends MinecraftServer {
      */
     public void relightChunk(ChunkPos pos, LevelChunk chunk) {
         chunk.setLightCorrect(false);
+        markLightConfirmation(dimensionId(chunkLevel(chunk)), pos);
         io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes
                 .markLightDirty(dimensionId(chunkLevel(chunk)), pos);
         clearChunkLight(pos, chunk);
@@ -933,6 +936,7 @@ public class ShadowSeedServer extends MinecraftServer {
                 return false;
             }
             chunk.setLightCorrect(false);
+            markLightConfirmation(dimension, pos);
             // 增量应用会就地覆盖 section/heightmap/BE/光，标记为需要 saveAll 重写。
             io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes.markContentDirty(dimension, pos);
             ServerLevel owner = chunkLevel(chunk);
@@ -1088,6 +1092,8 @@ public class ShadowSeedServer extends MinecraftServer {
                     } else if (packet instanceof ClientboundBlockEntityDataPacket blockEntity) {
                         applyBlockEntity(dimension, blockEntity);
                     }
+                    io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.Client.packetStage("mirror-applied",dimension,packet);
+                    io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.Client.ownerState("mirror-applied",dimension,this);
                 } catch (Throwable t) {
                     LOGGER.debug("Hassium: Shadow applyBlockUpdate ignored: {}", t.toString());
                 }
@@ -1142,6 +1148,7 @@ public class ShadowSeedServer extends MinecraftServer {
     private void invalidateChunkContent(String dimension, java.util.Set<Long> chunkKeys) {
         for (long key : chunkKeys) {
             ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
+            markLightConfirmation(dimension, pos);
             io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes.remove(dimension, pos);
             io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes.markContentDirty(key);
             SectionDeltaSnapshots.invalidate(dimension, pos);
@@ -1618,6 +1625,7 @@ public class ShadowSeedServer extends MinecraftServer {
             // fill(15)——磁盘上的正确天光被抹成全 15（R2 整片异常亮的根因）。
             chunk.initializeLightSources();
             this.injectedChunks.put(key, chunk);
+            markLightConfirmation(dimension, pos);
             SectionDeltaSnapshot snapshot = SectionDeltaSnapshot.capture(chunk);
             if (io.github.limuqy.mc.hassium.shadow.storage.ShadowStorageHashes.get(dimension, pos) == null) {
                 try {
@@ -1642,7 +1650,7 @@ public class ShadowSeedServer extends MinecraftServer {
     /**
      * 已打印过「被 I2 扣下」诊断的柱（**每柱一次**，避免逐帧刷屏）。
      * <p>
-     * 为什么要收敛：{@link #syncLightCorrect} 由 {@code confirmLightsCorrectIfConverged}
+     * 为什么要收敛：{@link #syncLightCorrect} 由 {@code confirmChangedLights}
      * 在 {@code drainReady} 里**每帧**对整张注入表调用一次；非权威柱必然被扣下，
      * 于是同一批柱每秒重复打几千行（实测占单次飞行日志 **95%+**，把日志本身变成
      * 主线程的负担）。
@@ -1669,7 +1677,7 @@ public class ShadowSeedServer extends MinecraftServer {
         long key = io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z);
         // 【I2 唯一收口（2026-09-19）】只有「3×3 全在场时算出的光」才是权威的，才允许标
         // isLightCorrect=true。本方法是全仓**唯一**把该标志置真的地方（另两个调用点
-        // persistAfterClientLightPush / confirmLightsCorrectIfConverged 都经此），
+        // persistAfterClientLightPush / confirmChangedLights 都经此），
         // 而它随 NBT 落盘成 isLightOn → 后续会话 diskNeedRelight=false 直接复用 →
         // **一条降级放行的坏光会被永久复用**（"R2 仍有黑柱"的候选机制，handoff §0.2）。
         // 清位（correct=false）不受限：作废永远安全。
@@ -1938,6 +1946,7 @@ public class ShadowSeedServer extends MinecraftServer {
         }
         long key = DimensionKey.key(dimension, pos.x, pos.z);
         if (injectedChunks.remove(key, chunk)) {
+            markLightConfirmation(dimension, pos);
             // native holder 卸载时仍在注入表的柱由本生命周期持有；摘表后才释放引擎层。
             ((ThreadedLevelLightEngineAccessor) level(dimension).getChunkSource().getLightEngine())
                     .hassium$releaseChunkLight(pos);
@@ -2088,8 +2097,7 @@ public class ShadowSeedServer extends MinecraftServer {
     }
 
     /**
-     * 按维度版本的收敛判据（消费方 {@code ShadowLightCompute.drainReady} 帧尾调
-     * {@code confirmLightsCorrectIfConverged} 决定是否可标记整批光正确）。
+     * 按维度版本的收敛判据（交付路径用；持久化确认有独立 fail-closed 探针）。
      * 只读引擎队列是否为空：不读引擎数据层（与光照 worker 并发读 fastutil 会自旋），
      * 也不排新光任务（推高 {@code lightTasks} 水位 → 主线程 injectChunk 5s 忙等 → 卡死）。
      * 探针失败返回 true（= 不推迟，与护栏引入前的行为一致）；{@link #isLightConverged()}
@@ -2116,25 +2124,71 @@ public class ShadowSeedServer extends MinecraftServer {
             return true;
         }
     }
-    /**
-     * 已确认引擎收敛后，把所有可见且**地表确有非 0 光**的柱标记为可安全复用。
-     * 这是异步 LIGHT future 回调之外的最终持久化收口。
-     * 与原版 light() 完成语义对齐：不得用高空短路/空层判「已点亮」。
-     */
-    public void confirmLightsCorrectIfConverged() {
-        for (Map.Entry<Long, LevelChunk> entry : injectedChunks.entrySet()) {
-            LevelChunk chunk = entry.getValue();
-            if (chunk == null) {
-                continue;
+    /** Dirty resident columns only. Light can cross a column boundary, so include the 3×3. */
+    public void markLightConfirmation(String dimension, ChunkPos pos) {
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                long key = DimensionKey.key(dimension, pos.x + dx, pos.z + dz);
+                if (injectedChunks.containsKey(key)) lightConfirmations.mark(key);
             }
-            ChunkPos pos = chunk.getPos();
-            boolean complete = hasCompleteLightLayers(pos, chunk)
-                    && isColumnSurfaceLightReady(pos, chunk, null);
-            if (complete && !chunk.isLightCorrect()) {
-                syncLightCorrect(chunk, true);
-            } else if (!complete && chunk.isLightCorrect()) {
-                persistPartialLight(chunk);
-            }
+        }
+    }
+
+    /** Read-only, on-demand validation probe; no per-frame logging or snapshot allocation. */
+    public LightConfirmationQueue.Snapshot lightConfirmationSnapshot() {
+        return lightConfirmations.snapshot();
+    }
+
+    /** Owner-loop fallback after LIGHT callbacks. Never reads an active world on the renderer. */
+    private void confirmChangedLights() {
+        if (!lightConfirmations.hasPending()) return;
+        // The owner loop starts before assembly publishes this instance in the registry.
+        // Keep dirty tickets until publication; never close a not-yet-published instance.
+        if (ShadowServerRegistry.getInstance().get() != this) return;
+        long now = System.nanoTime();
+        if (now < nextLightConfirmationNs) return;
+        nextLightConfirmationNs = now + 10_000_000L;
+        long deadline = now + 1_000_000L;
+        java.util.Map<ServerLevel, Boolean> converged = new java.util.IdentityHashMap<>();
+        lightConfirmations.drain(32,
+                this::isLightConfirmationOwnerCurrent,
+                key -> {
+                    ChunkPos pos = new ChunkPos(DimensionKey.chunkXOf(key), DimensionKey.chunkZOf(key));
+                    return ShadowLightCompute.withChunkLock(pos, () -> {
+                        LevelChunk chunk = injectedChunks.get(key);
+                        if (chunk == null) return true;
+                        if (ShadowLightCompute.isLightConfirmationBlocked(key)) return false;
+                        ServerLevel owner = chunkLevel(chunk);
+                        if (!converged.computeIfAbsent(owner, this::isLightConfirmationConverged)) return false;
+                        boolean complete = hasCompleteLightLayers(pos, chunk)
+                                && isColumnSurfaceLightReady(pos, chunk, owner);
+                        if (!isLightConfirmationOwnerCurrent()) return true;
+                        if (complete && !chunk.isLightCorrect()) syncLightCorrect(chunk, true);
+                        else if (!complete && chunk.isLightCorrect()) persistPartialLight(chunk);
+                        // LIGHT's future/queue can settle before its layers become observable.
+                        // Keep authoritative incomplete columns for a later owner pass. Missing-
+                        // neighbor columns cannot become authoritative without another LIGHT
+                        // transition, which marks a fresh ticket; do not spin on the light halo.
+                        return complete || !ShadowLightCompute.isColumnLightAuthoritative(
+                                DimensionKey.dimensionOf(key), pos);
+                    });
+                }, () -> injectedChunks.keySet().iterator(), () -> System.nanoTime() < deadline);
+    }
+
+    private boolean isLightConfirmationOwnerCurrent() {
+        return !ownShutdownInProgress && ShadowServerRegistry.getInstance().get() == this
+                && !ShadowWorldgenExecutor.isTerminated(shadowGeneration);
+    }
+
+    /** Confirmation is fail-closed even though the delivery-time convergence probe is permissive. */
+    private boolean isLightConfirmationConverged(ServerLevel level) {
+        try {
+            ThreadedLevelLightEngine engine = (ThreadedLevelLightEngine) level.getChunkSource().getLightEngine();
+            return !engine.hasLightWork()
+                    && (!io.github.limuqy.mc.hassium.compat.mods.ForeignLightEngine.usesLightTaskWatermark(engine)
+                    || ((ThreadedLevelLightEngineAccessor) engine).hassium$getLightTasks().isEmpty());
+        } catch (Throwable failure) {
+            return false;
         }
     }
 
@@ -2297,14 +2351,22 @@ public class ShadowSeedServer extends MinecraftServer {
                     // 光照任务驱动失败不影响 worldgen 主循环
                 }
             }
+            try {
+                confirmChangedLights();
+            } catch (Throwable failure) {
+                // Tickets survive a failed probe; never kill the owner or fall back to the renderer.
+                DebugLogger.warn(DebugLogger.LogType.LIGHT, "[SHADOW_LIGHT] confirmation deferred", failure);
+            }
             if (!worked) {
                 // 原版队列均为空时短暂停驻。
                 LockSupport.parkNanos("hassium-seedgen-main", 100_000L);
             }
         }
+        lightConfirmations.close();
     }
 
     void stopMainLoop() {
+        lightConfirmations.close();
         Thread t = mainThreadLoop;
         mainThreadLoop = null;
         if (t != null) {
@@ -2314,6 +2376,7 @@ public class ShadowSeedServer extends MinecraftServer {
 
     /** halt 之后、关 worldgen 池之前：等主循环退出，避免 ChunkMap.save 打到已关 FJP。 */
     void joinMainLoop(long timeoutMs) {
+        lightConfirmations.close();
         Thread t = mainThreadLoop;
         if (t == null || t == Thread.currentThread()) {
             return;

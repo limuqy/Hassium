@@ -39,6 +39,15 @@ public final class ShadowPullClient {
 
     private static final AtomicLong NEXT_REQUEST_ID = new AtomicLong();
     public static long nextRequestFloor() { return NEXT_REQUEST_ID.get()+1; }
+    /** Read-only, opt-in coverage log; does not create a request or a fence token. */
+    public static String columnRequestDiagnostics(long key) {
+        return RECEIVE_WINDOW.diagnostics(key) + " dedupe=" + COMPARE_REQUESTED.contains(key)
+                + " nbtCommit=" + NBT_COMMITS.containsKey(key) + " failedAt=" + lastFailAtMs.get(key);
+    }
+    /** Includes queued preparation/receive/commit ownership, unlike the tracking sweep's timeout. */
+    public static boolean isComparisonRequested(String dimension, ChunkPos pos) {
+        return COMPARE_REQUESTED.contains(io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension,pos.x,pos.z));
+    }
     /**
      * 请求模式（requestId → 是否带本地基线），仅覆盖在途响应；断连时清空。
      * <p>
@@ -91,13 +100,18 @@ public final class ShadowPullClient {
             return;
         }
         long key = io.github.limuqy.mc.hassium.utils.DimensionKey.key(dim, pos.x, pos.z);
-        RECEIVE_WINDOW.cancel(key);
+        io.github.limuqy.mc.hassium.client.PullSnapshotTailClient.cancel(key);
+        cancelReceive(key);
         NBT_COMMITS.remove(key);
         lastFailAtMs.put(key, System.currentTimeMillis());
         // 拉取失败 ⇒ 释放 compare 去重登记，冷却结束后允许再发（否则该柱一次失败就永不重试）
         COMPARE_REQUESTED.remove(key);
         io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession.getInstance()
                 .clearPullInFlight(dim, pos);
+        if (Boolean.getBoolean("hassium.chunkCoverageDiagnostics"))
+            Constants.LOG.info("[CHUNK-COVERAGE] pull-failed ({}, {}) dim={} awaiting={} {}",
+                    pos.x,pos.z,dim,io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate.isAwaiting(dim,pos),
+                    columnRequestDiagnostics(key));
     }
 
     /** 冷却是否已过（可再次发 pull）。 */
@@ -127,6 +141,14 @@ public final class ShadowPullClient {
     public static void requestFull(String dimension, List<ChunkPos> chunks) {
         request(dimension, chunks, true);
     }
+    /** A sleep refresh owns only a lightweight permit until its prepared bytes are actually sent. */
+    public interface DispatchGate {
+        boolean send(java.util.function.BooleanSupplier preparedWireSend);
+        void cancelled();
+    }
+    public static void requestSleepRefresh(String dimension,ChunkPos pos,DispatchGate gate) {
+        request(dimension,List.of(pos),true,false,gate);
+    }
 
     /** Requests an unconditional authoritative FULL after a failed local/cache path. */
     public static void requestAuthoritativeFull(String dimension, List<ChunkPos> chunks) {
@@ -144,6 +166,10 @@ public final class ShadowPullClient {
     }
 
     private static void request(String dimension, List<ChunkPos> chunks, boolean includeLocalBaseline, boolean nbtRepair) {
+        request(dimension,chunks,includeLocalBaseline,nbtRepair,null);
+    }
+    private static void request(String dimension, List<ChunkPos> chunks, boolean includeLocalBaseline, boolean nbtRepair,
+                                DispatchGate gate) {
         if (chunks!=null && io.github.limuqy.mc.hassium.client.sleep.SleepClient.sleeping())
             chunks = chunks.stream().filter(pos->io.github.limuqy.mc.hassium.client.sleep.SleepClient.allowsChunk(pos.x,pos.z)).toList();
         io.github.limuqy.mc.hassium.utils.DebugLogger.info(
@@ -153,6 +179,7 @@ public final class ShadowPullClient {
                 chunks == null || chunks.isEmpty() ? 0 : chunks.get(0).x,
                 chunks == null || chunks.isEmpty() ? 0 : chunks.get(0).z);
         if (dimension == null || dimension.isEmpty() || chunks == null || chunks.isEmpty()) {
+            if(gate!=null) gate.cancelled();
             return;
         }
         // 【2026-09-21】按柱去重：本会话已为该柱发出过 compare / 权威 FULL 就不再发。
@@ -173,40 +200,63 @@ public final class ShadowPullClient {
             }
         }
         if (fresh == null) {
+            if(gate!=null) gate.cancelled();
             return;
         }
         for (ChunkPos pos : fresh) {
             long key = io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z);
-            if (!RECEIVE_WINDOW.offer(key, new PullIntent(dimension, pos, includeLocalBaseline, nbtRepair)))
+            var offered=RECEIVE_WINDOW.offerStatus(key,new PullIntent(dimension,pos,includeLocalBaseline,nbtRepair,gate));
+            if(gate!=null && offered!=PullReceiveWindow.Offer.ADDED) gate.cancelled();
+            if (offered==PullReceiveWindow.Offer.FULL) {
                 notePullFailure(dimension, pos);
+            }
         }
         drainQueuedRequests();
     }
 
-    private record PullIntent(String dimension, ChunkPos pos, boolean baseline, boolean repair) {}
-    private record PullGroup(String dimension, boolean baseline, boolean repair) {}
+    private record PullIntent(String dimension, ChunkPos pos, boolean baseline, boolean repair,DispatchGate gate) {}
+    private record PullGroup(String dimension, boolean baseline, boolean repair,DispatchGate gate) {}
     private static void drainQueuedRequests() {
         var groups = new java.util.LinkedHashMap<PullGroup, List<PullReceiveWindow.Admission<PullIntent>>>();
         for (var admission : RECEIVE_WINDOW.drain()) {
             PullIntent intent = admission.value();
             if (!io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.allows(intent.pos().x, intent.pos().z)) {
-                clearCompareRequested(intent.dimension(), intent.pos());
+                discardUnsent(admission);
                 continue;
             }
-            groups.computeIfAbsent(new PullGroup(intent.dimension(), intent.baseline(), intent.repair()),
+            groups.computeIfAbsent(new PullGroup(intent.dimension(), intent.baseline(), intent.repair(),intent.gate()),
                     ignored -> new ArrayList<>()).add(admission);
         }
         groups.forEach((group, admissions) -> {
-            try { dispatchRequests(group.dimension(), admissions, group.baseline(), group.repair()); }
+            try { dispatchRequests(group.dimension(), admissions, group.baseline(), group.repair(),group.gate()); }
             catch (Throwable failure) {
+                if(group.gate()!=null) group.gate().cancelled();
                 Constants.LOG.warn("[SHADOW_PULL] Request preparation/send failed, retrying", failure);
-                for (var admission : admissions) notePullFailure(group.dimension(), admission.value().pos());
+                for (var admission : admissions) {
+                    // No envelope exists yet. Atomically retire only this admission; never
+                    // check an old token then cancel a replacement by column key.
+                    if(discardUnsent(admission)) {
+                        lastFailAtMs.put(admission.key(),System.currentTimeMillis());
+                        io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession.getInstance()
+                                .clearPullInFlight(group.dimension(),admission.value().pos());
+                    }
+                }
             }
         });
     }
+    private static boolean discardUnsent(PullReceiveWindow.Admission<PullIntent> admission) {
+        boolean removed=RECEIVE_WINDOW.discard(admission.key(),admission.token());
+        if(removed) COMPARE_REQUESTED.remove(admission.key());
+        if(admission.value().gate()!=null) admission.value().gate().cancelled();
+        return removed;
+    }
+    private static void cancelReceive(long key) {
+        PullIntent cancelled=RECEIVE_WINDOW.cancel(key);
+        if(cancelled!=null && cancelled.gate()!=null) cancelled.gate().cancelled();
+    }
 
     private static void dispatchRequests(String dimension, List<PullReceiveWindow.Admission<PullIntent>> admissions,
-                                         boolean includeLocalBaseline, boolean nbtRepair) {
+                                         boolean includeLocalBaseline, boolean nbtRepair,DispatchGate gate) {
         List<ChunkPos> chunks = admissions.stream().map(a -> a.value().pos()).toList();
         var tokens = admissions.stream().collect(java.util.stream.Collectors.toMap(
                 PullReceiveWindow.Admission::key, PullReceiveWindow.Admission::token));
@@ -230,7 +280,7 @@ public final class ShadowPullClient {
                 Long token = tokens.get(key);
                 return token != null && RECEIVE_WINDOW.bind(key, token, requestId);
             }).toList();
-            if (batch.isEmpty()) continue;
+            if (batch.isEmpty()) { if(gate!=null) gate.cancelled(); continue; }
             REQUEST_MODES.register(requestId, batch.stream()
                     .collect(java.util.stream.Collectors.toMap(
                             entry -> ChunkPos.asLong(entry.chunkX(), entry.chunkZ()), ShadowPullRequestC2SPacket.Entry::chunkHash)),
@@ -244,7 +294,21 @@ public final class ShadowPullClient {
             }
             FriendlyByteBuf buffer = new FriendlyByteBuf(Unpooled.buffer());
             new ShadowPullRequestC2SPacket(dimension, 0L, requestId, batch).encode(buffer);
-            Services.NETWORK_MANAGER.sendShadowPullRequest(buffer);
+            if(gate==null) Services.NETWORK_MANAGER.sendShadowPullRequest(buffer);
+            else {
+                boolean sent=false;
+                boolean[] transferred={false};
+                try { sent=gate.send(()->{
+                    transferred[0]=true; // All SPI implementations consume the buffer even when returning false.
+                    return Services.NETWORK_MANAGER.trySendShadowPullRequest(buffer);
+                }); }
+                finally {
+                    if(!sent) {
+                        if(!transferred[0] && buffer.refCnt()>0) buffer.release();
+                        for(var admission:admissions) discardUnsent(admission);
+                    }
+                }
+            }
         }
     }
 
@@ -435,8 +499,10 @@ public final class ShadowPullClient {
         }
         COMPARE_REQUESTED.remove(
                 io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z));
+        io.github.limuqy.mc.hassium.client.PullSnapshotTailClient.cancel(
+                io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z));
         NBT_COMMITS.remove(io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z));
-        RECEIVE_WINDOW.cancel(io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z));
+        cancelReceive(io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, pos.x, pos.z));
     }
 
     public static long nativeBypassPendingPullCount() {
@@ -530,6 +596,12 @@ public final class ShadowPullClient {
         requestAuthoritativeFull(dimension, List.of(pos));
     }
 
+    public static boolean matchesEnvelope(String dimension, int x, int z, long request) {
+        var mc = Minecraft.getInstance();
+        return mc.level != null && dimension.equals(LevelCompat.getDimensionId(mc.level))
+                && RECEIVE_WINDOW.matches(io.github.limuqy.mc.hassium.utils.DimensionKey.key(dimension, x, z), request);
+    }
+
     /** Applies compare-and-pull responses for the current client dimension. */
     public static boolean tryHandleNbtHitInline(byte[] data) {
         if (!LoginCaps.has(ClientLoginNegotiation.current(), LoginCaps.PULL_NBT)
@@ -602,6 +674,8 @@ public final class ShadowPullClient {
         for (ShadowPullResponseS2CPacket.Result result : response.results()) {
             long responseKey = io.github.limuqy.mc.hassium.utils.DimensionKey.key(response.dimension(), result.chunkX(), result.chunkZ());
             if (!RECEIVE_WINDOW.matches(responseKey, response.requestId())) continue;
+            if ((result.kind() == ShadowPullResponseS2CPacket.Kind.FULL || result.kind() == ShadowPullResponseS2CPacket.Kind.DELTA)
+                    && !io.github.limuqy.mc.hassium.client.PullSnapshotTailClient.responseCurrent(responseKey, response.requestId())) continue;
             RECEIVE_WINDOW.received(responseKey, response.requestId());
             ChunkPipelineProfile.response(response.dimension(), response.requestId(),
                     ChunkPos.asLong(result.chunkX(), result.chunkZ()),
@@ -670,6 +744,13 @@ public final class ShadowPullClient {
                     });
                 }
             } else if (result.kind() == ShadowPullResponseS2CPacket.Kind.DELTA) {
+                if (io.github.limuqy.mc.hassium.client.PullSnapshotTailClient.mustApplyDirect(key)) {
+                    minecraft.execute(() -> {
+                        if (minecraft.level == responseLevel && RECEIVE_WINDOW.matches(responseKey, response.requestId()))
+                            io.github.limuqy.mc.hassium.client.PullSnapshotTailClient.fallbackToNative(responseKey);
+                    });
+                    continue;
+                }
                 net.minecraft.network.FriendlyByteBuf buffer = new net.minecraft.network.FriendlyByteBuf(
                         io.netty.buffer.Unpooled.wrappedBuffer(result.payload()));
                 boolean handedOff = false;
@@ -716,6 +797,9 @@ public final class ShadowPullClient {
                                 response.requestId(), pos.x, pos.z, nbt.size(), result.payload().length);
                         if (baseline == null) throw new IllegalStateException("NBT snapshot has no material baseline");
                         Object token = new Object();
+                        // Pending work is versioned independently of the wire request id (sleep too).
+                        long pendingVersion = io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.incomingToken(key);
+                        io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.Client.sleepNbtAdmission(key,response.requestId(),pendingVersion);
                         var sourceLevel = minecraft.level;
                         NBT_COMMITS.put(key, token);
                         io.github.limuqy.mc.hassium.concurrent.AsyncSnapshotCommit.submit(
@@ -723,7 +807,7 @@ public final class ShadowPullClient {
                                 () -> NBT_COMMITS.get(key) == token && minecraft.level == sourceLevel
                                         && io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry.getInstance().get() == shadow
                                         && shadow.injectedChunk(response.dimension(), pos.x, pos.z) == baseline
-                                        && io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.acceptPending(key, response.requestId()),
+                                        && io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.acceptPending(key, pendingVersion),
                                 () -> {
                                     // Keep this inline, ahead of subsequent native block/entity updates.
                                     if (ShadowLightCompute.hasClientApplyEpoch(response.dimension(), pos)) {
@@ -741,6 +825,8 @@ public final class ShadowPullClient {
                                         })),
                                 () -> {
                                     NBT_COMMITS.remove(key, token);
+                                    io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.recoveryEvent(key,"UNCHANGED-owner-committed",response.requestId());
+                                    io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.Client.sleepEvent(key,"UNCHANGED-owner-committed");
                                     completeUnchanged(response, pos, shadow, baseline, pending);
                                 },
                                 failure -> {
@@ -749,6 +835,8 @@ public final class ShadowPullClient {
                                     requestNbtRepairFull(response.dimension(), List.of(pos));
                                 },
                                 () -> {
+                                    io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.recoveryEvent(key,"UNCHANGED-discarded",response.requestId());
+                                    io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.Client.sleepEvent(key,"UNCHANGED-discarded");
                                     RECEIVE_WINDOW.complete(responseKey, response.requestId());
                                     if (NBT_COMMITS.remove(key, token) && minecraft.level == sourceLevel)
                                         notePullFailure(response.dimension(), pos);
@@ -782,9 +870,9 @@ public final class ShadowPullClient {
         RECEIVE_WINDOW.complete(io.github.limuqy.mc.hassium.utils.DimensionKey.key(response.dimension(), pos.x, pos.z), response.requestId());
         io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate.confirm(response.dimension(), pos);
         long sleepKey = io.github.limuqy.mc.hassium.utils.DimensionKey.key(response.dimension(), pos.x, pos.z);
-        io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.injected(sleepKey, response.requestId(), baseline);
+        io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.injectedResponse(sleepKey, response.requestId(), baseline);
         if (!io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession.isDeliverableToClient(pos.x, pos.z))
-            io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.haloApplied(sleepKey, response.requestId());
+            io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.haloAppliedResponse(sleepKey, response.requestId());
         // 【2026-09-20 同柱重复交付闸（用户拍板）】客户端已持有该柱（落地凭据在）
         // → 服务端已裁决内容未变，客户端手上的就是同一份数据：**只记命中，不回放重交付**。
         // 此前「保鲜 compare」（ShadowTrackingSession.materialize 对权威注入柱再 compare）
@@ -857,8 +945,11 @@ public final class ShadowPullClient {
 
     /** 主线程 tick：超时未响应的拦截回退为网络数据注入（防区块黑洞）。 */
     public static void expirePending() {
-        for (var expired : RECEIVE_WINDOW.expire(System.nanoTime(), 30_000_000_000L))
+        io.github.limuqy.mc.hassium.client.PullSnapshotTailClient.expire();
+        for (var expired : RECEIVE_WINDOW.expire(System.nanoTime(), 30_000_000_000L)) {
+            if(expired.value().gate()!=null) expired.value().gate().cancelled();
             notePullFailure(expired.value().dimension(), expired.value().pos());
+        }
         drainQueuedRequests();
         long now = System.currentTimeMillis();
         for (java.util.Map.Entry<Long, PendingCompare> entry : PENDING_COMPARE.entrySet()) {
@@ -906,6 +997,7 @@ public final class ShadowPullClient {
     }
 
     public static void reset() {
+        io.github.limuqy.mc.hassium.client.PullSnapshotTailClient.reset();
         NBT_COMMITS.clear();
         RECEIVE_WINDOW.clear();
         io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.reset();
@@ -928,6 +1020,7 @@ public final class ShadowPullClient {
 
     /** 真客户端切维：作废旧维度在途 compare / 失败冷却，避免坐标碰撞串维。 */
     public static void onClientDimensionChanged() {
+        io.github.limuqy.mc.hassium.client.PullSnapshotTailClient.reset();
         NBT_COMMITS.clear();
         RECEIVE_WINDOW.clear();
         io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.reset();

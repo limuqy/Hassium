@@ -6,19 +6,14 @@ import io.github.limuqy.mc.hassium.compat.HassiumChannels;
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
 import io.github.limuqy.mc.hassium.config.HassiumConfigService;
 
-import io.github.limuqy.mc.hassium.protocol.AggregationReadyPayload;
 import io.github.limuqy.mc.hassium.protocol.DictionaryManager;
 import io.github.limuqy.mc.hassium.protocol.DictionarySnapshot;
 
-import io.github.limuqy.mc.hassium.protocol.HassiumConnectionRegistry;
-import io.github.limuqy.mc.hassium.protocol.IndexSyncManager;
 import io.github.limuqy.mc.hassium.protocol.PayloadHandlers;
 import io.github.limuqy.mc.hassium.protocol.PreHandshakeHelloPayload;
 import io.github.limuqy.mc.hassium.protocol.PreHandshakePayload;
 import io.github.limuqy.mc.hassium.protocol.PreHandshakeProtocol;
-import io.github.limuqy.mc.hassium.protocol.ShadowPullRequestC2SPacket;
 import io.github.limuqy.mc.hassium.protocol.ShadowPullResponseS2CPacket;
-import io.github.limuqy.mc.hassium.protocol.ShadowPullServer;
 import io.github.limuqy.mc.hassium.protocol.handshake.LoginHandshake;
 import io.github.limuqy.mc.hassium.protocol.handshake.PlayInitClient;
 import io.github.limuqy.mc.hassium.server.ServerHandshakeActivation;
@@ -416,25 +411,34 @@ public class ForgeNetworkManager implements INetworkManagerService {
 
     @Override
     public void sendShadowPullRequest(FriendlyByteBuf buf) {
-        io.github.limuqy.mc.hassium.utils.DebugLogger.info(
-                io.github.limuqy.mc.hassium.utils.DebugLogger.LogType.NETWORK,
-                "[DIAG] sendShadowPullRequest called, CHANNEL={}, readable={}", CHANNEL != null ? "set" : "null",
-                buf == null ? -1 : buf.readableBytes());
+        trySendShadowPullRequest(buf);
+    }
+    @Override
+    public boolean trySendShadowPullRequest(FriendlyByteBuf buf) {
         if (buf == null) {
-            return;
+            return false;
         }
         try {
+            io.github.limuqy.mc.hassium.utils.DebugLogger.info(
+                    io.github.limuqy.mc.hassium.utils.DebugLogger.LogType.NETWORK,
+                    "[DIAG] sendShadowPullRequest called, CHANNEL={}, readable={}", CHANNEL != null ? "set" : "null",
+                    buf.readableBytes());
+            var minecraft=net.minecraft.client.Minecraft.getInstance();
+            var connection=minecraft.getConnection();
+            var channel=CHANNEL;
             byte[] data = new byte[buf.readableBytes()];
             buf.readBytes(data);
+            return PreparedClientSend.trySend(connection,minecraft::getConnection,
+                    ()->channel!=null && connection.getConnection().isConnected(),()->{
 #if MC_VER < MC_1_21_1
-            if (CHANNEL != null) {
-                CHANNEL.sendToServer(new ShadowPullRequestWrapper(data));
-            }
+                channel.sendToServer(new ShadowPullRequestWrapper(data));
 #else
-            sendToServer(new ShadowPullRequestWrapper(data));
+                channel.send(new ShadowPullRequestWrapper(data),PacketDistributor.SERVER.noArg());
 #endif
+            },e->LOGGER.warn("Hassium: Failed to send shadowPullV1 request",e));
         } catch (Exception e) {
             LOGGER.warn("Hassium: Failed to send shadowPullV1 request", e);
+            return false;
         } finally {
             if (buf.refCnt() > 0) {
                 buf.release();

@@ -74,6 +74,8 @@ import java.util.List;
 public final class EntityUpdatePacing {
 
     private static volatile Snapshot snapshot = Snapshot.INACTIVE;
+    /** Parsed immutable settings; only the server tick thread accesses this cache. */
+    private static final EntityPacingConfigCache CONFIG_CACHE = new EntityPacingConfigCache();
     /** 每观察者一份的压力账本（tick 起点重建入参、热路径只读）。 */
     private static EntityPressureBook pressureBook = new EntityPressureBook(1);
     /** 该账本的倍率上限，随配置变化时整本重建（压力回到初始档，可接受）。 */
@@ -247,6 +249,7 @@ public final class EntityUpdatePacing {
     /** 服务器停止时清理（避免 level / connection 引用随会话累积）。 */
     public static void clear() {
         snapshot = Snapshot.INACTIVE;
+        CONFIG_CACHE.clear();
         pressureBook.reset();
         bookMaxFactor = 1;
         pressureBook = new EntityPressureBook(1);
@@ -297,25 +300,19 @@ public final class EntityUpdatePacing {
         if (!ServerNetworkGate.isNetworkServerActive()) {
             return Snapshot.INACTIVE;
         }
-        HassiumConfigService config = HassiumConfigService.getInstance();
-        boolean tiered = config.isEntityTieredUpdateEnabled();
-        boolean density = config.isEntityDensityThrottleEnabled();
-        boolean smoothPush = config.isEntitySmoothPushEnabled();
-        int budget = Math.max(0, config.getEntityFrameBudgetPerPlayer());
-        if (!tiered && !density && !smoothPush && budget <= 0) {
+        EntityPacingConfigCache.Values config = CONFIG_CACHE.get(HassiumConfigService.getInstance().getConfig());
+        if (!config.tiered && !config.densityThrottle && !config.smoothPush && config.budgetPerPlayer <= 0) {
             return Snapshot.INACTIVE;
         }
-        return new Snapshot(true, server, tiered,
-                EntityUpdateTiering.parseIntervals(
-                        config.getEntityTierIntervals(), EntityUpdateTiering.DEFAULT_ENTITY_INTERVALS),
-                EntityUpdateTiering.parseIntervals(
-                        config.getEntityItemTierIntervals(), EntityUpdateTiering.DEFAULT_ITEM_INTERVALS),
-                density,
-                EntityUpdateTiering.parseDensityCounts(config.getEntityDensityTierCounts()),
-                EntityUpdateTiering.parseDensityFactors(config.getEntityDensityTierFactors()),
-                Math.min(16, Math.max(1, config.getEntityMaxThrottleFactor())),
-                budget,
-                config.isEntitySmoothPushEnabled());
+        return new Snapshot(true, server, config.tiered,
+                config.entityIntervals,
+                config.itemIntervals,
+                config.densityThrottle,
+                config.densityTierCounts,
+                config.densityTierFactors,
+                config.maxFactor,
+                config.budgetPerPlayer,
+                config.smoothPush);
     }
 
     /**

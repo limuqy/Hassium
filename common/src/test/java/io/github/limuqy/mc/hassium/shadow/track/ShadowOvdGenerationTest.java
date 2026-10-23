@@ -126,6 +126,64 @@ class ShadowOvdGenerationTest {
         }
     }
 
+    @Test @SuppressWarnings("unchecked")
+    void cancelledHaloCompareCanRetryOnAuthorityEntryWithoutOpeningTheDeliveryGate() throws Exception {
+        var fixture = new Fixture();
+        var entering = new ChunkPos(0,10);
+        long key = DimensionKey.key(DIMENSION,entering.x,entering.z);
+        var requests = (java.util.Set<Long>)field(io.github.limuqy.mc.hassium.protocol.ShadowPullClient.class,
+                "COMPARE_REQUESTED").get(null);
+        io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate.mark(DIMENSION,entering);
+        requests.add(key);
+        var pullClient = io.github.limuqy.mc.hassium.protocol.ShadowPullClient.class;
+        Object window = field(pullClient,"RECEIVE_WINDOW").get(null);
+        var intentType = Class.forName(pullClient.getName()+'$'+"PullIntent");
+        var constructor = intentType.getDeclaredConstructors()[0];
+        constructor.setAccessible(true);
+        Object intent = constructor.newInstance(DIMENSION,entering,true,false,null);
+        var offer = window.getClass().getDeclaredMethod("offer",long.class,Object.class);
+        offer.setAccessible(true);
+        assertEquals(true,offer.invoke(window,key,intent));
+        try {
+            assertTrue(io.github.limuqy.mc.hassium.protocol.ShadowPullClient.columnRequestDiagnostics(key).contains("queued=true"));
+            assertFalse(ShadowTrackingSession.shouldRetryAwaitingComparison(DIMENSION,entering),
+                    "A live/queued compare must not be superseded by the sweep");
+            fixture.session.refreshAuthorityEntries(new ChunkPos(0,-3),8,new ChunkPos(0,2),8);
+            assertFalse(requests.contains(key), "Authority entry cancels the previous halo transaction");
+            assertTrue(io.github.limuqy.mc.hassium.protocol.ShadowPullClient.columnRequestDiagnostics(key).contains("queued=false receive=none"));
+            assertTrue(ShadowTrackingSession.shouldRetryAwaitingComparison(DIMENSION,entering),
+                    "The old unconditional AWAITING skip stranded this material column forever");
+            assertTrue(io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate.blockClientDelivery(
+                    DIMENSION,entering.x,entering.z), "Retry must not blindly publish an unconfirmed baseline");
+            requests.add(key); // The replacement has claimed request ownership.
+            assertFalse(ShadowTrackingSession.shouldRetryAwaitingComparison(DIMENSION,entering));
+            io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate.confirm(DIMENSION,entering);
+            assertFalse(ShadowTrackingSession.shouldRetryAwaitingComparison(DIMENSION,entering));
+        } finally {
+            io.github.limuqy.mc.hassium.protocol.ShadowPullClient.clearCompareRequested(DIMENSION,entering);
+            io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate.clearAll();
+        }
+    }
+
+    @Test @SuppressWarnings("unchecked")
+    void failedCompareRetainsItsCooldownBeforeTheAuthoritySweepRetries() throws Exception {
+        var fixture = new Fixture();
+        var failures = (Map<Long,Long>)field(io.github.limuqy.mc.hassium.protocol.ShadowPullClient.class,
+                "lastFailAtMs").get(null);
+        io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate.mark(DIMENSION,fixture.pos);
+        try {
+            io.github.limuqy.mc.hassium.protocol.ShadowPullClient.notePullFailure(DIMENSION,fixture.pos);
+            assertFalse(ShadowTrackingSession.shouldRetryAwaitingComparison(DIMENSION,fixture.pos));
+            failures.put(fixture.key,System.currentTimeMillis()-3_001L);
+            assertTrue(ShadowTrackingSession.shouldRetryAwaitingComparison(DIMENSION,fixture.pos));
+            assertTrue(io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate.blockClientDelivery(
+                    DIMENSION,fixture.pos.x,fixture.pos.z));
+        } finally {
+            failures.remove(fixture.key);
+            io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate.clearAll();
+        }
+    }
+
     @Test void lateNativeHolderCompletionCannotReopenAnAnsweredCompare() throws Exception {
         var fixture = new Fixture();
         var unsafe = (sun.misc.Unsafe) field(sun.misc.Unsafe.class, "theUnsafe").get(null);

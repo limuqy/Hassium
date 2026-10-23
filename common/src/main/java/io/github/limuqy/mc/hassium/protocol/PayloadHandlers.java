@@ -68,10 +68,13 @@ public final class PayloadHandlers {
      * Loader receiver 与聚合帧子包共用本入口。
      */
     public static void handleShadowPullResponse(byte[] data) {
+        Minecraft mc = Minecraft.getInstance();
+        if (!mc.isSameThread()) { mc.execute(() -> handleShadowPullResponse(data)); return; }
         // A block-cache hit has no terrain decompression. Keep its NBT application in
         // the native packet order, before subsequent live BE updates. FULL/DELTA retain
         // the background decode hop.
         if (ShadowPullClient.tryHandleNbtHitInline(data)) return;
+        io.github.limuqy.mc.hassium.client.PullSnapshotTailClient.envelope(data);
         PullResponseDecodeQueue.enqueue(data);
     }
 

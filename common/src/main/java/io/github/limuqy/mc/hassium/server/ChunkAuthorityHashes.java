@@ -2,10 +2,9 @@ package io.github.limuqy.mc.hassium.server;
 
 import io.github.limuqy.mc.hassium.cache.ChunkContentHashUtil;
 import io.github.limuqy.mc.hassium.utils.DimensionKey;
-import java.util.LinkedHashMap;
-import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.chunk.LevelChunk;
 
 /**
  * 服务端 per-chunk 权威内容 hash 缓存（**逐段** hash 数组；柱级 hash 现组合）。
@@ -24,8 +23,8 @@ import net.minecraft.world.level.ChunkPos;
  * <p>
  * 使用约定（调用方 = {@link ChunkAuthorityNotifier} 与 {@code ServerChunkPushManager}）：
  * <ul>
- *   <li>{@link #getSections} 命中 → 直接复用；未命中 → 现算 {@link #putSections}。</li>
- *   <li>方块变更路径调 {@link #invalidate}（内容已变，旧 hash 必须失效，否则客户端会误判
+ *   <li>{@link #getSections} 命中 → 直接复用；未命中/脏柱 → {@link #resolveSections} 刷新。</li>
+ *   <li>方块变更路径调 {@link #invalidateSection}（内容已变，旧 hash 必须失效，否则客户端会误判
  *       「零请求命中」并保留旧内容——**静默内容错误**）。钩子见 {@code MixinLevelChunk}：
  *       {@code LevelChunk#setBlockState} 的 RETURN，vanilla 全部方块变更的收口。</li>
  *   <li>区块卸载<b>不</b>失效：内容 hash 与加载态无关，卸载后重载内容相同则仍可用。</li>
@@ -38,7 +37,7 @@ import net.minecraft.world.level.ChunkPos;
  * 换来的是「影子端绝不会拿到一份永不被失效的条目」。
  * <p>
  * 容量上限 + LRU（访问序）：超出上限淘汰最久未使用柱，防服务端内存无界。
- * 每条约 208 B（24 段 long[] + 表开销），{@link #MAX_ENTRIES} 满时约 14 MB。
+ * 条目只保存 hash、脏段位图和段数，不保留 LevelChunk / section 或玩家引用。
  */
 public final class ChunkAuthorityHashes {
 
@@ -46,12 +45,7 @@ public final class ChunkAuthorityHashes {
     private static final int MAX_ENTRIES = 65_536;
 
     /** key = {@link DimensionKey} 复合键；value = 逐段 hash 数组（长度 = max(非空段索引)+1，空段为 0）。 */
-    private static final Map<Long, long[]> CACHE = new LinkedHashMap<>(1024, 0.75f, true) {
-        @Override
-        protected boolean removeEldestEntry(Map.Entry<Long, long[]> eldest) {
-            return size() > MAX_ENTRIES;
-        }
-    };
+    private static final SectionHashCache CACHE = new SectionHashCache(MAX_ENTRIES);
 
     private static final AtomicLong HITS = new AtomicLong();
     private static final AtomicLong MISSES = new AtomicLong();
@@ -89,7 +83,34 @@ public final class ChunkAuthorityHashes {
             return null;
         }
         HITS.incrementAndGet();
-        return stored.clone();
+        return stored;
+    }
+
+    /** Refresh only dirty sections on the real server owner; never pass live sections to a worker. */
+    public static long[] resolveSections(net.minecraft.server.level.ServerLevel level,
+                                         String dimension, LevelChunk chunk) {
+        if (level == null || dimension == null || chunk == null
+                || level.getServer() instanceof io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer) {
+            SHADOW_REJECTS.incrementAndGet();
+            throw new IllegalArgumentException("Authority hashes require a real server chunk");
+        }
+        if (!level.getServer().isSameThread() || chunk.getLevel() != level) {
+            throw new IllegalStateException("Authority hashes must be captured by their server owner");
+        }
+        var sections = chunk.getSections();
+        ChunkPos pos = chunk.getPos();
+        try {
+            long[] hashes = CACHE.resolve(DimensionKey.key(dimension, pos.x, pos.z), sections.length, index -> {
+                var section = sections[index];
+                if (section == null || section.hasOnlyAir()) return 0L;
+                long hash = ChunkContentHashUtil.computeSectionHash(section);
+                return hash == 0L ? 1L : hash;
+            });
+            PUTS.incrementAndGet();
+            return hashes;
+        } finally {
+            nonEmpty = CACHE.size() > 0;
+        }
     }
 
     /** 取该柱的柱级 hash（由逐段数组现组合）；无缓存返回 {@code null}。 */
@@ -122,7 +143,7 @@ public final class ChunkAuthorityHashes {
         if (dimension == null || pos == null || sectionHashes == null) {
             return;
         }
-        putByKey(DimensionKey.key(dimension, pos.x, pos.z), sectionHashes.clone());
+        putByKey(DimensionKey.key(dimension, pos.x, pos.z), sectionHashes);
     }
 
     public static void putSections(net.minecraft.server.level.ServerLevel level, String dimension,
@@ -150,13 +171,24 @@ public final class ChunkAuthorityHashes {
         }
         boolean removed;
         synchronized (CACHE) {
-            removed = CACHE.remove(DimensionKey.key(dimension, chunkX, chunkZ)) != null;
+            removed = CACHE.invalidate(DimensionKey.key(dimension, chunkX, chunkZ));
             if (removed) {
-                nonEmpty = !CACHE.isEmpty();
+                nonEmpty = CACHE.size() > 0;
             }
         }
         if (removed) {
             INVALIDATIONS.incrementAndGet();
+        }
+    }
+
+    /** Keep unaffected section hashes, but expose no column hash until the dirty section is refreshed. */
+    public static void invalidateSection(String dimension, ChunkPos pos, int sectionIndex) {
+        if (dimension == null || pos == null) return;
+        synchronized (CACHE) {
+            if (CACHE.invalidateSection(DimensionKey.key(dimension, pos.x, pos.z), sectionIndex)) {
+                INVALIDATIONS.incrementAndGet();
+            }
+            nonEmpty = CACHE.size() > 0;
         }
     }
 

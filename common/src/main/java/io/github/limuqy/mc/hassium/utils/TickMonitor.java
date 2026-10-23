@@ -125,20 +125,24 @@ public final class TickMonitor {
     }
 
     private static void flushServer() {
-        DebugLogger.info(LogType.DISPATCHER,
-                "[MSPT] server avg={}ms max={}ms last={}ms ticks={}",
-                fmt(serverSumNs / 1_000_000.0 / serverTicks),
-                fmt(serverMaxNs / 1_000_000.0),
-                fmt(serverLastNs / 1_000_000.0),
-                serverTicks);
+        if (DebugLogger.isEnabled(LogType.DISPATCHER)) {
+            DebugLogger.info(LogType.DISPATCHER,
+                    "[MSPT] server avg={}ms max={}ms last={}ms ticks={}",
+                    fmt(serverSumNs / 1_000_000.0 / serverTicks),
+                    fmt(serverMaxNs / 1_000_000.0),
+                    fmt(serverLastNs / 1_000_000.0),
+                    serverTicks);
+        }
         serverSumNs = 0;
         serverMaxNs = 0;
         serverTicks = 0;
     }
 
     private static void flushHassium() {
-        DebugLogger.info(LogType.DISPATCHER, "{}",
-                formatHassiumMspt(hassiumDrainPendingNs, hassiumDrainQueueNs, hassiumFlushNs, hassiumTicks));
+        if (DebugLogger.isEnabled(LogType.DISPATCHER)) {
+            DebugLogger.info(LogType.DISPATCHER, "{}",
+                    formatHassiumMspt(hassiumDrainPendingNs, hassiumDrainQueueNs, hassiumFlushNs, hassiumTicks));
+        }
         hassiumDrainPendingNs = 0;
         hassiumDrainQueueNs = 0;
         hassiumFlushNs = 0;
@@ -154,12 +158,14 @@ public final class TickMonitor {
     }
 
     private static void flushClient() {
-        DebugLogger.info(LogType.DISPATCHER,
-                "[MSPT] client avg={}ms max={}ms last={}ms ticks={}",
-                fmt(clientSumNs / 1_000_000.0 / clientTicks),
-                fmt(clientMaxNs / 1_000_000.0),
-                fmt(clientLastNs / 1_000_000.0),
-                clientTicks);
+        if (DebugLogger.isEnabled(LogType.DISPATCHER)) {
+            DebugLogger.info(LogType.DISPATCHER,
+                    "[MSPT] client avg={}ms max={}ms last={}ms ticks={}",
+                    fmt(clientSumNs / 1_000_000.0 / clientTicks),
+                    fmt(clientMaxNs / 1_000_000.0),
+                    fmt(clientLastNs / 1_000_000.0),
+                    clientTicks);
+        }
         clientSumNs = 0;
         clientMaxNs = 0;
         clientTicks = 0;

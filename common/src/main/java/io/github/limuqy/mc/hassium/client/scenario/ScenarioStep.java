@@ -32,6 +32,8 @@ public final class ScenarioStep {
         INPUT,
         /** Dev-only 3x3 sleep / same-connection recovery validation. */
         SLEEP,
+        /** Dev-only Pull ordering fixture: await recovered columns, request, and await final checks. */
+        PULL_ORDER,
         /** 非阻塞飞行注入：爬升 2s + 平飞 Ns。 */
         FLY,
         /** 切换维度（/execute in）。 */

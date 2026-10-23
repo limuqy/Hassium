@@ -4,12 +4,10 @@ import static io.github.limuqy.mc.hassium.protocol.ShadowPullRadii.LIGHT_HALO_RA
 
 import io.github.limuqy.mc.hassium.platform.client.ShadowClientApi;
 import io.github.limuqy.mc.hassium.platform.client.ShadowClientBridge;
-import io.github.limuqy.mc.hassium.platform.client.TraceOrigin;
 
 import io.github.limuqy.mc.hassium.shadow.server.ShadowSeedServer;
 import io.github.limuqy.mc.hassium.shadow.server.ShadowServerRegistry;
 import io.github.limuqy.mc.hassium.shadow.server.ShadowWorldgenExecutor;
-import io.github.limuqy.mc.hassium.shadow.server.SeedGenLevelCompat;
 import io.github.limuqy.mc.hassium.shadow.server.SeedGenExecutor;
 import io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate;
 import io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute;
@@ -41,6 +39,9 @@ public final class ShadowTrackingSession {
     }
 
     private static final ShadowTrackingSession INSTANCE = new ShadowTrackingSession();
+    private static final boolean COVERAGE_DIAGNOSTICS = Boolean.getBoolean("hassium.chunkCoverageDiagnostics");
+    private long lastCoverageLogMs;
+    private final java.util.concurrent.atomic.AtomicBoolean coverageLogPending = new java.util.concurrent.atomic.AtomicBoolean();
 
     /** 半径上限：与服务端 ShadowPullRequestValidator 的 maxDistance（真实视距+1）对齐。 */
     private static final int MAX_VIEW_DISTANCE = 32;
@@ -222,6 +223,51 @@ public final class ShadowTrackingSession {
         INSTANCE.pending = new PendingState(dimension,
                 mc.player.getX(), mc.player.getY(), mc.player.getZ(),
                 mc.player.getYRot(), mc.player.getXRot(), true);
+        if (COVERAGE_DIAGNOSTICS) INSTANCE.logMissingColumns(mc, registry.get(), dimension);
+    }
+
+    /** Native residency is captured on Render; material/light state is read on its shadow owner. */
+    private void logMissingColumns(Minecraft mc, ShadowSeedServer shadow, String dimension) {
+        long now = System.currentTimeMillis();
+        if (shadow == null || now - lastCoverageLogMs < 1000L || !coverageLogPending.compareAndSet(false, true)) return;
+        lastCoverageLogMs = now;
+        var sourceLevel = mc.level;
+        int cx = (int)Math.floor(mc.player.getX()) >> 4, cz = (int)Math.floor(mc.player.getZ()) >> 4;
+        int vd = Math.min(serverViewDistance, effectiveClientVD);
+        if (vd <= 0) { coverageLogPending.set(false); return; }
+        var missing = new java.util.ArrayList<ChunkPos>();
+        int expected = 0, absent = 0, radius = ChunkShapeCompat.boundingRadius(vd);
+        for (int x = cx-radius; x <= cx+radius; x++) for (int z = cz-radius; z <= cz+radius; z++) {
+            if (!ChunkShapeCompat.contains(cx,cz,vd,x,z)) continue;
+            expected++;
+            if (!sourceLevel.getChunkSource().hasChunk(x,z)) {
+                absent++;
+                if (missing.size() < 32) missing.add(new ChunkPos(x,z));
+            }
+        }
+        int loaded = sourceLevel.getChunkSource().getLoadedChunksCount();
+        io.github.limuqy.mc.hassium.Constants.LOG.info(
+                "[CHUNK-COVERAGE] center=({}, {}) dim={} loaded={} expected={} missing={} details={}",
+                cx,cz,dimension,loaded,expected,absent,missing.size());
+        try {
+            shadow.execute(() -> {
+                try {
+                    if (mc.level != sourceLevel || ShadowServerRegistry.getInstance().get() != shadow) return;
+                    for (ChunkPos pos : missing) {
+                        long key = DimensionKey.key(dimension,pos.x,pos.z);
+                        var chunk = shadow.injectedChunk(dimension,pos.x,pos.z);
+                        io.github.limuqy.mc.hassium.Constants.LOG.info(
+                                "[CHUNK-COVERAGE] missing=({}, {}) dim={} material={} correct={} awaiting={} confirmed={} {} {} gateAwaiting={} neighbors={} {}",
+                                pos.x,pos.z,dimension,chunk!=null,chunk!=null && chunk.isLightCorrect(),
+                                SeedGenCompareGate.isAwaiting(dimension,pos),SeedGenCompareGate.isConfirmed(dimension,pos),
+                                ShadowPullClient.columnRequestDiagnostics(key),ShadowLightCompute.columnWorkDiagnostics(key),
+                                io.github.limuqy.mc.hassium.shadow.light.LightNeighborhoodGate.isAwaiting(key),
+                                io.github.limuqy.mc.hassium.shadow.light.LightNeighborhoodGate.inWindowReadyNeighborCount(dimension,pos),
+                                io.github.limuqy.mc.hassium.client.PullSnapshotTailClient.columnDiagnostics(key));
+                    }
+                } finally { coverageLogPending.set(false); }
+            });
+        } catch (RuntimeException stopped) { coverageLogPending.set(false); }
     }
 
     /** 服务端 chunk cache 半径捕获（{@code ClientboundSetChunkCacheRadiusPacket}）。 */
@@ -545,6 +591,21 @@ public final class ShadowTrackingSession {
                 // 仍在等 compare：不盲投
                 if (io.github.limuqy.mc.hassium.shadow.server.SeedGenCompareGate
                         .isAwaiting(currentDimension, pos)) {
+                    // Entry invalidation/unload/failure cancels the old request, but must keep the
+                    // authority gate closed. AWAITING alone is not evidence of a live request.
+                    long domain = domainId(pos.x,pos.z);
+                    if (shouldRetryAwaitingComparison(currentDimension,pos)
+                            && (submitted < budget || domain == lastAcquireDomain)) {
+                        clearPullInFlight(currentDimension,pos);
+                        if (requestPullEligible(currentDimension,pos,false)) {
+                            submitted++;
+                            lastAcquireDomain = domain;
+                            if (COVERAGE_DIAGNOSTICS)
+                                io.github.limuqy.mc.hassium.Constants.LOG.info(
+                                        "[CHUNK-COVERAGE] retry-orphaned-compare ({}, {}) dim={} gate-remains-closed",
+                                        pos.x,pos.z,currentDimension);
+                        }
+                    }
                     continue;
                 }
                 // OVD 已落客户端仍只是本地基线；进入权威窗必须 compare。
@@ -584,6 +645,13 @@ public final class ShadowTrackingSession {
                     center.x, center.z, serverViewDistance, LIGHT_HALO_RADIUS, submitted, published,
                     skippedMaterial, materialized, currentDimension);
         }
+    }
+
+    /** A cancelled transaction cannot leave a retained material column permanently awaiting it. */
+    static boolean shouldRetryAwaitingComparison(String dimension, ChunkPos pos) {
+        return SeedGenCompareGate.isAwaiting(dimension,pos)
+                && !ShadowPullClient.isComparisonRequested(dimension,pos)
+                && ShadowPullClient.isPullRetryAllowed(dimension,pos);
     }
 
     /**
@@ -1040,7 +1108,7 @@ public final class ShadowTrackingSession {
      * </ul>
      * <b>为什么从 `isColumnLightAuthoritative` 换掉（handoff §「飞行场景的两个空洞」①）</b>：
      * `promotedClean` 要求 `outsideWindow==0`，而飞行中邻域窗随玩家移动 → **前沿柱
-     * promote 时向外邻柱在窗外 → 永远不 clean → 永久洞**（实测飞行日志：`Promote ... 
+     * promote 时向外邻柱在窗外 → 永远不 clean → 永久洞**（实测飞行日志：`Promote ...
      * outsideWindow=3 timedOut=false` 后 `pushReady blocked lightIncomplete`）。
      * vanilla 不这样：它的门 `getChunkRangeFuture(holder,1,FULL)` 是**可满足**的，所以最终照推。
      * `lightRan` 是「LIGHT 跑完」这个**事实**，降级放行的柱同样为真 → 前沿柱照推。

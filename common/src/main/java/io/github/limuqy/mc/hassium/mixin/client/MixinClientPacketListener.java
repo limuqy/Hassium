@@ -152,18 +152,21 @@ public class MixinClientPacketListener {
     // ===== 方块更新转发（T2）：HEAD 注入 3 类方块包 handler，不 cancel、不解析、纯转发 =====
     // handler 方法名/参数 mojmap 全段一致（1.20.1 / 1.21.11 已双版本验证），无需 #if 分界。
 
-    @Inject(method = "handleBlockUpdate", at = @At("HEAD"))
+    @Inject(method = "handleBlockUpdate", at = @At("HEAD"), cancellable = true)
     private void hassium$onBlockUpdate(net.minecraft.network.protocol.game.ClientboundBlockUpdatePacket packet, CallbackInfo ci) {
+        if (io.github.limuqy.mc.hassium.client.PullSnapshotTailClient.intercept(packet)) { ci.cancel(); return; }
         ClientMetadataHandler.forwardBlockUpdate(packet);
     }
 
-    @Inject(method = "handleChunkBlocksUpdate", at = @At("HEAD"))
+    @Inject(method = "handleChunkBlocksUpdate", at = @At("HEAD"), cancellable = true)
     private void hassium$onChunkBlocksUpdate(net.minecraft.network.protocol.game.ClientboundSectionBlocksUpdatePacket packet, CallbackInfo ci) {
+        if (io.github.limuqy.mc.hassium.client.PullSnapshotTailClient.intercept(packet)) { ci.cancel(); return; }
         ClientMetadataHandler.forwardBlockUpdate(packet);
     }
 
-    @Inject(method = "handleBlockEntityData", at = @At("HEAD"))
+    @Inject(method = "handleBlockEntityData", at = @At("HEAD"), cancellable = true)
     private void hassium$onBlockEntityData(net.minecraft.network.protocol.game.ClientboundBlockEntityDataPacket packet, CallbackInfo ci) {
+        if (io.github.limuqy.mc.hassium.client.PullSnapshotTailClient.intercept(packet)) { ci.cancel(); return; }
         ClientMetadataHandler.forwardBlockUpdate(packet);
     }
 

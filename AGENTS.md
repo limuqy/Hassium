@@ -139,6 +139,8 @@ Mod 客户端 ←──唯一 vanilla TCP（登录期握手 + Play 期自定义 
 
 分层、门禁与场景见 [`docs/runtime-smoke-test.md`](docs/runtime-smoke-test.md)。冒烟只有 `.ps1`（无 bash 版）。
 
+**性能主判据为服务端 MSPT（mean / P95 / P99、>50ms tick 数）**，CPU 占用仅辅助诊断。双 CCD 主机按真实 L3 拓扑隔离：服务端 CCD0、客户端（含影子端/observer）CCD1；脚本默认 `-CpuIsolation Auto`，正式性能对照用 `-CpuIsolation Required`（Python benchmark 同名 `--cpu-isolation Required`），核验游戏 JVM 实际 mask 并归档。禁止按逻辑核数量猜 CCD；隔离前后的历史场次不混算。
+
 ```powershell
 # pwsh
 .\scripts\runtime-smoke-test.ps1 -Ver 1.20.1 -Loader fabric -Phase I -SessionId "1.20.1_fabric_I"

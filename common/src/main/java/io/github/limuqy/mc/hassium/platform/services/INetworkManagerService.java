@@ -35,9 +35,14 @@ public interface INetworkManagerService {
 
     /** 发送 shadowPullV1 区块请求到服务端（客户端调用）。 */
     default void sendShadowPullRequest(FriendlyByteBuf buf) {
+        trySendShadowPullRequest(buf);
+    }
+    /** True means same live local connection admission, not remote ACK. Always consumes/releases buf. */
+    default boolean trySendShadowPullRequest(FriendlyByteBuf buf) {
         if (buf != null && buf.refCnt() > 0) {
             buf.release();
         }
+        return false;
     }
 
     /**

@@ -128,6 +128,7 @@ public class MixinConnection {
 
         // Native PacketEncoder captures the bytes after exactly one invocation of the original codec.
         if (io.github.limuqy.mc.hassium.server.sleep.SleepServer.suppress(self,packet,hasSendListener)) ci.cancel();
+        else io.github.limuqy.mc.hassium.server.PullSnapshotTailServer.observe(self, packet);
     }
 
     // review-fix: T7-60: 带描述符注入 disconnect——1.21.1+ 有 Component/DisconnectionDetails 双重载
@@ -141,6 +142,7 @@ public class MixinConnection {
         Connection self = (Connection) (Object) this;
         HassiumConnectionRegistry.markDisabled(self);
         io.github.limuqy.mc.hassium.server.sleep.SleepServer.disconnected(self);
+        io.github.limuqy.mc.hassium.server.PullSnapshotTailServer.disconnected(self);
         io.github.limuqy.mc.hassium.server.entity.EntityPacketCounters.forget(self);
         // 字典 rollout：断连解除其 offer ACK 门控（或触发阻断者离开后的重试）
         io.github.limuqy.mc.hassium.protocol.DictionaryManager.onConnectionGone(self);

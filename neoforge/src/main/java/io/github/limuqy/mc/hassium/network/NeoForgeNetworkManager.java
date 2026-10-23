@@ -25,7 +25,6 @@ import net.neoforged.neoforge.network.handling.IPayloadContext;
 import java.util.UUID;
 import io.github.limuqy.mc.hassium.protocol.DictionaryManager;
 import io.github.limuqy.mc.hassium.protocol.DictionarySnapshot;
-import io.github.limuqy.mc.hassium.protocol.HassiumConnectionRegistry;
 import io.github.limuqy.mc.hassium.protocol.PayloadHandlers;
 import io.github.limuqy.mc.hassium.protocol.PreHandshakeHelloPayload;
 import io.github.limuqy.mc.hassium.protocol.PreHandshakePayload;
@@ -42,7 +41,7 @@ import io.github.limuqy.mc.hassium.server.ServerHandshakeActivation;
  */
 public class NeoForgeNetworkManager implements INetworkManagerService {
     @Override public void sendSleepControl(ServerPlayer player, byte[] data) {
-        player.connection.send(new net.minecraft.network.protocol.common.ClientboundCustomPayloadPacket(new io.github.limuqy.mc.hassium.compat.SleepPayloadCompat.ToClient(data)));
+        sendServerPayload(player, new io.github.limuqy.mc.hassium.compat.SleepPayloadCompat.ToClient(data));
     }
     @Override public void sendSleepControlToServer(byte[] data) {
         var c=net.minecraft.client.Minecraft.getInstance().getConnection();
@@ -384,12 +383,13 @@ public class NeoForgeNetworkManager implements INetworkManagerService {
     // ===== S2C 客户端处理 =====
 
 
-    /** NeoForge payload 发送必须经服务端主线程，避免异步推送批次丢失。 */
+    /** Keep payload and subsequent native tail packets in the same server-owner transaction. */
     private static void sendServerPayload(ServerPlayer player, CustomPacketPayload payload) {
         net.minecraft.server.MinecraftServer server =
                 io.github.limuqy.mc.hassium.compat.PlayerCompat.getMinecraftServer(player);
         if (server != null) {
-            server.execute(() -> player.connection.send(payload));
+            io.github.limuqy.mc.hassium.concurrent.OwnerThreadDispatch.runOrSchedule(
+                    server.isSameThread(), server, () -> player.connection.send(payload));
         }
     }
 
@@ -400,17 +400,25 @@ public class NeoForgeNetworkManager implements INetworkManagerService {
      */
     @Override
     public void sendShadowPullRequest(FriendlyByteBuf buf) {
+        trySendShadowPullRequest(buf);
+    }
+    @Override
+    public boolean trySendShadowPullRequest(FriendlyByteBuf buf) {
         if (buf == null) {
-            return;
+            return false;
         }
         try {
-            var connection = net.minecraft.client.Minecraft.getInstance().getConnection();
-            if (connection != null && buf.isReadable()) {
-                byte[] data = PayloadHandlers.drain(buf);
-                connection.send(new ByteArrayPayload(SHADOW_PULL_REQUEST_TYPE, data));
-            }
+            var minecraft=net.minecraft.client.Minecraft.getInstance();
+            var connection=minecraft.getConnection();
+            if(!buf.isReadable()) return false;
+            byte[] data = PayloadHandlers.drain(buf);
+            return PreparedClientSend.trySend(connection,minecraft::getConnection,
+                    ()->connection.getConnection().isConnected(),
+                    ()->connection.send(new ByteArrayPayload(SHADOW_PULL_REQUEST_TYPE,data)),
+                    e->LOGGER.warn("Hassium: Failed to send shadowPullV1 request",e));
         } catch (Exception e) {
             LOGGER.warn("Hassium: Failed to send shadowPullV1 request", e);
+            return false;
         } finally {
             if (buf.refCnt() > 0) {
                 buf.release();
@@ -468,7 +476,7 @@ public class NeoForgeNetworkManager implements INetworkManagerService {
     public static void sendDictionarySyncPacket(ServerPlayer player, DictionarySnapshot snapshot) {
         try {
             byte[] body = PayloadHandlers.encodeDictionarySyncBody(snapshot);
-            player.connection.send(new ByteArrayPayload(DICTIONARY_SYNC_TYPE, body));
+            sendServerPayload(player, new ByteArrayPayload(DICTIONARY_SYNC_TYPE, body));
             LOGGER.debug("Hassium: Sent dictionary sync (epoch={}, {} bytes) to {}",
                     snapshot != null ? snapshot.epoch() : 0, body.length, player.getName().getString());
         } catch (Exception e) {
@@ -480,7 +488,7 @@ public class NeoForgeNetworkManager implements INetworkManagerService {
     public static void sendIndexSyncPacket(ServerPlayer player) {
         try {
             byte[] envelope = PayloadHandlers.encodeIndexSyncEnvelope();
-            player.connection.send(new ByteArrayPayload(INDEX_SYNC_TYPE, envelope));
+            sendServerPayload(player, new ByteArrayPayload(INDEX_SYNC_TYPE, envelope));
             LOGGER.debug("Hassium: Sent index sync to {}", player.getName().getString());
         } catch (Exception e) {
             LOGGER.error("Hassium: Failed to send index sync packet", e);
