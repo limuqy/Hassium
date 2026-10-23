@@ -78,7 +78,8 @@ public final class LoginCaps {
     public static int buildClientCaps() {
         HassiumConfigService cfg = HassiumConfigService.getInstance();
         int caps = 0;
-        if (io.github.limuqy.mc.hassium.compat.SleepSupportCompat.supported()) caps |= SLEEP;
+        if (io.github.limuqy.mc.hassium.compat.SleepSupportCompat.supported()
+                && io.github.limuqy.mc.hassium.compat.mods.SleepRenderCompat.supportsVanillaRenderer()) caps |= SLEEP;
         if (cfg.isPacketAggregationEnabled()) {
             caps |= AGGREGATION | EGRESS_V3;
         }

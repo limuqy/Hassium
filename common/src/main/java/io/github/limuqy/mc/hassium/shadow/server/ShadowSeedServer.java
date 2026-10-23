@@ -81,6 +81,7 @@ import org.slf4j.Logger;
  */
 public class ShadowSeedServer extends MinecraftServer {
     private static final Logger LOGGER = LogUtils.getLogger();
+    private static final ThreadLocal<ShadowSeedServer> MAIN_LOOP_OWNER = new ThreadLocal<>();
     private static final java.util.concurrent.atomic.AtomicLong SAVE_ALL_SEQ =
             new java.util.concurrent.atomic.AtomicLong();
 
@@ -2296,7 +2297,23 @@ public class ShadowSeedServer extends MinecraftServer {
      * 影子端不跑完整 server tick；每轮必须消费 MinecraftServer 的 execute() 队列与
      * ServerChunkCache.mainThreadProcessor。前者在无 tick 预算时不会消费后者。
      */
+    static ShadowSeedServer currentMainLoopOwner() { return MAIN_LOOP_OWNER.get(); }
+
+    static void runWithMainLoopOwner(ShadowSeedServer owner, Runnable action) {
+        ShadowSeedServer previous = MAIN_LOOP_OWNER.get();
+        MAIN_LOOP_OWNER.set(owner);
+        try { action.run(); }
+        finally {
+            if (previous == null) MAIN_LOOP_OWNER.remove();
+            else MAIN_LOOP_OWNER.set(previous);
+        }
+    }
+
     void runMainLoop() {
+        runWithMainLoopOwner(this, this::runMainLoopOwned);
+    }
+
+    private void runMainLoopOwned() {
         long loopCount = 0;
         while (!Thread.currentThread().isInterrupted()) {
             if (ShadowWorldgenExecutor.isTerminated(shadowGeneration)) {
@@ -2322,7 +2339,7 @@ public class ShadowSeedServer extends MinecraftServer {
                 }
                 // 影子虚拟玩家 tracking 会话：位置同步消费 + chunk 系统簿记 + pull 请求分批
                 io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession.getInstance()
-                        .consumeOnShadowLoop();
+                        .consumeOnShadowLoop(this);
             } catch (Throwable t) {
                 // server 已 halt 时 pollTask 会抛中断类异常，属正常退出；
                 // 其余异常静默吞掉会把影子主循环杀成「无声停摆」，必须留痕。

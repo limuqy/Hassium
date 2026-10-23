@@ -10,6 +10,9 @@ public final class DiagnosticSmokeAgent {
             public byte[] transform(ClassLoader loader, String name, Class<?> type,
                                     ProtectionDomain domain, byte[] bytes) {
                 if (name == null) return null;
+                if (Boolean.getBoolean("hassium.diagnostic.traceCacheRestores")
+                        && name.equals("io/github/limuqy/mc/hassium/shadow/storage/ShadowBlockEntitySnapshots"))
+                    return traceCacheRestores(bytes);
                 if (Boolean.getBoolean("hassium.diagnostic.traceMixin")
                         && name.equals("org/spongepowered/asm/util/Locals")) return traceLocals(bytes);
                 if (Boolean.getBoolean("hassium.diagnostic.traceLogin")
@@ -52,6 +55,39 @@ public final class DiagnosticSmokeAgent {
                 return writer.toByteArray();
             }
         });
+    }
+
+    /** Observe successful disk restoration before a later authority snapshot replaces provenance. */
+    private static byte[] traceCacheRestores(byte[] bytes) {
+        ClassWriter writer = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        new ClassReader(bytes).accept(new ClassVisitor(Opcodes.ASM9, writer) {
+            @Override public MethodVisitor visitMethod(int access, String name, String descriptor,
+                                                       String signature, String[] exceptions) {
+                MethodVisitor delegate = super.visitMethod(access, name, descriptor, signature, exceptions);
+                if (!name.equals("restore") || !descriptor.equals(
+                        "(Lnet/minecraft/core/BlockPos;Ljava/lang/String;Lnet/minecraft/nbt/CompoundTag;)V")) return delegate;
+                return new MethodVisitor(Opcodes.ASM9, delegate) {
+                    @Override public void visitInsn(int opcode) {
+                        if (opcode == Opcodes.RETURN) {
+                            visitFieldInsn(Opcodes.GETSTATIC, "java/lang/System", "err", "Ljava/io/PrintStream;");
+                            visitTypeInsn(Opcodes.NEW, "java/lang/StringBuilder"); visitInsn(Opcodes.DUP);
+                            visitLdcInsn("[DIAGNOSTIC-CACHE] restored ");
+                            visitMethodInsn(Opcodes.INVOKESPECIAL, "java/lang/StringBuilder", "<init>", "(Ljava/lang/String;)V", false);
+                            visitVarInsn(Opcodes.ALOAD, 2);
+                            visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/lang/StringBuilder", "append", "(Ljava/lang/String;)Ljava/lang/StringBuilder;", false);
+                            visitLdcInsn(" ");
+                            visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/lang/StringBuilder", "append", "(Ljava/lang/String;)Ljava/lang/StringBuilder;", false);
+                            visitVarInsn(Opcodes.ALOAD, 1);
+                            visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/lang/StringBuilder", "append", "(Ljava/lang/Object;)Ljava/lang/StringBuilder;", false);
+                            visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/lang/StringBuilder", "toString", "()Ljava/lang/String;", false);
+                            visitMethodInsn(Opcodes.INVOKEVIRTUAL, "java/io/PrintStream", "println", "(Ljava/lang/String;)V", false);
+                        }
+                        super.visitInsn(opcode);
+                    }
+                };
+            }
+        }, 0);
+        return writer.toByteArray();
     }
 
     private static void traceEntityShape(String name, byte[] bytes) {

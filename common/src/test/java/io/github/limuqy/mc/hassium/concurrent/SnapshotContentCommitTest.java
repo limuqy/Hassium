@@ -7,15 +7,15 @@ import java.util.ArrayDeque;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import net.minecraft.util.thread.ReentrantBlockableEventLoop;
+import io.github.limuqy.mc.hassium.testutil.QueuedTestEventLoop;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class SnapshotContentCommitTest {
-    private static final class Owner extends ReentrantBlockableEventLoop<Runnable> {
+    private static final class Owner extends QueuedTestEventLoop {
         private final Thread thread=Thread.currentThread();
         Owner() { super("delta-content-owner-test"); }
-        @Override protected Runnable wrapRunnable(Runnable task) { return task; }
+        @Override public Runnable wrapRunnable(Runnable task) { return task; }
         @Override protected boolean shouldRun(Runnable task) { return true; }
         @Override protected Thread getRunningThread() { return thread; }
     }
@@ -29,7 +29,7 @@ class SnapshotContentCommitTest {
         var shadowBlock=new AtomicReference<>("stone"); var visibleBlock=new AtomicReference<>("stone");
         var writes=new AtomicInteger(); var acknowledgements=new AtomicInteger();
         fence.append(4,"diamond",10);
-        AsyncSnapshotCommit.submit(owner::tell,client::add,()->fence.pending(4,version),
+        AsyncSnapshotCommit.submit(owner::enqueue,client::add,()->fence.pending(4,version),
                 ()->visibleBlock.set("gold"),
                 ()->{
                     assertSame(baseline,content.applyOnce(()->fence.pending(4,version),()->{
@@ -42,14 +42,14 @@ class SnapshotContentCommitTest {
                         visibleBlock.set(state); owner.execute(()->shadowBlock.set(state));
                     }
                     // A busy LIGHT retry used to submit the same GOLD snapshot again here.
-                    for(int i=0;i<3;i++) owner.tell(()->assertNull(content.applyOnce(
+                    for(int i=0;i<3;i++) owner.enqueue(()->assertNull(content.applyOnce(
                             ()->fence.pending(4,version),()->{
                                 writes.incrementAndGet(); shadowBlock.set("gold"); return baseline;
                             })));
-                    owner.tell(()->assertSame(baseline,content.applyOnce(()->true,()->{
+                    owner.enqueue(()->assertSame(baseline,content.applyOnce(()->true,()->{
                         fail("Even a still-current LIGHT retry must not reapply content"); return null;
                     })));
-                    owner.tell(()->client.add(()->{
+                    owner.enqueue(()->client.add(()->{
                         assertTrue(fence.finishDrain(4,drain)); acknowledgements.incrementAndGet();
                     }));
                 },t->fail(t));
@@ -64,9 +64,9 @@ class SnapshotContentCommitTest {
 
     @Test void oldReappliedDeltaReproducesGoldOnlyInTheShadowAfterTheNativeTail() {
         Owner owner=new Owner(); var shadowBlock=new AtomicReference<>("stone");
-        owner.tell(()->shadowBlock.set("gold"));
-        owner.tell(()->shadowBlock.set("diamond"));
-        owner.tell(()->shadowBlock.set("gold")); // Old busy-path repeated content submission.
+        owner.enqueue(()->shadowBlock.set("gold"));
+        owner.enqueue(()->shadowBlock.set("diamond"));
+        owner.enqueue(()->shadowBlock.set("gold")); // Old busy-path repeated content submission.
         while(owner.pollTask()) {}
         assertEquals("gold",shadowBlock.get());
     }
@@ -78,7 +78,7 @@ class SnapshotContentCommitTest {
             assertTrue(fence.begin(4,1)); long version=fence.incoming(4);
             assertTrue(fence.pending(4,version));
             var content=new SnapshotContentCommit<Object>();
-            owner.tell(()->assertNull(content.applyOnce(()->fence.pending(4,version),()->{
+            owner.enqueue(()->assertNull(content.applyOnce(()->fence.pending(4,version),()->{
                 fail("Stale consumer admission must be checked again on the owner"); return null;
             })));
             if(disconnect) fence.clear(); else assertTrue(fence.begin(4,2));

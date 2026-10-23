@@ -922,3 +922,11 @@ Hassium `login hello answered` / `play init` 均各两次，两轮实际进入�
 `build/forge-login-repro/audit.json`，原始结果见
 `build/smoke-test/results/result_forge47421_repro_20261019.json`。
 57 份运行配置已按本轮独立备份恢复并核对 SHA-256；未改成品 JAR 或发布状态。
+
+### Lithostitched 1.8 缓存影子端隔离（2026-10-23）
+
+缓存影子端不加载未同步的世界生成数据。其 initServer/createLevels 继续处于显式
+cacheOnly 装配作用域，`MixinLithostitchedModifiers` 只在该作用域中跳过
+ModifierManager.getAllModifiers，避免 Regions Unexplored 等事件访问缺失的 placed_feature。
+普通世界、真实服务端及 SeedGen 的完整世界生成装配仍执行原修饰器；旧版没有该类时不挂钩。
+正常窗口复现、修复与验收见[本轮整包记录](handoff/modpack-compat-20261023.md)。

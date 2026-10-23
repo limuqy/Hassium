@@ -5,16 +5,16 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
-import net.minecraft.util.thread.ReentrantBlockableEventLoop;
+import io.github.limuqy.mc.hassium.testutil.QueuedTestEventLoop;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class OwnerThreadDispatchTest {
     /** Uses Minecraft's actual runningTask/scheduleExecutables queue policy on both anchors. */
-    private static final class Owner extends ReentrantBlockableEventLoop<Runnable> {
+    private static final class Owner extends QueuedTestEventLoop {
         private final Thread thread = Thread.currentThread();
         Owner() { super("pull-order-owner-test"); }
-        @Override protected Runnable wrapRunnable(Runnable task) { return task; }
+        @Override public Runnable wrapRunnable(Runnable task) { return task; }
         @Override protected boolean shouldRun(Runnable task) { return true; }
         @Override protected Thread getRunningThread() { return thread; }
     }
@@ -23,7 +23,7 @@ class OwnerThreadDispatchTest {
         Owner owner = new Owner();
         List<String> wire = new ArrayList<>();
         AtomicReference<String> clientBlock = new AtomicReference<>("stone");
-        owner.tell(() -> {
+        owner.enqueue(() -> {
             assertTrue(owner.isSameThread());
             owner.execute(() -> { wire.add("FULL"); clientBlock.set("stone"); });
             wire.add("block tail"); clientBlock.set("diamond");
@@ -41,7 +41,7 @@ class OwnerThreadDispatchTest {
             Owner owner = new Owner();
             List<String> wire = new ArrayList<>();
             AtomicReference<String> clientBlock = new AtomicReference<>("stone");
-            owner.tell(() -> {
+            owner.enqueue(() -> {
                 OwnerThreadDispatch.runOrSchedule(owner.isSameThread(), owner, () -> {
                     wire.add(kind); clientBlock.set("stone");
                 });

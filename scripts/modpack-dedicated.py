@@ -355,7 +355,32 @@ def client_arguments(args, key, run, agent):
         command.insert(0, "-Dhassium.diagnostic.traceLogin=true")
     if getattr(args, "trace_mixin", False):
         command.insert(0, "-Dhassium.diagnostic.traceMixin=true")
+    if getattr(args, "trace_cache_restores", False):
+        command.insert(0, "-Dhassium.diagnostic.traceCacheRestores=true")
     return command
+
+
+def cache_restore_read_stage(client_log):
+    """Successful restore returns, bounded by each new cache owner and its sampling point."""
+    assemblies = list(re.finditer(r"\[SHADOW-CACHE\] assembly=connection", client_log))
+    probes = [list(re.finditer(f"HassiumSmokeTest:PROBE_WRITTEN ROUND{round_}", client_log))
+              for round_ in (1, 2)]
+    if (len(assemblies) != 2 or any(len(items) != 1 for items in probes)
+            or not assemblies[0].start() < probes[0][0].start() < assemblies[1].start() < probes[1][0].start()):
+        return {"complete": False, "rounds": []}
+    rounds = []
+    for index in range(2):
+        events = re.findall(r"\[DIAGNOSTIC-CACHE\] restored ([a-z0-9_.-]+:[a-z0-9_./-]+) ([^\r\n]+)",
+                            client_log[assemblies[index].end():probes[index][0].start()])
+        types = {}
+        treasure_positions = []
+        for type_, pos in events:
+            types[type_] = types.get(type_, 0) + 1
+            if type_ == "treasure2:proximity_mobset_spawner":
+                treasure_positions.append(pos)
+        rounds.append({"round": index + 1, "total": len(events), "types": types,
+                       "treasureSpawnerPositions": treasure_positions})
+    return {"complete": True, "rounds": rounds}
 
 
 def server_arguments(args, key, run, agent, runtime_args):
@@ -390,7 +415,7 @@ def read_log(path):
 
 
 def critical_client_failure(text):
-    match = re.search(r"Invalid modId found[^\r\n]*|HassiumSmokeTest:FAIL[^\r\n]*|Shadow server creation failed|Failed to create shadow seed server|java\.util\.ConcurrentModificationException|Light timeout \(|Failed to decode packet 'clientbound/|Hassium egress v3 connection failed", text)
+    match = re.search(r"Invalid modId found[^\r\n]*|HassiumSmokeTest:FAIL[^\r\n]*|Shadow server creation failed|Failed to create shadow seed server|java\.util\.ConcurrentModificationException|Light timeout \(|Failed to decode packet 'clientbound/|Hassium egress v3 connection failed|shadow main loop did not run a POI task", text)
     return match.group(0) if match else None
 
 
@@ -420,6 +445,10 @@ def run_pair(args, key, agent):
               "clientLog": str(run / "client.log"), "viewDistances": [args.vd1, args.vd2], "seedGen": False,
               "vanillaChunksControl": getattr(args, "control", False), "harnessSha256": base.sha(Path(__file__))}
     result["expectCacheBootstrap"] = getattr(args, "expect_cache_bootstrap", False)
+    result["traceCacheRestores"] = getattr(args, "trace_cache_restores", False)
+    result["baseHarnessSha256"] = base.sha(Path(base.__file__))
+    result["playerName"] = base.PLAYER_NAME
+    result["offlinePlayerUuid"] = base.offline_player_uuid(base.PLAYER_NAME)
     result["agentSha256"] = base.sha(agent)
     result["traceLogin"] = getattr(args, "trace_login", False)
     result["traceMixin"] = getattr(args, "trace_mixin", False)
@@ -476,13 +505,14 @@ def run_pair(args, key, agent):
                         result["serverStartupFatal"] = True
                         break
                     if (args.root / "STOP").exists():
+                        result["stopRequested"] = True
                         break
                     try:
                         server.wait(timeout=1)
                     except subprocess.TimeoutExpired:
                         pass
                 if not result.get("serverReady"):
-                    result["status"] = "SERVER_NOT_READY"
+                    result["status"] = "STOPPED" if result.get("stopRequested") else "SERVER_NOT_READY"
                     dump(args, server, run / "server-startup.threads.txt")
                     return result
                 base.emit(f"{key}: dedicated server ready; launching full client")
@@ -548,6 +578,9 @@ def run_pair(args, key, agent):
                  "noShadowBlockEntitySaveFailure": not bool(re.search(
                      r"\[hassium-[^\]\r\n]+/ERROR\].*A BlockEntity type .*exception trying to write state", cl)),
                  "noMixinLocalAnalysisFailure": "AnalyzerException: Error at instruction" not in cl + sl,
+                 "noPlayerIdentityMismatch": not bool(re.search(r"Local player id .* was not found in the known players list", cl)),
+                 "noPoiDispatchTimeout": "shadow main loop did not run a POI task" not in cl,
+                 "noDuplicateLogin": "You logged in from another location" not in cl + sl,
                  "noFullPushTimeout": not bool(re.search(r"confirms timed out.*direct-pushing", sl))}
         if getattr(args, "expect_cache_bootstrap", False):
             gates["cacheBootstrapBothRounds"] = cl.count("[SHADOW-CACHE] assembly=connection") >= 2
@@ -581,6 +614,11 @@ def run_pair(args, key, agent):
                 gates["treasureSpawnerRetainedBothRounds"] = all(p.get("isolation", {}).get("shadowTreasureSpawnerSnapshots", 0) > 0 for p in probes)
                 gates["authoritativeBeRestoredFromDisk"] = probes[1].get("isolation", {}).get("shadowBeSnapshotsRestored", 0) > 0
                 gates["treasureSpawnerRestoredFromDisk"] = probes[1].get("isolation", {}).get("shadowTreasureSpawnerSnapshotsRestored", 0) > 0
+                if getattr(args, "trace_cache_restores", False):
+                    evidence = result["cacheRestoreReadStage"] = cache_restore_read_stage(cl)
+                    restored = evidence["rounds"][1] if evidence["complete"] else {}
+                    gates["authoritativeBeRestoredFromDisk"] = restored.get("total", 0) > 0
+                    gates["treasureSpawnerRestoredFromDisk"] = bool(restored.get("treasureSpawnerPositions"))
         result["gates"] = gates
         if all(gates.values()):
             result["status"] = ("PASS_CONTROL" if getattr(args, "control", False) else
@@ -709,6 +747,7 @@ def main():
     parser.add_argument("--diagnostic-exclude", action="append", default=[], metavar="JAR", help="Explicitly exclude an exact original JAR from both disposable test sides; can only produce PASS_WITH_EXCLUSIONS")
     parser.add_argument("--trace-login", action="store_true", help="Test-agent packet class/size and disconnect traces, without payload contents")
     parser.add_argument("--trace-mixin", action="store_true", help="Trace Mixin local-table analysis target/method/maxStack without modifying its computation")
+    parser.add_argument("--trace-cache-restores", action="store_true", help="Observe successful disk BE restores before authority refresh replaces the sampled provenance")
     parser.add_argument("--reference-inventory", type=Path, help="Use an exact successful client/server JAR inventory, verified by SHA256")
     parser.add_argument("--continue-on-failure", action="store_true", help="Explicitly inventory failures instead of stopping for a fix")
     parser.add_argument("--minecraft", type=Path, default=Path(r"D:\MC\HMCL\.minecraft"))

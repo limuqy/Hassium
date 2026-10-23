@@ -57,7 +57,7 @@ class ShadowTrackingActivationTest {
         try {
             ShadowClientBridge.register(api);
             serverField.set(registry, shadow);
-            session.consumeOnShadowLoop();
+            session.consumeOnShadowLoop(shadow);
             assertSame(pending, pendingField.get(session), "Login state must survive until play_init");
             assertNull(bound.get(session));
             assertSame(position, center.get(session));
@@ -73,11 +73,24 @@ class ShadowTrackingActivationTest {
             // The fake server has no levels: exercise activation/binding without starting native ticks.
             pendingField.set(session, null);
             active.set(true);
-            session.consumeOnShadowLoop();
+            session.consumeOnShadowLoop(shadow);
             assertSame(shadow, bound.get(session));
             assertNull(dimension.get(session));
             assertNull(center.get(session));
             assertTrue(inFlight.isEmpty());
+
+            // An old native loop can still run while its save drains after a rebuild.
+            var replacement = (ShadowSeedServer) unsafe.allocateInstance(ShadowSeedServer.class);
+            serverField.set(registry, replacement);
+            pendingField.set(session, pending);
+            dimension.set(session, "minecraft:overworld");
+            center.set(session, position);
+            inFlight.put(1L, 1L);
+            session.consumeOnShadowLoop(shadow);
+            assertSame(shadow, bound.get(session), "The retiring loop cannot bind the replacement");
+            assertSame(pending, pendingField.get(session), "The replacement's pending state must remain untouched");
+            assertSame(position, center.get(session));
+            assertEquals(Map.of(1L, 1L), inFlight);
         } finally {
             bridgeField.set(null, previousBridge);
             serverField.set(registry, previousServer);

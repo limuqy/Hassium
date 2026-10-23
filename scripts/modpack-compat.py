@@ -15,9 +15,18 @@ import shutil
 import subprocess
 import time
 import traceback
+import uuid
 import zipfile
 
 REPO = Path(__file__).resolve().parent.parent
+PLAYER_NAME = "HassiumCompat"
+
+
+def offline_player_uuid(name):
+    """Match UUIDUtil.createOfflinePlayerUUID on the isolated offline server."""
+    return uuid.UUID(bytes=hashlib.md5(("OfflinePlayer:" + name).encode("utf-8")).digest(), version=3).hex
+
+
 PACKS = {
     "fo1201": "Fabulously Optimized 1.20.1",
     "xplus1201": "XPlus 2.0 based on Minecraft 1.20.1 (Fabric)",
@@ -306,8 +315,8 @@ def client_command(args, key, run, agent):
     values = dict(natives_directory=str(natives), launcher_name="HassiumPackCompat", launcher_version="1",
                   classpath=";".join(str(p) for p in dict.fromkeys(paths)), library_directory=str(libraries),
                   classpath_separator=";", version_name=source.name, primary_jar_name=game_jar.name,
-                  auth_player_name="HassiumCompat", game_directory=str(client), assets_root=str(args.minecraft / "assets"),
-                  assets_index_name=metadata["assetIndex"]["id"], auth_uuid="80d5a03af2c23bb3b0d6a53e7920bc41",
+                  auth_player_name=PLAYER_NAME, game_directory=str(client), assets_root=str(args.minecraft / "assets"),
+                  assets_index_name=metadata["assetIndex"]["id"], auth_uuid=offline_player_uuid(PLAYER_NAME),
                   auth_access_token="0", clientid="", auth_xuid="", user_type="legacy", version_type="compatibility-test")
 
     def expand(value):

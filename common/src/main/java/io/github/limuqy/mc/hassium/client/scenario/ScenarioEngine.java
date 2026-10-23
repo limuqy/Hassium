@@ -265,10 +265,10 @@ public final class ScenarioEngine {
                         mc.getConnection() != null, mc.player != null, mc.level != null,
                         mc.screen == null ? "none" : mc.screen.getClass().getName());
             }
-            // 有界自愈（仅 R2，since=disconnect）：15s 内连 play 连接都没建立 → 清层后强制重连一次。
-            // 只重试一次，避免把「服务端拒绝」放大成重连风暴。
+            // 登录握手期间 getConnection() 仍为空；不能打断正在连接的整合包客户端。
+            // 仅回到空闲/失败界面后允许一次自愈，避免产生两个并行登录连接。
             if (sinceDisconnect && !reconnectRetried && base > 0L && now - base > 15_000L
-                    && mc.getConnection() == null) {
+                    && mc.getConnection() == null && !joinInProgress(mc.screen)) {
                 reconnectRetried = true;
                 LOGGER.warn("HassiumSmokeTest: {} no connection after {}ms — forcing teardown + one reconnect retry",
                         label, now - base);
@@ -301,6 +301,11 @@ public final class ScenarioEngine {
             io.github.limuqy.mc.hassium.shadow.light.SmokeChunkTrace.markSessionStart();
         }
         return Outcome.DONE;
+    }
+
+    static boolean joinInProgress(net.minecraft.client.gui.screens.Screen screen) {
+        return screen instanceof net.minecraft.client.gui.screens.ConnectScreen
+                || io.github.limuqy.mc.hassium.compat.ClientLoadingScreenCompat.isTerrainLoadingScreen(screen);
     }
 
     // ------------------------------------------------------------------ wait

@@ -234,7 +234,13 @@ public final class SeedGenLevelCompat {
         // World-load subscribers (e.g. Mekanism SavedData) need the loader's server
         // before createLevels posts their events. Do not overwrite a real server.
         io.github.limuqy.mc.hassium.compat.ServerLifecycleHooksCompat.adoptCurrentServer(server);
-        server.initServer();
+        if (cacheOnly) {
+            // ChunkMap construction can invoke optional worldgen integrations too.
+            ShadowSeedServer initializing = server;
+            ShadowAssemblyScope.cacheOnly(initializing::initServer);
+        } else {
+            server.initServer();
+        }
         // 装配成功的维度进缓存白名单（三主维度 + 本地 resolve 的自定义维度）
         for (net.minecraft.server.level.ServerLevel lvl : server.getAllLevels()) {
             String dim = ShadowSeedServer.dimensionId(lvl);

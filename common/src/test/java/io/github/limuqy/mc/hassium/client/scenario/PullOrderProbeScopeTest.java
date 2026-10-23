@@ -7,7 +7,7 @@ import java.nio.file.Path;
 import java.util.ArrayDeque;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import net.minecraft.util.thread.ReentrantBlockableEventLoop;
+import io.github.limuqy.mc.hassium.testutil.QueuedTestEventLoop;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -38,10 +38,10 @@ class PullOrderProbeScopeTest {
         assertFalse(scope.complete(TARGET,2115,level,connection,8));
         assertTrue(scope.complete(TARGET,2115,level,connection,7));
     }
-    private static final class Owner extends ReentrantBlockableEventLoop<Runnable> {
+    private static final class Owner extends QueuedTestEventLoop {
         private final Thread thread=Thread.currentThread();
         Owner(){super("probe-tail-owner-test");}
-        @Override protected Runnable wrapRunnable(Runnable task){return task;}
+        @Override public Runnable wrapRunnable(Runnable task){return task;}
         @Override protected boolean shouldRun(Runnable task){return true;}
         @Override protected Thread getRunningThread(){return thread;}
     }
@@ -55,12 +55,12 @@ class PullOrderProbeScopeTest {
         var checks=new AtomicInteger(); var block=new AtomicReference<>("stone");
         long neighbor=DimensionKey.key("minecraft:overworld",3,-2);
         // The old completed(x-only) callback ran here while target content was still STONE.
-        owner.tell(()->assertFalse(scope.complete(neighbor,token,level,connection,7)));
+        owner.enqueue(()->assertFalse(scope.complete(neighbor,token,level,connection,7)));
         assertTrue(owner.pollTask()); assertEquals(0,checks.get());
         fence.injected(TARGET,token,chunk); fence.append(TARGET,"diamond",7);
         long drain=fence.startDrain(TARGET);
-        for(String state:fence.takeTail(TARGET,drain)) owner.tell(()->block.set(state));
-        owner.tell(()->render.add(()->{
+        for(String state:fence.takeTail(TARGET,drain)) owner.enqueue(()->block.set(state));
+        owner.enqueue(()->render.add(()->{
             assertTrue(fence.finishDrain(TARGET,drain));
             if(!fence.active(TARGET) && scope.complete(TARGET,token,level,connection,7)) {
                 assertEquals("diamond",block.get()); checks.incrementAndGet();

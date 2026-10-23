@@ -112,6 +112,9 @@ public final class EgressPipeline {
     static int compressionLevel() { return HassiumConfigService.getInstance().getCompressionLevel(); }
     public static void disconnectInvalid(Connection connection, ChannelHandlerContext ctx, Throwable cause) { fail(connection, ctx, cause); }
     static void fail(Connection connection, ChannelHandlerContext ctx, Throwable cause) {
+        // Mods can finish an already queued send after vanilla has closed the channel.
+        // Its failed write promise is transport cleanup, not a malformed v3 frame.
+        if (!ctx.channel().isActive() && cause instanceof java.nio.channels.ClosedChannelException) return;
         METRICS.errors.increment();
         Constants.LOG.error("Hassium egress v3 connection failed", cause);
         String message = cause.getMessage() == null ? cause.getClass().getSimpleName() : cause.getMessage();

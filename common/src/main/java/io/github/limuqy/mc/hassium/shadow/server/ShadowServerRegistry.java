@@ -149,6 +149,14 @@ public final class ShadowServerRegistry {
     }
 
     public ShadowSeedServer getOrCreate() {
+        ShadowSeedServer loopOwner = ShadowSeedServer.currentMainLoopOwner();
+        if (loopOwner != null) {
+            // A detached loop must keep draining its save/POI queue. Waiting for its own
+            // shutdown here prevents that shutdown from ever finishing normally.
+            if (server != loopOwner) return null;
+            return canUseShadow() && shouldReuseParkedInstance(boundServerId, client().getServerId(), true)
+                    ? loopOwner : null;
+        }
         if (!canUseShadow()) return null;
         String wantId = client().getServerId();
         ShadowSeedServer existing = server;

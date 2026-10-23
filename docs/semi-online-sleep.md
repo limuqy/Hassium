@@ -50,6 +50,8 @@ stateDiagram-v2
 
 服务端模组兼容清单仍只包含原版、加载器基础模块与 Hassium；未知世界同步包和异步世界发包需要明确适配。影子引擎不支持的维度不允许进入休眠。其他 Minecraft 版本/加载器不协商此能力。
 
+客户端使用 Sodium、Embeddium、Xenon 等替代地形渲染器时，目前不协商休眠能力，也不应用原版地形休眠渲染钩子；这些渲染器尚无 3×3 休眠窗口适配。区块缓存和网络功能仍可正常协商。
+
 ## 验证
 
 当前场景及复跑方式见[运行时冒烟](runtime-smoke-test.md#半在线休眠专项2x)：`sleepdisabled`、`sleepauto`、`sleepresume`、`sleepmixed`、`sleepwindowtraffic`、`sleepfactory`。

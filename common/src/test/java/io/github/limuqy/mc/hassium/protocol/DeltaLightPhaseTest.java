@@ -9,15 +9,15 @@ import java.nio.file.Path;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import net.minecraft.util.thread.ReentrantBlockableEventLoop;
+import io.github.limuqy.mc.hassium.testutil.QueuedTestEventLoop;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class DeltaLightPhaseTest {
-    private static final class Owner extends ReentrantBlockableEventLoop<Runnable> {
+    private static final class Owner extends QueuedTestEventLoop {
         private final Thread thread=Thread.currentThread();
         Owner(){super("halo-light-owner-test");}
-        @Override protected Runnable wrapRunnable(Runnable task){return task;}
+        @Override public Runnable wrapRunnable(Runnable task){return task;}
         @Override protected boolean shouldRun(Runnable task){return true;}
         @Override protected Thread getRunningThread(){return thread;}
     }
@@ -34,7 +34,7 @@ class DeltaLightPhaseTest {
         assertFalse(fence.pending(1,token)); assertFalse(fence.acceptsReady(1,token));
         assertTrue(fence.lightCurrent(1,token)); assertEquals(0,fence.reservedBytes());
         // Neighbour completion/owner admission arrives after the halo tail has already ACKed.
-        owner.tell(()->{
+        owner.enqueue(()->{
             boolean valid=commit.applied() && fence.lightCurrent(1,token) && current.get()==commit.committed();
             assertTrue(valid);
             for(int retry=0;retry<3;retry++) assertSame(baseline,commit.applyOnce(()->valid,()->{
@@ -85,7 +85,7 @@ class DeltaLightPhaseTest {
                 field(column,"done",true); field(column,"chunk",null); field(column,"publish",true);
                 assertTrue(SleepTerrainClient.acceptLight(key,token),"COLUMN_READY dropping its chunk reference must not erase phase authority");
                 Owner owner=new Owner(); var phases=new AtomicInteger();
-                owner.tell(()->{
+                owner.enqueue(()->{
                     assertSame(baseline,content.applyOnce(()->SleepTerrainClient.acceptLight(key,token),()->{
                         fail("Normal sleep ACK must continue only LIGHT, never terrain"); return null;
                     }));

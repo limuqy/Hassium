@@ -8,15 +8,15 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
-import net.minecraft.util.thread.ReentrantBlockableEventLoop;
+import io.github.limuqy.mc.hassium.testutil.QueuedTestEventLoop;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
 class HaloLightProbeTest {
-    private static final class Owner extends ReentrantBlockableEventLoop<Runnable> {
+    private static final class Owner extends QueuedTestEventLoop {
         private final Thread owner=Thread.currentThread();
         Owner(){super("halo-fixture-owner");}
-        @Override protected Runnable wrapRunnable(Runnable task){return task;}
+        @Override public Runnable wrapRunnable(Runnable task){return task;}
         @Override protected boolean shouldRun(Runnable task){return true;}
         @Override protected Thread getRunningThread(){return owner;}
     }
@@ -37,11 +37,11 @@ class HaloLightProbeTest {
         long drain=fence.startDrain(10);fence.takeTail(10,drain);
         assertFalse(fence.pending(10,token));assertTrue(fence.lightCurrent(10,token));
         assertEquals(HaloLightProbe.Decision.DEFER,probe.beforeLight(id,false,true,3),"Draining alone is not actual tail completion");
-        owner.tell(()->{
+        owner.enqueue(()->{
             assertTrue(fence.finishDrain(10,drain));assertTrue(probe.tailFinished(10,token,4));
         });
         assertTrue(owner.pollTask());assertEquals(0,fence.reservedBytes());
-        owner.tell(()->{
+        owner.enqueue(()->{
             assertEquals(HaloLightProbe.Decision.RELEASE,probe.beforeLight(id,false,true,5));
             assertSame(baseline,work.applyOnce(()->true,()->{fail("Fixture must retry only LIGHT");return null;}));
             assertTrue(probe.phaseCurrent(id,"admitted",level,connection,server,1,baseline,false,true,6));
@@ -56,12 +56,12 @@ class HaloLightProbeTest {
         var id=identity(10,20,server,1,baseline,level,connection);
         probe.arm(level,connection,1,0);assertTrue(probe.select(id,1));assertTrue(probe.tailFinished(10,20,2));
         assertEquals(HaloLightProbe.Decision.RELEASE,probe.beforeLight(id,false,true,3));
-        owner.tell(()->assertTrue(probe.phaseCurrent(id,"admitted",level,connection,server,1,current.get(),false,true,4)));
+        owner.enqueue(()->assertTrue(probe.phaseCurrent(id,"admitted",level,connection,server,1,current.get(),false,true,4)));
         assertTrue(owner.pollTask());
         // The future still carries the original event/baseline and its LIGHT token remains valid.
         // The owner lookup, rather than the event object, must detect the replacement.
-        future.thenRun(()->owner.tell(()->assertFalse(probe.phaseCurrent(id,"engine-complete",level,connection,server,1,current.get(),false,true,6))));
-        owner.tell(()->current.set(new Object()));future.complete(null);
+        future.thenRun(()->owner.enqueue(()->assertFalse(probe.phaseCurrent(id,"engine-complete",level,connection,server,1,current.get(),false,true,6))));
+        owner.enqueue(()->current.set(new Object()));future.complete(null);
         assertTrue(owner.pollTask());assertTrue(owner.pollTask());
         assertFalse(probe.complete());assertNotNull(probe.failure());assertNull(probe.selected());
         assertEquals(HaloLightProbe.Decision.NONE,probe.beforeLight(id,false,true,7));

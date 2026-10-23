@@ -31,6 +31,10 @@ public final class HassiumModCompatMixinPlugin implements IMixinConfigPlugin {
     @Override
     public boolean shouldApplyMixin(String targetClassName, String mixinClassName) {
         try {
+            if (mixinClassName.endsWith(".MixinLithostitchedModifiers")) {
+                return HassiumModCompatMixinPlugin.class.getClassLoader().getResource(
+                        "dev/worldgen/lithostitched/impl/worldgen/modifier/ModifierManager.class") != null;
+            }
             if (mixinClassName.endsWith(".MixinShadowCacheResources")) return true;
             if (mixinClassName.endsWith(".MixinLibXInteractionMetadata")) return ModCompatFlags.libX();
             if (mixinClassName.endsWith(".MixinDeepVoidCultTemple")) return ModCompatFlags.deepVoid();

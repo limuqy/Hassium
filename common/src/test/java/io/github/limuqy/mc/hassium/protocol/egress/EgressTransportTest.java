@@ -13,6 +13,43 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import static org.junit.jupiter.api.Assertions.*;
 
 class EgressTransportTest {
+    @Test void lateWriteOnClosedChannelDoesNotReportCodecFailure() {
+        var handler = new ChannelInboundHandlerAdapter();
+        EmbeddedChannel channel = new EmbeddedChannel(handler);
+        ChannelHandlerContext context = channel.pipeline().context(handler);
+        long before = EgressPipeline.METRICS.errors.sum();
+        channel.close();
+        EgressPipeline.fail(null, context, new java.nio.channels.ClosedChannelException());
+        assertEquals(before, EgressPipeline.METRICS.errors.sum());
+        channel.finishAndReleaseAll();
+    }
+
+    @Test void closedChannelExceptionWhileActiveRemainsAFailure() {
+        assertPipelineFailure(new java.nio.channels.ClosedChannelException(), false);
+    }
+
+    @Test void invalidFrameAfterCloseRemainsAFailure() {
+        assertPipelineFailure(new IllegalArgumentException("invalid v3 frame"), true);
+    }
+
+    private static void assertPipelineFailure(Throwable cause, boolean closeFirst) {
+        var handler = new ChannelInboundHandlerAdapter();
+        EmbeddedChannel channel = new EmbeddedChannel(handler);
+        ChannelHandlerContext context = channel.pipeline().context(handler);
+        var disconnects = new java.util.concurrent.atomic.AtomicInteger();
+        Connection connection = new Connection(PacketFlow.CLIENTBOUND) {
+            @Override public void disconnect(net.minecraft.network.chat.Component reason) { disconnects.incrementAndGet(); }
+        };
+        try {
+            if (closeFirst) channel.close();
+            long before = EgressPipeline.METRICS.errors.sum();
+            EgressPipeline.fail(connection, context, cause);
+            assertEquals(before + 1, EgressPipeline.METRICS.errors.sum());
+            assertEquals(1, disconnects.get());
+            assertFalse(channel.isActive());
+        } finally { channel.finishAndReleaseAll(); }
+    }
+
     @Test void peerCloseFailsInFlightPromisesWithoutReportingLiveCodecFailure() {
         Worker worker = new Worker(); AtomicBoolean enabled = new AtomicBoolean(true);
         var reported = new java.util.concurrent.atomic.AtomicInteger();

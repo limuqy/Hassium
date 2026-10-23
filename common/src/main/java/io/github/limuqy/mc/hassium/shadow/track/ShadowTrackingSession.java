@@ -435,22 +435,21 @@ public final class ShadowTrackingSession {
      * 影子主循环每轮调用：消费待同步状态 + 节流驱动 chunk 系统簿记 + 分批发 pull 请求。
      * 仅影子主循环线程可调。
      */
-    public void consumeOnShadowLoop() {
+    public void consumeOnShadowLoop(ShadowSeedServer owner) {
+        // A retiring loop may drain its own native tasks, never a replacement session's tracking.
+        if (owner == null || ShadowServerRegistry.getInstance().get() != owner) return;
         // 缓存装配可早于 play_init；此时网络出口不会发送 pull。
         // 保留 pending，激活后再物化/mark compare，避免留下永远等不到响应的 AWAITING。
         if (!ShadowLightCompute.isEnabled()) {
             return;
         }
-        ShadowSeedServer shadow = ShadowServerRegistry.getInstance().get();
+        ShadowSeedServer shadow = owner;
         if (shadow != boundServer) {
             boundServer = shadow;
             currentDimension = null;
             trackingCenter = null;
             sweepInFlight.clear();
             lastChunkTickMs = 0;
-        }
-        if (shadow == null) {
-            return;
         }
         PendingState state = pending;
         pending = null;
