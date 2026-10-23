@@ -50,6 +50,8 @@
         "client.MixinSleepMinecraft",
         "client.MixinSleepKeyboardHandler",
         "client.MixinSleepGameRenderer",
+        "client.MixinSleepGui",
+        "client.SleepKeyboardInvoker",
         "client.MixinSleepChunkStorage",
         "client.MixinSleepOptions",
         "client.MixinSleepLevelTicks",

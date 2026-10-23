@@ -70,14 +70,14 @@ public class ForgeNetworkManager implements INetworkManagerService {
 #if MC_VER < MC_1_21_1
         player.connection.send(CHANNEL.toVanillaPacket(new SleepToClient(data),NetworkDirection.PLAY_TO_CLIENT));
 #else
-        throw new UnsupportedOperationException("Sleep requires a validated loader anchor");
+        sendToPlayer(player, new SleepToClient(data));
 #endif
     }
     @Override public void sendSleepControlToServer(byte[] data) {
 #if MC_VER < MC_1_21_1
         CHANNEL.sendToServer(new SleepToServer(data));
 #else
-        throw new UnsupportedOperationException("Sleep requires a validated loader anchor");
+        sendToServer(new SleepToServer(data));
 #endif
     }
 
@@ -345,6 +345,10 @@ public class ForgeNetworkManager implements INetworkManagerService {
                         .addMain(ShadowPullRequestWrapper.class,
                                 playCodec(ShadowPullRequestWrapper::encode, ShadowPullRequestWrapper::decode),
                                 (msg, ctx) -> ctx.enqueueWork(() -> handleShadowPullRequest(msg, ctx.getSender())))
+                        .addMain(SleepToServer.class,
+                                playCodec(SleepToServer::encode, SleepToServer::decode),
+                                (msg, ctx) -> ctx.enqueueWork(() ->
+                                        io.github.limuqy.mc.hassium.server.sleep.SleepServer.receive(ctx.getSender(), msg.data())))
                     .clientbound()
                         .addMain(AggregationWrapper.class,
                                 playCodec(AggregationWrapper::encode, AggregationWrapper::decode),
@@ -366,8 +370,15 @@ public class ForgeNetworkManager implements INetworkManagerService {
                                 playCodec(ChunkAuthorityWrapper::encode, ChunkAuthorityWrapper::decode),
                                 (msg, ctx) -> ctx.enqueueWork(() ->
                                         PayloadHandlers.handleChunkAuthority(msg.data())))
+                        .addMain(SleepToClient.class,
+                                playCodec(SleepToClient::encode, SleepToClient::decode),
+                                (msg, ctx) -> {
+                                    Connection source = ctx.getConnection();
+                                    ctx.enqueueWork(() ->
+                                            io.github.limuqy.mc.hassium.client.sleep.SleepClient.receive(source, msg.data()));
+                                })
                 .build();
-        LOGGER.info("Hassium: Registered Forge 50+ ChannelBuilder play channel (2 C2S + 7 S2C)");
+        LOGGER.info("Hassium: Registered Forge 50+ ChannelBuilder play channel (3 C2S + 8 S2C)");
     }
 
     private static <M> StreamCodec<RegistryFriendlyByteBuf, M> playCodec(

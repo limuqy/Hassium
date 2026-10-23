@@ -11,9 +11,12 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(targets="net.minecraft.client.multiplayer.ClientChunkCache$Storage")
 public abstract class MixinSleepChunkStorage implements SleepChunkResidency.Storage {
-#if MC_VER < MC_1_21_2
     @Shadow @Final private AtomicReferenceArray<LevelChunk> chunks;
+#if MC_VER < MC_1_21_2
     @Shadow protected abstract LevelChunk replace(int index, LevelChunk expected, LevelChunk replacement);
+#else
+    @Shadow protected abstract void replace(int index, LevelChunk replacement);
+#endif
 
     @Inject(method="<init>",at=@At("RETURN"))
     private void hassium$register(ClientChunkCache owner,int radius,CallbackInfo ci) {
@@ -26,7 +29,11 @@ public abstract class MixinSleepChunkStorage implements SleepChunkResidency.Stor
             if(chunk!=null && !window.light(chunk.getPos().x,chunk.getPos().z)) {
                 var entities=Boolean.getBoolean("hassium.smokeTest")
                         ? new java.util.ArrayList<>(chunk.getBlockEntities().values()) : null;
+#if MC_VER < MC_1_21_2
                 replace(i,chunk,null);
+#else
+                replace(i,null);
+#endif
                 if(entities!=null) {
                     for(var entity:entities) if(!entity.isRemoved())
                         throw new IllegalStateException("Native unload left a live block entity at "+entity.getBlockPos());
@@ -37,7 +44,4 @@ public abstract class MixinSleepChunkStorage implements SleepChunkResidency.Stor
         }
         return removed;
     }
-#else
-    @Override public int hassium$trim(SleepChunkWindow window) { return 0; }
-#endif
 }

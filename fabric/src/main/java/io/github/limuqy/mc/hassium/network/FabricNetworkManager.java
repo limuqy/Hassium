@@ -52,6 +52,26 @@ import java.util.UUID;
 public class FabricNetworkManager implements INetworkManagerService {
 
     @Override
+    public void sendSleepControl(ServerPlayer player, byte[] data) {
+#if MC_VER < MC_1_21_1
+        ServerPlayNetworking.send(player, ResourceLocationCompat.vanilla(HassiumChannels.SLEEP_S2C),
+                new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(data)));
+#else
+        ServerPlayNetworking.send(player, new io.github.limuqy.mc.hassium.compat.SleepPayloadCompat.ToClient(data));
+#endif
+    }
+
+    @Override
+    public void sendSleepControlToServer(byte[] data) {
+#if MC_VER < MC_1_21_1
+        ClientPlayNetworking.send(ResourceLocationCompat.vanilla(HassiumChannels.SLEEP_C2S),
+                new FriendlyByteBuf(io.netty.buffer.Unpooled.wrappedBuffer(data)));
+#else
+        ClientPlayNetworking.send(new io.github.limuqy.mc.hassium.compat.SleepPayloadCompat.ToServer(data));
+#endif
+    }
+
+    @Override
     public net.minecraft.network.protocol.Packet<?> createAggregationCarrier(byte[] data) {
 #if MC_VER < MC_1_21_1
         FriendlyByteBuf body = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
@@ -355,6 +375,19 @@ PLAY_INIT_S2C = ResourceLocationCompat.vanilla(HassiumChannels.PLAY_INIT_S2C);
     private void registerServerChannels() {
         // ===== 预握手（配置阶段）：提前登记 Hassium 客户端能力位 =====
         registerPreHandshakeServer();
+
+#if MC_VER < MC_1_21_1
+        ServerPlayNetworking.registerGlobalReceiver(ResourceLocationCompat.vanilla(HassiumChannels.SLEEP_C2S),
+                (server, player, handler, buf, sender) -> {
+                    byte[] data = PayloadHandlers.readAll(buf);
+                    server.execute(() -> io.github.limuqy.mc.hassium.server.sleep.SleepServer.receive(player, data));
+                });
+#else
+        ServerPlayNetworking.registerGlobalReceiver(
+                io.github.limuqy.mc.hassium.compat.SleepPayloadCompat.ToServer.TYPE,
+                (payload, context) -> context.server().execute(() ->
+                        io.github.limuqy.mc.hassium.server.sleep.SleepServer.receive(context.player(), payload.bytes())));
+#endif
 
         // 注册激活 ACK（客户端 index_sync 确认 → common 激活：字典校验 + 聚合 PENDING→ENABLED）
 #if MC_VER < MC_1_21_1

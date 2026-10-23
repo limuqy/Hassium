@@ -7,7 +7,6 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 @Mixin(net.minecraft.client.Minecraft.class)
 public abstract class MixinSleepMinecraft {
-#if MC_VER < MC_1_21_2
     @Inject(method="pauseGame",at=@At("HEAD"))
     private void hassium$sleepPanel(boolean menu, CallbackInfo ci) {
         if(SleepClient.sleeping()) {
@@ -17,5 +16,4 @@ public abstract class MixinSleepMinecraft {
     }
     @Inject(method="tick",at=@At("HEAD"))
     private void hassium$sleepTick(CallbackInfo ci) { SleepClient.tick(); }
-#endif
 }

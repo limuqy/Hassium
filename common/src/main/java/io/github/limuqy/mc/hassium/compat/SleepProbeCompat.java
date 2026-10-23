@@ -21,9 +21,7 @@ public final class SleepProbeCompat {
         @Override public net.minecraft.core.BlockPos getPos() { return pos; }
         @Override public String getType() { return "hassium:smoke_sleep_geometry"; }
     }
-#if MC_VER < MC_1_21_2
     private static final java.util.Map<Integer,net.minecraft.network.protocol.game.VecDeltaCodec> OBSERVER_BASES=new java.util.HashMap<>();
-#endif
     private SleepProbeCompat() {}
     public static void beginGeometry() {
         var mc=net.minecraft.client.Minecraft.getInstance();
@@ -49,7 +47,6 @@ public final class SleepProbeCompat {
         Constants.LOG.info("HassiumSmokeTest:SLEEP geometry realTickLoop active=9 inactive=16 awake={}",awake);
     }
     public static void afterTerrainSnapshot(net.minecraft.server.level.ServerPlayer player,int x,int z) {
-#if MC_VER < MC_1_21_2
         if(!io.github.limuqy.mc.hassium.server.ServerSmokeTest.isEnabled()
                 || !"sleepresume".equals(System.getProperty("hassium.serverSmokeScenario")) || z!=0) return;
         if(x==3) PlayerCompat.getServerLevel(player).setBlock(new net.minecraft.core.BlockPos(50,140,6),
@@ -58,10 +55,8 @@ public final class SleepProbeCompat {
                 instanceof net.minecraft.world.level.block.entity.SignBlockEntity sign) {
             sign.setText(sign.getFrontText().setMessage(0,net.minecraft.network.chat.Component.literal("snapshot-tail")),true);
         }
-#endif
     }
     public static void assertPausedWorld() {
-#if MC_VER < MC_1_21_2
         var mc=net.minecraft.client.Minecraft.getInstance();
         if(!io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.restricted()) throw new IllegalStateException("Sleep window missing");
         if(mc.level.getBlockState(new net.minecraft.core.BlockPos(48,140,6)).is(net.minecraft.world.level.block.Blocks.GLOWSTONE))
@@ -76,19 +71,15 @@ public final class SleepProbeCompat {
         assertWindowLight();
         capture("sleep-window");
         Constants.LOG.info("HassiumSmokeTest:SLEEP window visible=9 light=25 distant terrain paused");
-#endif
     }
     private static void assertWindowLight() {
-#if MC_VER < MC_1_21_2
         var level=net.minecraft.client.Minecraft.getInstance().level;
         int sky=level.getBrightness(net.minecraft.world.level.LightLayer.SKY,new net.minecraft.core.BlockPos(31,140,3));
         int block=level.getBrightness(net.minecraft.world.level.LightLayer.BLOCK,new net.minecraft.core.BlockPos(31,140,4));
         if(sky>=15 || block<14) throw new IllegalStateException("Sleep boundary light sky="+sky+" block="+block);
         Constants.LOG.info("HassiumSmokeTest:SLEEP roof/halo boundary light sky={} block={}",sky,block);
-#endif
     }
     public static void assertWakeWorld() {
-#if MC_VER < MC_1_21_2
         var mc=net.minecraft.client.Minecraft.getInstance();
         var pos=new net.minecraft.core.BlockPos(48,140,6);
         if(mc.level==null || !mc.level.getBlockState(pos).is(net.minecraft.world.level.block.Blocks.GLOWSTONE))
@@ -101,20 +92,26 @@ public final class SleepProbeCompat {
             throw new IllegalStateException("Post-snapshot block update overwritten during recovery");
         Constants.LOG.info("HassiumSmokeTest:SLEEP distant block and BE-only update current");
         assertWindowLight();
-#endif
     }
     public static void capture(String name) {
-#if MC_VER < MC_1_21_2
         String directory=System.getProperty("hassium.smokeTest.probeDir");
         if(directory==null) return;
+#if MC_VER < MC_1_21_5
         try(var image=net.minecraft.client.Screenshot.takeScreenshot(net.minecraft.client.Minecraft.getInstance().getMainRenderTarget())) {
             var path=java.nio.file.Path.of(directory,name+".png");
             java.nio.file.Files.createDirectories(path.getParent()); image.writeToFile(path);
         } catch(java.io.IOException e) { throw new IllegalStateException("Sleep screenshot failed",e); }
+#else
+        net.minecraft.client.Screenshot.takeScreenshot(net.minecraft.client.Minecraft.getInstance().getMainRenderTarget(), image -> {
+            if(image==null) throw new IllegalStateException("Sleep screenshot capture failed");
+            try(image) {
+                var path=java.nio.file.Path.of(directory,name+".png");
+                java.nio.file.Files.createDirectories(path.getParent()); image.writeToFile(path);
+            } catch(java.io.IOException e) { throw new IllegalStateException("Sleep screenshot failed",e); }
+        });
 #endif
     }
     public static void beforeTick(MinecraftServer server) {
-#if MC_VER < MC_1_21_2
         if(!io.github.limuqy.mc.hassium.server.ServerSmokeTest.isEnabled()
                 || !"sleepmixed".equals(System.getProperty("hassium.serverSmokeScenario"))) return;
         ticks++;
@@ -122,56 +119,68 @@ public final class SleepProbeCompat {
             double anchor=e.getX()>24 ? 48.5 : e.getX()>=8 ? 9.5 : 6.5;
             e.setPos(anchor+Math.sin(ticks*0.09)*0.2,140,3);
         }
-#endif
     }
     public static void source(net.minecraft.server.level.ServerPlayer player,net.minecraft.network.protocol.Packet<?> packet) {
-#if MC_VER < MC_1_21_2
-        if(!io.github.limuqy.mc.hassium.server.ServerSmokeTest.isEnabled() || !player.getGameProfile().getName().equals("SleepObserver")) return;
+        if(!io.github.limuqy.mc.hassium.server.ServerSmokeTest.isEnabled() || !player.getName().getString().equals("SleepObserver")) return;
         var children=SleepPacketCompat.children(packet);
         if(children!=null) { for(var child:children) source(player,child); return; }
         if(packet instanceof net.minecraft.network.protocol.game.ClientboundAddEntityPacket p) {
             var codec=new net.minecraft.network.protocol.game.VecDeltaCodec(); codec.setBase(new net.minecraft.world.phys.Vec3(p.getX(),p.getY(),p.getZ())); OBSERVER_BASES.put(p.getId(),codec);
+#if MC_VER < MC_1_21_2
         } else if(packet instanceof net.minecraft.network.protocol.game.ClientboundTeleportEntityPacket p) {
             var codec=OBSERVER_BASES.get(p.getId()); if(codec!=null) codec.setBase(new net.minecraft.world.phys.Vec3(p.getX(),p.getY(),p.getZ()));
+#else
+        } else if(packet instanceof net.minecraft.network.protocol.game.ClientboundEntityPositionSyncPacket p) {
+            var codec=OBSERVER_BASES.get(p.id()); if(codec!=null) codec.setBase(p.values().position());
+#endif
         } else if(packet instanceof net.minecraft.network.protocol.game.ClientboundMoveEntityPacket p && p.hasPosition()) {
             var entity=p.getEntity(PlayerCompat.getServerLevel(player));
             var codec=entity==null?null:OBSERVER_BASES.get(entity.getId());
             if(codec!=null) codec.setBase(codec.decode(p.getXa(),p.getYa(),p.getZa()));
         }
-#endif
     }
     public static void afterTick(MinecraftServer server) {
-#if MC_VER < MC_1_21_2
         if(ticks==0 || ticks%20!=0) return;
         for(var p:server.getPlayerList().getPlayers()) {
-            boolean observer=p.getGameProfile().getName().equals("SleepObserver");
+            boolean observer=p.getName().getString().equals("SleepObserver");
             if(!observer && !io.github.limuqy.mc.hassium.server.sleep.SleepServer.filtering(p)) continue;
             for(var e:SleepEntityCompat.observed(p)) if(e.getTags().contains("sleep_probe_motion")) {
                 if(!observer && !io.github.limuqy.mc.hassium.server.sleep.SleepServer.relevant(p,e)) continue;
                 var tracked=((SleepChunkMapAccess)server.overworld().getChunkSource().chunkMap).hassium$sleepEntityMap().get(e.getId());
-                var codec=observer ? OBSERVER_BASES.get(e.getId())
-                        : ((SleepServerEntityAccess)((SleepTrackedEntityAccess)tracked).hassium$sleepTracker()).hassium$sleepPositionCodec();
-                if(codec==null) continue;
-                var base=((SleepVecDeltaAccess)codec).hassium$sleepBase();
+                var codec=observer ? OBSERVER_BASES.get(e.getId()) : null;
+                var base=observer ? (codec==null ? null : positionBase(codec))
+                        : serverBase(((SleepTrackedEntityAccess)tracked).hassium$sleepTracker());
+                if(base==null) continue;
                 String detail=e.getId()+","+base.x+","+base.y+","+base.z;
                 Services.NETWORK_MANAGER.sendSleepControl(p,SleepControl.encode(new SleepControl.Message(SleepControl.Op.PROBE,0,++sequence,detail)));
             }
         }
-#endif
     }
     public static void receive(String detail) {
-#if MC_VER < MC_1_21_2
         if(!io.github.limuqy.mc.hassium.client.ClientSmokeTest.isEnabled()
                 || !java.util.Set.of("sleepobserver","sleepmixed").contains(System.getProperty("hassium.smokeScenario",""))) return;
         String[] parts=detail.split(",");
         var mc=net.minecraft.client.Minecraft.getInstance();
         var entity=mc.level==null?null:mc.level.getEntity(Integer.parseInt(parts[0]));
         checks++;
-        var base=entity==null?null:((SleepVecDeltaAccess)entity.getPositionCodec()).hassium$sleepBase();
+        var base=entity==null?null:positionBase(entity.getPositionCodec());
         boolean ok=base!=null && Math.abs(base.x-Double.parseDouble(parts[1]))<0.0003
                 && Math.abs(base.y-Double.parseDouble(parts[2]))<0.0003 && Math.abs(base.z-Double.parseDouble(parts[3]))<0.0003;
         if(!ok) failures++;
         Constants.LOG.info("[SLEEP_OBSERVER] checks={} failures={} id={} expected={} client={}",checks,failures,parts[0],detail,base);
+    }
+    private static net.minecraft.world.phys.Vec3 positionBase(net.minecraft.network.protocol.game.VecDeltaCodec codec) {
+#if MC_VER < MC_1_21_2
+        return ((SleepVecDeltaAccess)codec).hassium$sleepBase();
+#else
+        return codec.getBase();
+#endif
+    }
+    private static net.minecraft.world.phys.Vec3 serverBase(net.minecraft.server.level.ServerEntity tracker) {
+#if MC_VER < MC_1_21_2
+        return positionBase(((SleepServerEntityAccess)tracker).hassium$sleepPositionCodec());
+#else
+        return tracker.getPositionBase();
 #endif
     }
     public static void assertObserver() {

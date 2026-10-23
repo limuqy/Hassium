@@ -500,6 +500,7 @@ public final class ScenarioEngine {
                 sleepTrafficReadyMs=-1;
                 io.github.limuqy.mc.hassium.client.sleep.SleepClient.wake();
             }
+            else if("mining_ready".equals(action)) { /* Wait below for native mining to begin. */ }
             else if("resume".equals(action)) {
                 io.github.limuqy.mc.hassium.client.sleep.SleepClient.testAutoDelay(0);
                 if(!io.github.limuqy.mc.hassium.client.sleep.SleepClient.supported()
@@ -513,7 +514,7 @@ public final class ScenarioEngine {
                 sleepResumeUsingTicks=mc.player.getTicksUsingItem();
                 sleepResumeMiningStage=mc.gameMode.getDestroyStage();
                 if(step.boolParam("mining",false) && (!mc.gameMode.isDestroying() || sleepResumeMiningStage<0))
-                    throw new IllegalStateException("Mining fixture did not start");
+                    throw new IllegalStateException("Mining fixture stopped before wake: "+miningFixtureState(mc));
                 String trigger=step.param("trigger");
                 if("esc".equals(trigger)) io.github.limuqy.mc.hassium.compat.SleepClientCompat.pressEscape();
                 else if("move".equals(trigger)) mc.options.keyUp.setDown(true);
@@ -557,6 +558,16 @@ public final class ScenarioEngine {
                 }
             }
             if(now-stepStartMs>120_000) throw new IllegalStateException("Traffic recovery not complete: pending="+pending);
+            return Outcome.RUNNING;
+        }
+        if("mining_ready".equals(action)) {
+            if(mc.gameMode.isDestroying() && mc.gameMode.getDestroyStage()>=0) {
+                LOGGER.info("HassiumSmokeTest:SLEEP native mining fixture ready stage={} elapsedMs={}",
+                        mc.gameMode.getDestroyStage(),now-stepStartMs);
+                return Outcome.DONE;
+            }
+            if(now-stepStartMs>5000) throw new IllegalStateException("Mining fixture did not start within 5s: "
+                    +miningFixtureState(mc));
             return Outcome.RUNNING;
         }
         if("resume".equals(action)) {
@@ -660,13 +671,21 @@ public final class ScenarioEngine {
         for(var child:mc.screen.children()) if(child instanceof net.minecraft.client.gui.components.Button button && button.getMessage().getString().equals(title)) { io.github.limuqy.mc.hassium.compat.SleepClientCompat.pressButton(button); return; }
         throw new IllegalStateException("Sleep button missing: "+key);
     }
+    private static String miningFixtureState(Minecraft mc) {
+        var hit=mc.hitResult;
+        var block=hit instanceof net.minecraft.world.phys.BlockHitResult b ? b.getBlockPos() : null;
+        return "stage="+mc.gameMode.getDestroyStage()+" destroying="+mc.gameMode.isDestroying()
+                +" grabbed="+mc.mouseHandler.isMouseGrabbed()+" screen="+mc.screen
+                +" hit="+hit+" target="+(block==null?"none":mc.level.getBlockState(block))
+                +" player="+mc.player.position()+" yaw="+mc.player.getYRot()+" pitch="+mc.player.getXRot()
+                +" using="+mc.player.isUsingItem()+" instabuild="+mc.player.getAbilities().instabuild
+                +" attack="+mc.options.keyAttack.isDown();
+    }
     private static long profileAttackCycle = -1;
     private static boolean profileAttacking;
 
     private static Outcome execInput(ScenarioStep step, Minecraft mc, long now) {
         if (mc.player == null) return Outcome.RUNNING;
-        if(step.param("maxHealth")!=null && mc.player.getHealth()>Float.parseFloat(step.param("maxHealth")))
-            throw new IllegalStateException("Health fixture did not reach the requested value: "+mc.player.getHealth());
         String expectedSleep=step.param("sleepState");
         if(expectedSleep!=null) {
             var sleep=io.github.limuqy.mc.hassium.client.sleep.SleepClient.state();

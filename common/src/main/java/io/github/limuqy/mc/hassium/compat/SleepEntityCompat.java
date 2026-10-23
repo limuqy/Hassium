@@ -7,8 +7,8 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.LivingEntity;
 import java.util.*;
-#if MC_VER < MC_1_21_2
 import net.minecraft.network.protocol.game.*;
+#if MC_VER < MC_1_21_2
 import net.minecraft.network.FriendlyByteBuf;
 import io.netty.buffer.Unpooled;
 #endif
@@ -17,7 +17,6 @@ import io.netty.buffer.Unpooled;
 public final class SleepEntityCompat {
     private SleepEntityCompat() {}
     public static List<Entity> observed(ServerPlayer player) {
-#if MC_VER < MC_1_21_2
         List<Entity> result = new ArrayList<>();
         ServerLevel level = PlayerCompat.getServerLevel(player);
         for (var entry : ((SleepChunkMapAccess)level.getChunkSource().chunkMap).hassium$sleepEntityMap().int2ObjectEntrySet()) {
@@ -28,17 +27,12 @@ public final class SleepEntityCompat {
             }
         }
         return result;
-#else
-        return List.of();
-#endif
     }
     public static List<Packet<?>> seed(ServerPlayer observer, Entity entity) {
-#if MC_VER < MC_1_21_2
         var tracked = ((SleepChunkMapAccess)PlayerCompat.getServerLevel(observer).getChunkSource().chunkMap).hassium$sleepEntityMap().get(entity.getId());
         if (!(tracked instanceof SleepTrackedEntityAccess access)) return List.of();
         var tracker = access.hassium$sleepTracker();
-        var codec=(SleepVecDeltaAccess)((SleepServerEntityAccess)tracker).hassium$sleepPositionCodec();
-        var beforeBase=codec.hassium$sleepBase();
+        var beforeBase=positionBase(tracker);
         boolean beforeDirty=entity.getEntityData().isDirty();
         int beforeAttributes=dirtyAttributes(entity);
         List<Packet<?>> packets = new ArrayList<>();
@@ -63,7 +57,8 @@ public final class SleepEntityCompat {
             }
         }
         // R0 invariant: seed decoder base B, not the entity's newer current position.
-        var base = codec.hassium$sleepBase();
+        var base = positionBase(tracker);
+#if MC_VER < MC_1_21_2
         FriendlyByteBuf b = new FriendlyByteBuf(Unpooled.buffer());
         try {
             b.writeVarInt(entity.getId()); b.writeDouble(base.x); b.writeDouble(base.y); b.writeDouble(base.z);
@@ -75,22 +70,29 @@ public final class SleepEntityCompat {
             packets.add(ClientboundTeleportEntityPacket.STREAM_CODEC.decode(b));
 #endif
         } finally { b.release(); }
+#else
+        packets.add(new ClientboundEntityPositionSyncPacket(entity.getId(),
+                new net.minecraft.world.entity.PositionMoveRotation(base,entity.getDeltaMovement(),entity.getYRot(),entity.getXRot()),entity.onGround()));
+#endif
         packets.add(new ClientboundSetEntityMotionPacket(entity));
         packets.add(new ClientboundRotateHeadPacket(entity,(byte)net.minecraft.util.Mth.floor(entity.getYHeadRot()*256/360)));
         packets.addAll(relationships(entity));
         if(io.github.limuqy.mc.hassium.server.sleep.SleepRuntimeProbe.ENABLED
-                && (!beforeBase.equals(codec.hassium$sleepBase()) || beforeDirty!=entity.getEntityData().isDirty()
+                && (!beforeBase.equals(positionBase(tracker)) || beforeDirty!=entity.getEntityData().isDirty()
                 || beforeAttributes!=dirtyAttributes(entity)))
             throw new IllegalStateException("Sleep snapshot modified shared tracker/dirty state");
         return packets;
+    }
+    private static net.minecraft.world.phys.Vec3 positionBase(net.minecraft.server.level.ServerEntity tracker) {
+#if MC_VER < MC_1_21_2
+        return ((SleepVecDeltaAccess)((SleepServerEntityAccess)tracker).hassium$sleepPositionCodec()).hassium$sleepBase();
 #else
-        return List.of();
+        return tracker.getPositionBase();
 #endif
     }
     /** Repeat after every endpoint has been spawned; initial tracker iteration order is arbitrary. */
     public static List<Packet<?>> relationships(Entity entity) {
         List<Packet<?>> packets=new ArrayList<>();
-#if MC_VER < MC_1_21_2
         if (!entity.getPassengers().isEmpty()) packets.add(new ClientboundSetPassengersPacket(entity));
         if (entity.isPassenger()) packets.add(new ClientboundSetPassengersPacket(entity.getVehicle()));
 #if MC_VER < MC_1_21_1
@@ -98,25 +100,20 @@ public final class SleepEntityCompat {
 #else
         if (entity instanceof net.minecraft.world.entity.Leashable leash && leash.isLeashed()) packets.add(new ClientboundSetEntityLinkPacket(entity,leash.getLeashHolder()));
 #endif
-#endif
         return packets;
     }
     public static double interactionRadius(ServerPlayer player) {
 #if MC_VER < MC_1_21_1
         return io.github.limuqy.mc.hassium.platform.Services.PLATFORM.sleepInteractionRadius(player);
-#elif MC_VER < MC_1_21_2
-        return Math.max(8,Math.max(player.blockInteractionRange(),player.entityInteractionRange())+2);
 #else
-        return 8;
+        return Math.max(8,Math.max(player.blockInteractionRange(),player.entityInteractionRange())+2);
 #endif
     }
     private static int dirtyAttributes(Entity entity) {
 #if MC_VER < MC_1_21_1
         return entity instanceof LivingEntity l ? l.getAttributes().getDirtyAttributes().size() : 0;
-#elif MC_VER < MC_1_21_2
-        return entity instanceof LivingEntity l ? l.getAttributes().getAttributesToSync().size() : 0;
 #else
-        return 0;
+        return entity instanceof LivingEntity l ? l.getAttributes().getAttributesToSync().size() : 0;
 #endif
     }
 }

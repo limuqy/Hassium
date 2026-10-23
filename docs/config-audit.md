@@ -85,7 +85,7 @@
 |--------|--------|------|
 | `master.enabled` | `true` | 是否启用服务端网络通道（压缩/聚合/区块推送/实体优化） |
 | `master.enabledOnLan` | `false` | 局域网主机是否对远程玩家启用 Hassium 网络面（握手/聚合/推送/lightStrip 等）。默认关；本机 memory 连接始终原版；storage 仍仅专用服 |
-| `master.sleepEnabled` | `false` | 允许双端协商后的手动或站桩自动休眠；首批为 1.20.1 Forge、1.21.1 NeoForge，客户端默认站桩 15 分钟，自动计时偏好独立保存且可配置为 0 关闭，兼容限制见[休眠说明](semi-online-sleep.md) |
+| `master.sleepEnabled` | `false` | 允许双端协商后的手动或站桩自动休眠；覆盖 1.20.1 Forge 与 `builds_for` 所列 1.21.x 加载器组合，客户端默认站桩 15 分钟，自动计时偏好独立保存且可配置为 0 关闭，兼容限制见[休眠说明](semi-online-sleep.md) |
 | `master.compressionLevel` | `3` | 自有通道 ZSTD 压缩等级 |
 | `master.enablePacketAggregation` | `true`（检测到 BandwidthOptimizer 时默认 `false`） | 是否启用包聚合。三方兼容（`compat/mods/ModCompatFlags`）：BO 的原版字节流批处理/流式压缩与聚合帧叠加冲突，检测到时新配置默认关；显式 `true` 恒生效，**已落盘的旧值视为显式选择、不自动翻转** |
 | `master.aggregationMaxWaitTimeMs` | `50` | 冲刷兜底：超过该时长（ms）未冲刷则强制冲一次（tick 尾冲刷为主，应对主线程卡顿） |

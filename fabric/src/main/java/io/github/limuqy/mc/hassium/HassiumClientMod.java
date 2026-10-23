@@ -63,6 +63,24 @@ public class HassiumClientMod implements ClientModInitializer {
                     (payload, context) -> io.github.limuqy.mc.hassium.compat.EgressFixtureCompat.receiveOnClient(payload.value()));
 #endif
         }
+        // Sleep control is a small bounded Play payload; hand it to the client main thread
+        // with the connection that delivered it so reconnects cannot consume stale messages.
+#if MC_VER < MC_1_21_1
+        ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.compat.ResourceLocationCompat.vanilla(
+                        io.github.limuqy.mc.hassium.compat.HassiumChannels.SLEEP_S2C),
+                (client, handler, buf, responseSender) -> {
+                    byte[] data = PayloadHandlers.readAll(buf);
+                    var source = handler.getConnection();
+                    client.execute(() -> io.github.limuqy.mc.hassium.client.sleep.SleepClient.receive(source, data));
+                });
+#else
+        ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.compat.SleepPayloadCompat.ToClient.TYPE,
+                (payload, context) -> {
+                    var source = context.player().connection.getConnection();
+                    context.client().execute(() ->
+                            io.github.limuqy.mc.hassium.client.sleep.SleepClient.receive(source, payload.bytes()));
+                });
+#endif
         // shadowPullV1 FULL 回退：服务端返回的原版 chunk+light 线格式统一交给 ShadowPullClient 注入。
 #if MC_VER < MC_1_21_1
         ClientPlayNetworking.registerGlobalReceiver(io.github.limuqy.mc.hassium.network.FabricNetworkManager.SHADOW_PULL_RESPONSE_S2C,

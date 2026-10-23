@@ -1,16 +1,28 @@
 param(
-    [Parameter(Mandatory=$true)][ValidateSet('1.20.1','1.21.1')][string]$Ver,
-    [Parameter(Mandatory=$true)][ValidateSet('forge','neoforge')][string]$Loader,
+    [Parameter(Mandatory=$true)][ValidatePattern('^1\.(20\.1|21\.(?:[1-9]|10|11))$')][string]$Ver,
+    [Parameter(Mandatory=$true)][ValidateSet('fabric','forge','neoforge')][string]$Loader,
     [Parameter(Mandatory=$true)][string]$SessionId,
     # Use the same saved dictionary for both runs; the original is restored afterwards.
     [Parameter(Mandatory=$true)][string]$Dictionary,
     [string]$WorldZip = "",
     [ValidateSet('','sleepdisabled','sleepauto','sleepresume','sleepmixed','sleepfactory','sleepwindowtraffic','cachenbt')][string]$ScenarioOverride = "",
-    [switch]$Offline
+    [switch]$Offline,
+    [ValidateSet('Auto','Required','Off')][string]$CpuIsolation = 'Auto'
 )
 $ErrorActionPreference = 'Stop'
-if (($Ver -eq '1.20.1') -ne ($Loader -eq 'forge')) { throw 'Use 1.20.1 Forge or 1.21.1 NeoForge' }
-if ($WorldZip -and $Ver -ne '1.21.1') { throw 'The supplied factory save is 1.21.1 only; do not downgrade it' }
+$root = [IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent))
+$versionProperties = Join-Path $root "versionProperties/$Ver.properties"
+if (-not (Test-Path -LiteralPath $versionProperties -PathType Leaf)) { throw "Unsupported Minecraft version: $Ver" }
+$buildsForLine = Get-Content -LiteralPath $versionProperties |
+    Where-Object { $_ -match '^\s*builds_for\s*=' } | Select-Object -First 1
+if (-not $buildsForLine) { throw "Missing builds_for in $versionProperties" }
+$supportedLoaders = @(($buildsForLine -split '=',2)[1].Split(',') | ForEach-Object { $_.Trim() })
+if ($supportedLoaders -notcontains $Loader) {
+    throw "Minecraft $Ver does not support $Loader (builds_for=$($supportedLoaders -join ','))"
+}
+if ($WorldZip -and ($Ver -ne '1.21.1' -or $Loader -ne 'neoforge')) {
+    throw 'The supplied factory save is only for 1.21.1 NeoForge'
+}
 $scenario = if ($WorldZip) { 'trafficfactory' } else { 'trafficprofile' }
 if ($ScenarioOverride) {
     if ($WorldZip -and $ScenarioOverride -ne 'sleepfactory') { throw 'This smoke scenario uses its own generated fixture' }
@@ -18,9 +30,11 @@ if ($ScenarioOverride) {
     $scenario=$ScenarioOverride
 }
 if ($SessionId -notmatch '^[a-zA-Z0-9_.-]+$') { throw 'Invalid SessionId' }
-$root = [IO.Path]::GetFullPath((Split-Path $PSScriptRoot -Parent))
+if (-not (Test-Path -LiteralPath $Dictionary -PathType Leaf)) { throw "Dictionary not found: $Dictionary" }
 $output = Join-Path $root "build/traffic-profile/$SessionId"
 if (Test-Path -LiteralPath $output) { throw 'Use a new SessionId to preserve previous evidence' }
+$resultPath = "$root/build/smoke-test/results/result_$SessionId.json"
+if (Test-Path -LiteralPath $resultPath) { throw "Smoke result already exists for $SessionId; use a new SessionId" }
 $runRoot = [IO.Path]::GetFullPath((Join-Path $root "$Loader/run"))
 # Do not let the smoke harness delete historical crashes.
 foreach ($side in @('server','client')) {
@@ -88,7 +102,7 @@ try {
         '-Scenario', $scenario, '-WarmRepeat', '-Vd1', '10', '-Vd2', '10',
         '-ClientRenderDistance', '10', '-JoinTimeoutMs', '600000',
         '-ClientTimeoutSec', '1500', '-ServerReadyTimeoutSec', '300', '-HangSilenceSec', '180',
-        '-ServerPort', '25565')
+        '-ServerPort', '25565', '-CpuIsolation', $CpuIsolation)
     if ($WorldZip) { $args_ += @('-WorldZip', "`"$WorldZip`"") }
     if ($Offline) { $args_ += '-Offline' }
     $process = Start-Process -FilePath (Get-Command pwsh).Source -ArgumentList $args_ `
@@ -97,6 +111,17 @@ try {
     Write-Host "Profile running: PID=$($process.Id) evidence=$output"
     $process.WaitForExit()
     $exitCode = $process.ExitCode
+    if (-not (Test-Path -LiteralPath $resultPath -PathType Leaf)) {
+        Write-Error "Smoke harness did not write a result JSON for $SessionId" -ErrorAction Continue
+        $exitCode = 2
+    } else {
+        $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+        if ($result.Result -ne 'PASS' -or $result.Scenario -ne $scenario -or
+            $result.Ver -ne $Ver -or $result.Loader -ne $Loader) {
+            Write-Error "Smoke result mismatch for ${SessionId}: result=$($result.Result) scenario=$($result.Scenario) version=$($result.Ver) loader=$($result.Loader)" -ErrorAction Continue
+            $exitCode = 2
+        }
+    }
     foreach ($relative in $files) {
         $path = Join-Path $runRoot $relative
         if (Test-Path -LiteralPath $path -PathType Leaf) {
@@ -105,7 +130,7 @@ try {
             Copy-Item -LiteralPath $path -Destination $dest
         }
     }
-    Get-ChildItem "$runRoot/server/logs/hassium-aggregated-packets/agg-*.jsonl" |
+    Get-ChildItem "$runRoot/server/logs/hassium-aggregated-packets/agg-*.jsonl" -ErrorAction SilentlyContinue |
         Where-Object LastWriteTime -ge $started |
         ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $output }
     foreach ($evidence in @("$root/build/smoke-test/logs/server_$SessionId.log", "$root/build/smoke-test/logs/client_$SessionId.log",
@@ -115,22 +140,39 @@ try {
     }
     Write-Host "Profile harness exit=$exitCode"
 } finally {
-    if ((-not $hadCache -or $cacheMoved) -and (Test-Path -LiteralPath $cache)) {
-        Move-Item -LiteralPath $cache -Destination $cacheEvidence -ErrorAction Stop
-    }
-    if ($cacheMoved) {
-        Move-Item -LiteralPath $cacheBackup -Destination $cache -ErrorAction Stop
-    }
+    $restoreErrors = [System.Collections.Generic.List[string]]::new()
     foreach ($entry in $manifest) {
-        $target = [IO.Path]::GetFullPath((Join-Path $runRoot $entry.relative))
-        if (-not $target.StartsWith($runRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
-            throw "Restore target outside run directory: $target"
+        try {
+            $target = [IO.Path]::GetFullPath((Join-Path $runRoot $entry.relative))
+            if (-not $target.StartsWith($runRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+                throw "Restore target outside run directory: $target"
+            }
+            if ($entry.existed) {
+                Copy-Item -LiteralPath (Join-Path "$output/before" $entry.relative) -Destination $target -Force
+            } elseif (Test-Path -LiteralPath $target -PathType Leaf) {
+                Remove-Item -LiteralPath $target -Force
+            }
+        } catch {
+            $restoreErrors.Add("$($entry.relative): $($_.Exception.Message)")
         }
-        if ($entry.existed) {
-            Copy-Item -LiteralPath (Join-Path "$output/before" $entry.relative) -Destination $target -Force
-        } elseif (Test-Path -LiteralPath $target -PathType Leaf) {
-            Remove-Item -LiteralPath $target -Force
+    }
+    try {
+        if ((-not $hadCache -or $cacheMoved) -and (Test-Path -LiteralPath $cache)) {
+            Move-Item -LiteralPath $cache -Destination $cacheEvidence -ErrorAction Stop
         }
+    } catch {
+        $restoreErrors.Add("archive client/hassium_cache: $($_.Exception.Message)")
+    }
+    try {
+        if ($cacheMoved) {
+            if (Test-Path -LiteralPath $cache) { throw "New cache still occupies $cache; original remains at $cacheBackup" }
+            Move-Item -LiteralPath $cacheBackup -Destination $cache -ErrorAction Stop
+        }
+    } catch {
+        $restoreErrors.Add("restore client/hassium_cache: $($_.Exception.Message)")
+    }
+    if ($restoreErrors.Count) {
+        throw "Profile restoration failed: $($restoreErrors -join '; ')"
     }
     Write-Host 'Original configuration, dictionary and options restored.'
 }

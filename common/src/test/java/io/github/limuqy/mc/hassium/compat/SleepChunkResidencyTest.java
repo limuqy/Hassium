@@ -48,7 +48,7 @@ class SleepChunkResidencyTest {
     private static Fixture fixture() throws Exception {
         var field=Arrays.stream(MixinSleepChunkStorage.class.getDeclaredFields())
                 .filter(f->f.getName().equals("chunks")).findFirst();
-        Assumptions.assumeTrue(field.isPresent(),"Sleep residency is implemented on the two supported anchors");
+        Assumptions.assumeTrue(field.isPresent(),"Sleep residency requires native chunk storage");
         var fixture=new Fixture();field.get().setAccessible(true);field.get().set(fixture,fixture.array);return fixture;
     }
     private static LevelChunk chunk(int x,int z) throws Exception {
@@ -59,8 +59,19 @@ class SleepChunkResidencyTest {
     private static final class Fixture extends MixinSleepChunkStorage {
         final AtomicReferenceArray<LevelChunk> array=new AtomicReferenceArray<>(100);
         final List<LevelChunk> unloaded=new ArrayList<>();
+#if MC_VER < MC_1_21_2
+        @Override
         protected LevelChunk replace(int index,LevelChunk expected,LevelChunk replacement) {
             assertNull(replacement);assertTrue(array.compareAndSet(index,expected,null));unloaded.add(expected);return expected;
         }
+#else
+        @Override
+        protected void replace(int index,LevelChunk replacement) {
+            assertNull(replacement);
+            var old=array.getAndSet(index,null);
+            assertNotNull(old);
+            unloaded.add(old);
+        }
+#endif
     }
 }

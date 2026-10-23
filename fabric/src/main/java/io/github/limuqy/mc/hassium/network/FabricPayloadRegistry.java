@@ -4,6 +4,7 @@ package io.github.limuqy.mc.hassium.network;
 import io.github.limuqy.mc.hassium.Constants;
 import io.github.limuqy.mc.hassium.compat.HassiumChannels;
 import io.github.limuqy.mc.hassium.compat.ResourceLocationCompat;
+import io.github.limuqy.mc.hassium.compat.SleepPayloadCompat;
 import net.fabricmc.fabric.api.networking.v1.PayloadTypeRegistry;
 import net.minecraft.network.FriendlyByteBuf;
 import net.minecraft.network.codec.StreamCodec;
@@ -108,16 +109,17 @@ public final class FabricPayloadRegistry {
         PayloadTypeRegistry.playS2C().register(SHADOW_PULL_RESPONSE_S2C_TYPE, codec(SHADOW_PULL_RESPONSE_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(CHUNK_AUTHORITY_S2C_TYPE, codec(CHUNK_AUTHORITY_S2C_TYPE));
         PayloadTypeRegistry.playS2C().register(PLAY_INIT_S2C_TYPE, codec(PLAY_INIT_S2C_TYPE));
+        PayloadTypeRegistry.playS2C().register(SleepPayloadCompat.ToClient.TYPE, SleepPayloadCompat.ToClient.CODEC);
 
         PayloadTypeRegistry.playC2S().register(AGGREGATION_READY_C2S_TYPE, codec(AGGREGATION_READY_C2S_TYPE));
         PayloadTypeRegistry.playC2S().register(SHADOW_PULL_REQUEST_C2S_TYPE, codec(SHADOW_PULL_REQUEST_C2S_TYPE));
+        PayloadTypeRegistry.playC2S().register(SleepPayloadCompat.ToServer.TYPE, SleepPayloadCompat.ToServer.CODEC);
         // 预握手（login/配置阶段声明能力）：configuration 阶段 C2S payload
         PayloadTypeRegistry.configurationC2S().register(
                 io.github.limuqy.mc.hassium.protocol.PreHandshakePayload.TYPE,
                 io.github.limuqy.mc.hassium.protocol.PreHandshakePayload.STREAM_CODEC);
 
-        // 注册 6 S2C + 2 C2S + 1 configurationC2S
-        LOGGER.info("Hassium: Registered 6 S2C and 2 C2S (+1 config) payload types for 1.21.1+");
+        LOGGER.info("Hassium: Registered 7 S2C and 3 C2S (+1 config) payload types for 1.21.1+");
     }
 
     /**

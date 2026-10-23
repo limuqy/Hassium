@@ -8,7 +8,7 @@
 
 ## 原则
 
-**当前开发重点（用户决定，2026-10-20）**：后续[数据包优化与 AFK](handoff/research-2026-10-20-packet-afk.md)、[区块增量与渐进式 LOD](handoff/research-2026-10-20-chunk-delta-lod.md) 先在 **`2.0.0`** 开发，**1.20.1 Forge / 1.21.1 NeoForge** 同为首轮设计与验收重点。当前仅建立调研计划，后续单独研讨；其余已支持组合仍按下方矩阵维护，不能以 26.x 结果代替这两个组合的验证。
+**当前开发重点（用户决定，2026-10-20）**：后续[数据包优化与 AFK](handoff/research-2026-10-20-packet-afk.md)、[区块增量与渐进式 LOD](handoff/research-2026-10-20-chunk-delta-lod.md) 先在 **`2.0.0`** 开发，**1.20.1 Forge / 1.21.1 NeoForge** 同为首轮设计与验收重点。半在线休眠已在 2.0.0 实现，并按用户后续授权扩展到支持的全部 1.21.x 加载器组合；其余已支持组合仍按下方矩阵维护，不能以 26.x 结果代替这两个组合的验证。
 
 1. **一段只做一次代码适配**；段内版本默认「锚点编译通过即继承」，不单独排期。
 2. **人力只跟锚点走**；发布仍可保留全部 `versionProperties`（Manifold 便宜）。
@@ -138,7 +138,7 @@ MC_1_21_11
 
 **当前语义**：不得使用固定 10 秒区块门控。无法在 pre-Play 阶段识别客户端时，立即走完整光照回退；已识别的 Hassium 客户端从首圈进入优化链。预握手只是能力提前声明，不替代 Play 期 `play_init_s2c` 完整激活。
 
-共用载体：`PreHandshakeProtocol`（1.20.1 legacy buf 编解码 / 1.21.1+ payload，StreamCodec 为 FriendlyByteBuf 级，无 registry 依赖）。能力字段：协议版本（`CURRENT_PROTOCOL_VERSION`）、mod 版本（格式校验）、客户端能力位（`LoginCaps`；缓存相关含 agg/delta/seed/light/pull/shadow_pull/pull_mode/pull_nbt）。`PULL_NBT` 允许方块命中时独立刷新客户端 BE 快照；休眠 `SLEEP` 仍只向首批重点组合协商，要求 `PULL_MODE` / `SHADOW_PULL` / `PULL_NBT`；服务端开关默认关闭。
+共用载体：`PreHandshakeProtocol`（1.20.1 legacy buf 编解码 / 1.21.1+ payload，StreamCodec 为 FriendlyByteBuf 级，无 registry 依赖）。能力字段：协议版本（`CURRENT_PROTOCOL_VERSION`）、mod 版本（格式校验）、客户端能力位（`LoginCaps`；缓存相关含 agg/delta/seed/light/pull/shadow_pull/pull_mode/pull_nbt）。`PULL_NBT` 允许方块命中时独立刷新客户端 BE 快照；休眠 `SLEEP` 向 1.20.1 Forge 与 `builds_for` 所列全部 1.21.x 加载器组合协商；1.20.1 Fabric 保持不协商，要求 `PULL_MODE` / `SHADOW_PULL` / `PULL_NBT`；服务端开关默认关闭。
 运行时验证优先级：**1.20.1 → 1.21.1 → 1.21.11**；直连拓扑下无 UDP 断链冒烟（`UdpFailover` harness 与 `FAILOVER_*` / `UDP_*` marker 已随数据面退役）；其余锚点以编译 + 短冒烟为主。详见 [`runtime-smoke-test.md`](runtime-smoke-test.md)。
 
 ---
