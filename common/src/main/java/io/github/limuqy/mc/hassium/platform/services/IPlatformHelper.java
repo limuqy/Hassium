@@ -4,8 +4,6 @@ import java.nio.file.Path;
 
 public interface IPlatformHelper {
     default double sleepInteractionRadius(net.minecraft.server.level.ServerPlayer player) { return 8; }
-    /** Null means this server's installed mod set has a reviewed sleep policy. */
-    default String sleepCompatibilityIssue() { return "Sleep is not validated on this loader"; }
 
     /**
      * Gets the name of the current platform

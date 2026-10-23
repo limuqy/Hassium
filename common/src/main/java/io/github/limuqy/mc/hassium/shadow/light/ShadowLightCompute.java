@@ -89,6 +89,8 @@ public final class ShadowLightCompute {
     private static final ConcurrentHashMap<Long, InflightLight> inflightLight = new ConcurrentHashMap<>();
     private static final ConcurrentHashMap<Long, Long> shadowApplyEpochs = new ConcurrentHashMap<>();
     private static final AtomicLong shadowApplyEpoch = new AtomicLong();
+    /** Some caches unload old BE state while applying a replacement for this same column. */
+    private static final ThreadLocal<Long> nativeClientApplyColumn = new ThreadLocal<>();
 
     /**
      * 「原版忽略该柱」的连续重试计数（复合键 → 次数）。
@@ -3416,6 +3418,7 @@ public final class ShadowLightCompute {
             return true;
         }
         ChunkPos chunkPos = new ChunkPos(chunkX, chunkZ);
+        if (SleepTerrainClient.restricted() && !SleepTerrainClient.allows(chunkX, chunkZ)) return true;
         long chunkKey = DimensionKey.key(entry.key().dimension(), chunkX, chunkZ);
         if(!SleepTerrainClient.acceptReady(chunkKey,item.sleepToken())) {
             if(Boolean.getBoolean("hassium.chunkCoverageDiagnostics"))
@@ -3430,7 +3433,7 @@ public final class ShadowLightCompute {
         pipeline.setApplyInProgress(true);
         try {
             startApply(item.profile());
-            connection.handleLevelChunkWithLight(item.chunkPacket);
+            withNativeClientApply(chunkKey, () -> connection.handleLevelChunkWithLight(item.chunkPacket));
         } finally {
             pipeline.setApplyInProgress(false);
         }
@@ -3491,6 +3494,17 @@ public final class ShadowLightCompute {
         onClientChunkUnloaded(pos, currentDimension());
     }
 
+    /** Scope synchronous replacement callbacks to the one column whose packet is being applied. */
+    static void withNativeClientApply(long key, Runnable apply) {
+        Long previous = nativeClientApplyColumn.get();
+        nativeClientApplyColumn.set(key);
+        try { apply.run(); }
+        finally {
+            if (previous == null) nativeClientApplyColumn.remove();
+            else nativeClientApplyColumn.set(previous);
+        }
+    }
+
     /** {@code dimension} 必须是正在 unload 的 ClientLevel，不能读当前 {@code Minecraft.level}。 */
     public static void onClientChunkUnloaded(ChunkPos pos, String dimension) {
         if (pos == null) {
@@ -3501,6 +3515,9 @@ public final class ShadowLightCompute {
             return;
         }
         long chunkKey = DimensionKey.key(dim, pos.x, pos.z);
+        // This callback still performs vanilla BE/light cleanup. Only our metadata invalidation
+        // is skipped: the replacement being applied owns the same column and recovery token.
+        if (java.util.Objects.equals(nativeClientApplyColumn.get(), chunkKey)) return;
         Long removedEpoch = shadowApplyEpochs.remove(chunkKey);
         SleepTerrainClient.unloaded(dim,pos);
         // 黑块探针：该柱已不可见，「仍黑」统计不得再包含它（「曾亮」标记保留，回程变黑要算回归）。

@@ -9,10 +9,45 @@ import net.minecraft.server.MinecraftServer;
 /** Dev-only two-client motion oracle; never drives production game actions. */
 public final class SleepProbeCompat {
     private static long ticks,sequence,checks,failures;
+    private static final java.util.List<GeometryTicker> geometryTickers=new java.util.ArrayList<>();
+    private static final class GeometryTicker implements net.minecraft.world.level.block.entity.TickingBlockEntity {
+        final net.minecraft.core.BlockPos pos;
+        final boolean active;
+        int count;
+        boolean removed;
+        GeometryTicker(int x,int z,boolean active) { pos=new net.minecraft.core.BlockPos(x*16+8,139,z*16+8);this.active=active; }
+        @Override public void tick() { count++; }
+        @Override public boolean isRemoved() { return removed; }
+        @Override public net.minecraft.core.BlockPos getPos() { return pos; }
+        @Override public String getType() { return "hassium:smoke_sleep_geometry"; }
+    }
 #if MC_VER < MC_1_21_2
     private static final java.util.Map<Integer,net.minecraft.network.protocol.game.VecDeltaCodec> OBSERVER_BASES=new java.util.HashMap<>();
 #endif
     private SleepProbeCompat() {}
+    public static void beginGeometry() {
+        var mc=net.minecraft.client.Minecraft.getInstance();
+        if(!io.github.limuqy.mc.hassium.client.ClientSmokeTest.isEnabled()) return;
+        var w=io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.activeWindow();
+        if(w==null) throw new IllegalStateException("Geometry probe requires sleep");
+        geometryTickers.clear();
+        for(int x=w.x()-2;x<=w.x()+2;x++) for(int z=w.z()-2;z<=w.z()+2;z++) {
+            var ticker=new GeometryTicker(x,z,w.visible(x,z));geometryTickers.add(ticker);mc.level.addBlockEntityTicker(ticker);
+        }
+    }
+    public static void assertGeometry(boolean awake) {
+        if(geometryTickers.size()!=25) throw new IllegalStateException("Missing geometry tick probes");
+        for(var ticker:geometryTickers) {
+            boolean shouldRun=awake || ticker.active;
+            if((ticker.count>0)!=shouldRun) throw new IllegalStateException("Sleep BE tick at "+ticker.pos+" count="+ticker.count+" awake="+awake);
+            if(awake) ticker.removed=true;
+        }
+        if(!awake) {
+            io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.assertRenderedWindow();
+            capture("sleep-geometry");
+        }
+        Constants.LOG.info("HassiumSmokeTest:SLEEP geometry realTickLoop active=9 inactive=16 awake={}",awake);
+    }
     public static void afterTerrainSnapshot(net.minecraft.server.level.ServerPlayer player,int x,int z) {
 #if MC_VER < MC_1_21_2
         if(!io.github.limuqy.mc.hassium.server.ServerSmokeTest.isEnabled()

@@ -44,6 +44,7 @@ public final class OvdClientLifecycle {
      * 落座时 effective 仍是 -1，ticket 永久钉在权威边距。
      */
     public static int effectiveClientVD(Minecraft mc) {
+        if (io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.restricted()) return 1;
         int serverVD = serverViewDistance();
         if (mc == null || mc.options == null || serverVD <= 0) {
             return Math.max(2, serverVD);
@@ -94,6 +95,7 @@ public final class OvdClientLifecycle {
      * 无状态，每 tick 调用。
      */
     public static void ensureClientRenderBounds(Minecraft mc, int radius) {
+        if (io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.restricted()) return;
         if (mc == null || mc.level == null || radius <= 0) {
             return;
         }
@@ -119,6 +121,7 @@ public final class OvdClientLifecycle {
      * 影子 OVD 包被 Storage.inRange 丢弃）。无状态，每 tick 调用。
      */
     public static void ensureChunkCacheRadius(ClientLevel level, int radius) {
+        if (io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.restricted()) return;
         if (level == null || radius <= 0) {
             return;
         }
@@ -135,6 +138,7 @@ public final class OvdClientLifecycle {
      * 玩家走出权威圈时真服会 Forget，柱尚在 client 窗——不拦会闪虚空。
      */
     public static boolean shouldRetainOnForget(ChunkPos pos) {
+        if (io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.restricted()) return false;
         if (pos == null || !isEnabled()) {
             return false;
         }

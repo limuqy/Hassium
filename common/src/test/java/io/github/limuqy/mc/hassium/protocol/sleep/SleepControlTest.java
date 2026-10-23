@@ -1,7 +1,6 @@
 package io.github.limuqy.mc.hassium.protocol.sleep;
 
 import org.junit.jupiter.api.Test;
-import io.github.limuqy.mc.hassium.server.sleep.SleepCompatibility;
 import java.util.Arrays;
 import java.util.List;
 import static org.junit.jupiter.api.Assertions.*;
@@ -41,9 +40,5 @@ class SleepControlTest {
         assertThrows(IllegalArgumentException.class,()->new SleepControl.Message(SleepControl.Op.ENTER,-1,1,""));
         assertThrows(IllegalArgumentException.class,()->new SleepControl.Message(SleepControl.Op.ENTER,0,0,""));
         assertThrows(IllegalArgumentException.class,()->new SleepControl.Message(SleepControl.Op.ERROR,1,1,"x".repeat(257)));
-    }
-    @Test void unreviewedServerModsBlockSleepInsteadOfDroppingTheirState() {
-        assertNull(SleepCompatibility.firstUnsupported(List.of("minecraft","neoforge","hassium")));
-        assertTrue(SleepCompatibility.firstUnsupported(List.of("hassium","unknown_factory")).contains("unknown_factory"));
     }
 }

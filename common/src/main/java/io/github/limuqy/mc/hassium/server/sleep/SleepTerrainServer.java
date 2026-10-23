@@ -66,6 +66,11 @@ public final class SleepTerrainServer {
         Connection connection=PlayerCompat.getConnection(player);
         Window w=connection==null?null:windows.get(connection); return w==null || !w.sleeping || w.area.light(x,z);
     }
+    /** Native dynamic light for the nine live columns; the client no longer ticks halo blocks. */
+    public static boolean needsNativeLight(ServerPlayer player,int x,int z) {
+        Window w=current(player);
+        return w!=null && w.sleeping && w.area.visible(x,z);
+    }
     /** Called in the same server tick that captured the current snapshot, before any later mutation. */
     public static void snapshot(ServerPlayer player,int x,int z,long request) {
         Window w=current(player);

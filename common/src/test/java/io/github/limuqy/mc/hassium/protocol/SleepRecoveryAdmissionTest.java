@@ -48,6 +48,52 @@ class SleepRecoveryAdmissionTest {
     }
     @AfterEach void clear() { SleepTerrainClient.reset(); }
 
+    @Test void replacingClientDataPreservesRecoveryButRealEvictionStillRestartsIt() throws Exception {
+        install(1,key->{}); call("wakeWindow",(LongConsumer)key->{});
+        Object c=column(KEY); Object permit=reserve(attempt(KEY)); assertNotNull(permit);
+        Object version=field(c,"version"), retry=field(c,"retryAt");
+        var light=io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.class;
+        var apply=light.getDeclaredMethod("withNativeClientApply",long.class,Runnable.class); apply.setAccessible(true);
+        var pos=new ChunkPos(-6,0);
+        Runnable unload=()->io.github.limuqy.mc.hassium.shadow.light.ShadowLightCompute.onClientChunkUnloaded(pos,DIM);
+        apply.invoke(null,KEY,unload);
+        assertSame(c,column(KEY)); assertEquals(version,field(c,"version")); assertEquals(retry,field(c,"retryAt"));
+        assertSame(permit,field(c,"refresh"),"Replacement must not cancel the in-flight recovery lease");
+        assertTrue(send(permit,()->{},()->true));
+        Object sentRetry=field(c,"retryAt");
+        apply.invoke(null,KEY,unload);
+        assertEquals(version,field(c,"version")); assertEquals(sentRetry,field(c,"retryAt"));
+        assertNull(field(c,"refresh"),"Successful dispatch releases its lease without invalidating the response");
+        var bridge=io.github.limuqy.mc.hassium.platform.client.ShadowClientBridge.get();
+        boolean registered=io.github.limuqy.mc.hassium.platform.client.ShadowClientBridge.isRegistered();
+        io.github.limuqy.mc.hassium.platform.client.ShadowClientBridge.unregister();
+        try {
+            apply.invoke(null,DimensionKey.key(DIM,6,0),unload);
+            assertNotEquals(version,field(c,"version"),"Evicting a different column during apply is a real unload");
+            assertNull(field(c,"refresh"));
+            Object restarted=field(c,"version");
+            var failure=assertThrows(InvocationTargetException.class,()->apply.invoke(null,KEY,(Runnable)()->{throw new IllegalStateException("apply failed");}));
+            assertInstanceOf(IllegalStateException.class,failure.getCause());
+            unload.run();
+            assertNotEquals(restarted,field(c,"version"),"A failed apply must not leave an unload exemption behind");
+        } finally { if(registered) io.github.limuqy.mc.hassium.platform.client.ShadowClientBridge.register(bridge); }
+    }
+
+    @Test void unloadedHaloGetsFreshRecoveryCredentialsBeforeTheSleepGateOpens() throws Exception {
+        install(1,key->{});
+        long halo=DimensionKey.key(DIM,2,0);
+        assertNull(column(halo));
+        Object far=column(KEY);
+        var invalidated=new java.util.HashSet<Long>();
+        call("wakeWindow",(LongConsumer)key->{
+            assertTrue(SleepTerrainClient.restricted(),"A refill must not overtake halo invalidation");
+            invalidated.add(key);
+        });
+        assertEquals(16,invalidated.size());
+        assertNotNull(column(halo));assertEquals(0L,field(column(halo),"request"));
+        assertNull(column(DimensionKey.key(DIM,0,0)),"Nearby live objects do not enter recovery");
+        assertSame(far,column(KEY));assertFalse(SleepTerrainClient.restricted());
+    }
     @Test void publishedColumnCannotRefreshDuringEntryAndWakeDoesNotInheritAnUnsentCooldown() throws Exception {
         SleepTerrainClient.reset();
         var published=new CountDownLatch(1);var release=new CountDownLatch(1);var reader=new CountDownLatch(1);
@@ -71,7 +117,7 @@ class SleepRecoveryAdmissionTest {
             assertTrue(reader.await(5,TimeUnit.SECONDS));release.countDown();entering.get(5,TimeUnit.SECONDS);
             assertFalse(refreshing.get(5,TimeUnit.SECONDS),"Actual refresh entry cannot reserve/send against a partially installed sleep window");
             Object c=column(key);assertEquals(0L,field(c,"retryAt"));assertNull(field(c,"refresh"));
-            call("wakeWindow");Object permit=reserve(attempt(key));assertNotNull(permit);
+            call("wakeWindow",(LongConsumer)ignored->{});Object permit=reserve(attempt(key));assertNotNull(permit);
             assertEquals(0L,field(c,"retryAt"),"Queued/prepared work is not yet a sent request");
             var controls=new AtomicInteger();var pulls=new AtomicInteger();
             assertTrue(send(permit,controls::incrementAndGet,()->{pulls.incrementAndGet();return true;}));
@@ -79,31 +125,31 @@ class SleepRecoveryAdmissionTest {
         } finally { release.countDown();workers.shutdownNow();assertTrue(workers.awaitTermination(5,TimeUnit.SECONDS)); }
     }
     @Test void readerThatSawAwakeBeforeEntryCannotBorrowTheNewColumnOrGeneration() throws Exception {
-        install(1,key->{});call("wakeWindow");Object old=attempt(KEY);Object oldColumn=column(KEY);
-        install(2,key->{});call("wakeWindow");Object current=column(KEY);assertNotSame(oldColumn,current);
+        install(1,key->{});call("wakeWindow",(LongConsumer)key->{});Object old=attempt(KEY);Object oldColumn=column(KEY);
+        install(2,key->{});call("wakeWindow",(LongConsumer)key->{});Object current=column(KEY);assertNotSame(oldColumn,current);
         assertNull(reserve(old),"An old false/same-coordinate observation must recheck generation, window and Column identity");
         assertEquals(0L,field(current,"retryAt"));Object permit=reserve(attempt(KEY));assertNotNull(permit);
         ((ShadowPullClient.DispatchGate)permit).cancelled();
         assertEquals(0L,field(current,"retryAt"));assertNotNull(reserve(attempt(KEY)),"Filtered/abandoned work is immediately retryable");
     }
     @Test void preparedOldGenerationCannotSendOrDiscardAReplacementReceiveCredit() throws Exception {
-        install(1,key->{});call("wakeWindow");Object oldPermit=reserve(attempt(KEY));assertNotNull(oldPermit);
+        install(1,key->{});call("wakeWindow",(LongConsumer)key->{});Object oldPermit=reserve(attempt(KEY));assertNotNull(oldPermit);
         var receiver=new PullReceiveWindow<String>(1,4);assertTrue(receiver.offer(KEY,"old"));
         var old=receiver.drain().get(0);assertTrue(receiver.bind(KEY,old.token(),10));
-        install(2,key->{});call("wakeWindow");receiver.cancel(KEY);assertTrue(receiver.offer(KEY,"new"));
+        install(2,key->{});call("wakeWindow",(LongConsumer)key->{});receiver.cancel(KEY);assertTrue(receiver.offer(KEY,"new"));
         var current=receiver.drain().get(0);assertTrue(receiver.bind(KEY,current.token(),11));
         var wire=new AtomicInteger();assertFalse(send(oldPermit,wire::incrementAndGet,()->{wire.incrementAndGet();return true;}));
         assertEquals(0,wire.get());assertFalse(receiver.discard(KEY,old.token()));assertTrue(receiver.matches(KEY,11));
         Object c=column(KEY);assertEquals(0L,field(c,"retryAt"));assertNotNull(reserve(attempt(KEY)));
     }
     @Test void failedWireSendDoesNotChargeThirtySecondsOrLeaveARefreshLease() throws Exception {
-        install(1,key->{});call("wakeWindow");Object permit=reserve(attempt(KEY));assertNotNull(permit);
+        install(1,key->{});call("wakeWindow",(LongConsumer)key->{});Object permit=reserve(attempt(KEY));assertNotNull(permit);
         var failure=assertThrows(InvocationTargetException.class,()->send(permit,()->{},()->{throw new IllegalStateException("wire unavailable");}));
         assertInstanceOf(IllegalStateException.class,failure.getCause());Object c=column(KEY);
         assertEquals(0L,field(c,"retryAt"));assertNull(field(c,"refresh"));assertNotNull(reserve(attempt(KEY)));
     }
     @Test void knownNoSendResultFromTheRealAdmissionBridgeDoesNotChargeCooldown() throws Exception {
-        install(1,key->{});call("wakeWindow");Object permit=reserve(attempt(KEY));assertNotNull(permit);
+        install(1,key->{});call("wakeWindow",(LongConsumer)key->{});Object permit=reserve(attempt(KEY));assertNotNull(permit);
         var wire=new AtomicInteger();
         assertFalse(send(permit,()->{},()->io.github.limuqy.mc.hassium.network.PreparedClientSend.trySend(
                 null,()->null,()->true,wire::incrementAndGet,failure->fail(failure))));

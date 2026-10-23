@@ -29,14 +29,13 @@ public final class SleepTerrainClient {
     private static volatile long generation, minimumRequest;
     private static volatile String dimension;
     private static final java.util.concurrent.atomic.AtomicLong sequence=new java.util.concurrent.atomic.AtomicLong();
-    private static final java.util.Set<Long> testDrawn=new java.util.HashSet<>();
-    private static int testCulled;
     private static final boolean RECOVERY_DIAGNOSTICS=Boolean.getBoolean("hassium.smokeTest")
             && "sleepresume".equals(System.getProperty("hassium.smokeScenario"));
     private static final java.util.concurrent.atomic.AtomicInteger recoveryEvents=new java.util.concurrent.atomic.AtomicInteger();
     private SleepTerrainClient() {}
     public static boolean supported() { return LoginCaps.has(ClientLoginNegotiation.current(),LoginCaps.SLEEP); }
     public static boolean restricted() { return sleeping && window!=null; }
+    public static SleepChunkWindow activeWindow() { return restricted() ? window : null; }
     public static boolean moved(int x,int z) { var w=window; return sleeping && w!=null && (w.x()!=x || w.z()!=z); }
     public static boolean canEnter(int x,int z) {
         if(dimension==null) return true;
@@ -53,17 +52,19 @@ public final class SleepTerrainClient {
         var c=dimension==null?null:columns.get(DimensionKey.key(dimension,x,z));
         return c==null || c.done;
     }
-    public static boolean renderColumn(int x,int z) {
-        boolean keep=visible(x,z);
-        if(restricted() && io.github.limuqy.mc.hassium.client.ClientSmokeTest.isEnabled()) {
-            if(keep) testDrawn.add(ChunkPos.asLong(x,z)); else testCulled++;
-        }
-        return keep;
-    }
     public static void assertRenderedWindow() {
-        if(testDrawn.isEmpty() || testDrawn.size()>9 || testCulled==0)
-            throw new IllegalStateException("Renderer window draw="+testDrawn.size()+" culled="+testCulled);
-        io.github.limuqy.mc.hassium.Constants.LOG.info("HassiumSmokeTest:SLEEP renderer drawnColumns={} culledSections={}",testDrawn.size(),testCulled);
+        var cache=Minecraft.getInstance().level.getChunkSource();
+        int loaded=cache.getLoadedChunksCount();
+        var w=activeWindow();
+        if(w==null || loaded!=25) throw new IllegalStateException("Sleep residency="+loaded+" expected=25 (9 active + 16 neighbours) backend="+cache.getClass().getName());
+        var level=Minecraft.getInstance().level;
+        for(int x=w.x()-3;x<=w.x()+3;x++) for(int z=w.z()-3;z<=w.z()+3;z++) {
+            if(cache.hasChunk(x,z)!=w.light(x,z)) throw new IllegalStateException("Unexpected resident column "+x+","+z);
+            if(level.shouldTickBlocksAt(ChunkPos.asLong(x,z))!=w.visible(x,z))
+                throw new IllegalStateException("Unexpected active column "+x+","+z);
+        }
+        io.github.limuqy.mc.hassium.Constants.LOG.info("HassiumSmokeTest:SLEEP activeColumns=9 neighbourColumns=16 residentColumns=25 nativeUnload=true {} backend={}",
+                io.github.limuqy.mc.hassium.compat.SleepChunkResidency.unloadEvidence(),cache.getClass().getName());
     }
     public static void enter(long id,int x,int z) {
         if(!supported()) return;
@@ -71,12 +72,13 @@ public final class SleepTerrainClient {
         String dim=LevelCompat.getDimensionId(mc.level);
         if(!DimensionKey.isCacheableDimension(dim)) return;
         io.github.limuqy.mc.hassium.compat.PullOrderingProbeCompat.Client.beginSleep(id);
-        testDrawn.clear(); testCulled=0;
         // Include the original compute window, including non-rendered light neighbours.
         int radius=ShadowTrackingSession.getInstance().computeDomainBoxRadius();
         installWindow(id,dim,x,z,ShadowPullClient.nextRequestFloor(),radius,
                 ShadowTrackingSession.serverViewDistance(),SleepTerrainClient::invalidate);
-        mc.levelRenderer.needsUpdate();
+        io.github.limuqy.mc.hassium.compat.SleepChunkResidency.begin();
+        io.github.limuqy.mc.hassium.compat.SleepChunkResidency.enforce(mc);
+        mc.levelRenderer.allChanged();
     }
     /** Only metadata is published under this monitor; no chunk capture or owner wait occurs here. */
     private static synchronized void installWindow(long id,String dim,int x,int z,long floor,int radius,int vd,
@@ -101,8 +103,23 @@ public final class SleepTerrainClient {
         ShadowTrackingSession.getInstance().clearPullInFlight(dim,pos);
         ShadowPullClient.clearCompareRequested(dim,pos);
     }
-    public static void wake() { wakeWindow(); Minecraft.getInstance().levelRenderer.needsUpdate(); }
-    private static synchronized void wakeWindow() {
+    public static void wake() {
+        var mc=Minecraft.getInstance();
+        io.github.limuqy.mc.hassium.compat.SleepChunkResidency.releaseNeighbours(mc);
+        wakeWindow(SleepTerrainClient::invalidate);
+        io.github.limuqy.mc.hassium.client.OvdClientLifecycle.onClientTick(mc);
+        mc.levelRenderer.allChanged();
+    }
+    private static synchronized void wakeWindow(java.util.function.LongConsumer invalidator) {
+        // Revalidate inactive halo BEs on wake, including mod payloads outside native BE packets.
+        if(sleeping && window!=null && dimension!=null) {
+            long floor=ShadowPullClient.nextRequestFloor();
+            for(int x=window.x()-2;x<=window.x()+2;x++) for(int z=window.z()-2;z<=window.z()+2;z++) {
+                if(window.visible(x,z)) continue;
+                long key=DimensionKey.key(dimension,x,z);
+                columns.put(key,new Column(floor)); invalidator.accept(key);
+            }
+        }
         sleeping=false;
         if(dimension!=null) recoveryEvent(DimensionKey.key(dimension,-6,0),"wake",0);
     }

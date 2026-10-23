@@ -471,6 +471,10 @@ public final class ScenarioEngine {
             else if("observer".equals(action)) { io.github.limuqy.mc.hassium.compat.SleepProbeCompat.assertObserver(); return Outcome.DONE; }
             else if("afk_baseline".equals(action)) { io.github.limuqy.mc.hassium.compat.SleepProbeCompat.assertAfk(); return Outcome.DONE; }
             else if("capture".equals(action)) { io.github.limuqy.mc.hassium.compat.SleepProbeCompat.capture("sleep-overlay"); return Outcome.DONE; }
+            else if("geometry_begin".equals(action)) { io.github.limuqy.mc.hassium.compat.SleepProbeCompat.beginGeometry(); return Outcome.DONE; }
+            else if("geometry".equals(action) || "geometry_awake".equals(action)) {
+                io.github.limuqy.mc.hassium.compat.SleepProbeCompat.assertGeometry("geometry_awake".equals(action)); return Outcome.DONE;
+            }
             else if("arm_held".equals(action)) { mc.options.keyAttack.setDown(true); return Outcome.DONE; }
             else if("held".equals(action)) {
                 if(!mc.options.keyAttack.isDown() || mc.options.keyAttack.consumeClick()) throw new IllegalStateException("Sleep held input lost or synthesized a click");
@@ -637,6 +641,15 @@ public final class ScenarioEngine {
         }
         boolean done="enter".equals(action) ? state==io.github.limuqy.mc.hassium.client.sleep.SleepClient.State.SLEEPING
                 : state==io.github.limuqy.mc.hassium.client.sleep.SleepClient.State.IDLE && mc.player!=null;
+        if(done && "wake".equals(action)) {
+            // A real unload makes restoration asynchronous; sample after the selected columns recover.
+            int vd=io.github.limuqy.mc.hassium.shadow.track.ShadowTrackingSession.serverViewDistance();
+            int radius=io.github.limuqy.mc.hassium.compat.ChunkShapeCompat.boundingRadius(vd);
+            var center=mc.player.chunkPosition();
+            for(int x=center.x-radius;x<=center.x+radius && done;x++) for(int z=center.z-radius;z<=center.z+radius;z++)
+                if(io.github.limuqy.mc.hassium.compat.ChunkShapeCompat.contains(center.x,center.z,vd,x,z)
+                        && !io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.visible(x,z)) { done=false; break; }
+        }
         if(done) { LOGGER.info("HassiumSmokeTest:SLEEP action={} state={}",action,state); return Outcome.DONE; }
         if(now-stepStartMs>120_000) { fail("SLEEP timeout action="+action+" state="+state,3); return Outcome.DONE; }
         return Outcome.RUNNING;
@@ -666,6 +679,7 @@ public final class ScenarioEngine {
                     if(io.github.limuqy.mc.hassium.client.sleep.SleepTerrainClient.allows(x,z)) light++;
                 }
                 if(visible!=9 || light!=25) throw new IllegalStateException("Traffic window geometry="+visible+"/"+light);
+                if(mc.level.getChunkSource().getLoadedChunksCount()!=25) throw new IllegalStateException("Traffic sleep must retain 9 active columns and 16 native neighbours");
             }
         }
         // Profiling runs unattended; the native pause screen suppresses keyboard movement.

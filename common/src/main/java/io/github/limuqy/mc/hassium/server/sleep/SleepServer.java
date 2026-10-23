@@ -33,7 +33,6 @@ public final class SleepServer {
         }
     }
     private static final Map<Connection,Session> SESSIONS = new ConcurrentHashMap<>();
-    private static final Map<Connection,String> UNSAFE = new ConcurrentHashMap<>();
     private static final AtomicLong GENERATIONS = new AtomicLong(System.currentTimeMillis());
     private static final ThreadLocal<Boolean> BYPASS = ThreadLocal.withInitial(()->false);
     private SleepServer() {}
@@ -47,13 +46,12 @@ public final class SleepServer {
         Session session=SESSIONS.get(connection);
         if (m.op()==Op.ENTER) {
             if (session!=null) return;
-            String issue=Services.PLATFORM.sleepCompatibilityIssue();
-            if (!HassiumConfigService.getInstance().getConfig().master().sleepEnabled() || issue!=null || UNSAFE.containsKey(connection)
+            if (!HassiumConfigService.getInstance().getConfig().master().sleepEnabled()
                     || !player.isAlive() || player.isPassenger() || player.containerMenu!=player.inventoryMenu
                     || !io.github.limuqy.mc.hassium.utils.DimensionKey.isCacheableDimension(LevelCompat.getDimensionId(PlayerCompat.getServerLevel(player)))
                     || m.generation()!=0
                     || !Double.isFinite(SleepEntityCompat.interactionRadius(player)) || SleepEntityCompat.interactionRadius(player)>1024) {
-                String reason=issue!=null ? issue : "Sleep unavailable: close containers and check compatibility";
+                String reason="Sleep unavailable: close containers and check player state";
                 send(player,new Message(Op.ERROR,0,m.sequence(),reason)); return;
             }
             session=new Session(player,GENERATIONS.incrementAndGet(),Phase.PREPARED);
@@ -147,16 +145,6 @@ public final class SleepServer {
     public static boolean suppress(Connection connection, Packet<?> packet, boolean callback) {
         if (bypass()) return false;
         Session s=SESSIONS.get(connection);
-        if (PacketPayloadCompat.isCustomPayloadPacket(packet)) {
-            var id=PacketPayloadCompat.getPayloadId(packet);
-            if (id!=null && !Set.of("hassium","minecraft","forge","neoforge").contains(id.namespace())) {
-                UNSAFE.putIfAbsent(connection,id.fullId());
-                if (s!=null && s.phase!=Phase.PREPARED) {
-                    PlayerCompat.getMinecraftServer(s.player).execute(()->incompatible(s,"Unsupported world payload: "+id.fullId()));
-                    return true;
-                }
-            }
-        }
         if (s==null || callback || s.phase==Phase.PREPARED)
             return SleepTerrainServer.suppress(connection,packet);
         if (!PlayerCompat.getMinecraftServer(s.player).isSameThread()) {
@@ -181,12 +169,6 @@ public final class SleepServer {
         Session s=SESSIONS.get(PlayerCompat.getConnection(player)); return s!=null && s.phase==Phase.SLEEPING;
     }
     private static Packet<?> filter(Session s, Packet<?> packet) {
-        if(PacketPayloadCompat.isCustomPayloadPacket(packet)) {
-            var payload=PacketPayloadCompat.getPayloadId(packet);
-            if(payload!=null && !Set.of("hassium","minecraft","forge","neoforge").contains(payload.namespace())) {
-                UNSAFE.putIfAbsent(s.connection,payload.fullId()); incompatible(s,"Unsupported bundled payload: "+payload.fullId()); return null;
-            }
-        }
         var children=SleepPacketCompat.children(packet);
         if (children!=null) {
             List<Packet<?>> kept=new ArrayList<>();
@@ -230,6 +212,6 @@ public final class SleepServer {
     static void emit(Connection c, Packet<?> p) { boolean previous=BYPASS.get(); BYPASS.set(true); try { c.send(p); } finally { BYPASS.set(previous); } }
     private static void send(ServerPlayer p, Message m) { Services.NETWORK_MANAGER.sendSleepControl(p,SleepControl.encode(m)); }
     private static void send(Session s, Op op, String detail) { send(s.player,new Message(op,s.generation,++s.sentSequence,detail)); }
-    public static void disconnected(Connection c) { SleepTerrainServer.disconnected(c); SESSIONS.remove(c); UNSAFE.remove(c); }
-    public static void clear(MinecraftServer server) { SleepTerrainServer.clear(); SESSIONS.entrySet().removeIf(e->PlayerCompat.getMinecraftServer(e.getValue().player)==server); UNSAFE.clear(); }
+    public static void disconnected(Connection c) { SleepTerrainServer.disconnected(c); SESSIONS.remove(c); }
+    public static void clear(MinecraftServer server) { SleepTerrainServer.clear(); SESSIONS.entrySet().removeIf(e->PlayerCompat.getMinecraftServer(e.getValue().player)==server); }
 }

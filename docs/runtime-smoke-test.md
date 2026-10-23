@@ -686,7 +686,7 @@ build/smoke-test/
 
 ## 半在线休眠专项（2.X）
 
-总开关默认关闭，各启用场景的 profile 显式开启。当前只启用 1.20.1 Forge 和 1.21.1 NeoForge；入口及限制见 [休眠说明](semi-online-sleep.md)，已执行场次及测量见[验收记录](handoff/handoff-2026-10-21-semi-online-sleep.md)。同一 checkout 内各版本构建和游戏运行必须串行。
+总开关默认关闭，各启用场景的 profile 显式开启。当前只启用 1.20.1 Forge 和 1.21.1 NeoForge；入口及限制见 [休眠说明](semi-online-sleep.md)，当前驻留/建模邻柱验收见[2026-10-23 记录](handoff/sleep-residency-2026-10-23-results.json)，旧版测量见[历史记录](handoff/handoff-2026-10-21-semi-online-sleep.md)。同一 checkout 内各版本构建和游戏运行必须串行。
 
 推荐用包装脚本复跑；它在 finally 恢复字典、配置、options 和客户端缓存，并将临时世界与日志保留在 `build/traffic-profile/<SessionId>/`。每次使用新 SessionId。Dictionary 指向事先保存的聚合字典，不覆盖原始基线：
 
@@ -699,10 +699,11 @@ build/smoke-test/
 |---|---|
 | `sleepdisabled` | 配置关闭时不协商能力、不显示菜单入口、手动和自动均不能进入 |
 | `sleepauto` | 开界面不自动进入，站桩自动进入且攻击/使用跨握手保持，松开不重放，世界可见，同连接恢复；开发测试期限 1–1.5 秒 |
-| `sleepresume` | 仅渲染 3×3，同步/计算保留 5×5 光照邻柱；转向/移动/Esc/疾跑输入同连接恢复；直到远处测试柱恢复可见，每 tick 检查拉弓计时、攻击/使用按键及真实挖掘进度；连接/世界/玩家/附近实体对象不变；远处方块、纯 BE NBT、快照后的更新尾部及屋檐边界光照；不创建保载 |
+| `sleepgeometry` | 九种颜色标出脚下及周围八柱，俯视原生 PNG 核对完整 3×3 画面；25 个诊断 ticker 进入真实客户端 BE 循环，休眠仅九个运行、唤醒后其余十六个恢复；核对原生缓存 25 柱、远处真实卸载 |
+| `sleepresume` | 原生客户端实际驻留 9 活动柱及 16 光照/建模邻柱，更远区块原生卸载并移除 BE；转向/移动/Esc/疾跑输入同连接恢复；直到远处测试柱恢复，每 tick 检查拉弓计时、攻击/使用按键及真实挖掘进度；连接/世界/玩家/附近实体对象不变；远处方块、纯 BE NBT、快照后的更新尾部及屋檐边界光照；不创建保载 |
 | `sleepmixed` | 另启真实普通观察者客户端；远近实体出入、原生位置基线、共享 dirty 不变、目标替换与耐久、Esc 和原长按 |
 | `sleepfactory` | 仅原生 1.21.1 工厂 ZIP 副本；预热后解除冻结，真实 tick 及同样的完整流量周期 |
-| `sleepwindowtraffic` | 独立原版工厂，三个输入模式分别正常/3×3 休眠约 30 秒；逐 tick 核对状态及 9/25 柱；同连接恢复至少观察 30 秒且原可见范围已补齐；成功 TCP 写入计量、工厂产量及 TPS |
+| `sleepwindowtraffic` | 独立原版工厂，三个输入模式分别正常/3×3 休眠约 30 秒；逐 tick 核对状态、9/25 逻辑窗口及客户端实际 25 柱；同连接恢复至少观察 30 秒且原可见范围已补齐；成功 TCP 写入计量、工厂产量及 TPS |
 
 当前均使用同连接恢复；生成工厂使用 `-ScenarioOverride sleepwindowtraffic`，两端均生成自己的隔离工厂世界，无需 WorldZip。用 `python scripts/smoke/analyze-sleep-window-traffic.py build/traffic-profile/<SessionId>` 分析。恢复窗口包含实际加载和至少 30 秒背景流量，没有注入离线等待；同时报告全部进入/恢复字节的保守回本时间及扣除同期正常流量的增量回本时间。每输入模式仅一个相邻样本，不能当成多次重复统计。
 

@@ -11,6 +11,7 @@ wait ms=20000
 dump label=ROUND1 round=1 world=true
 sleep action=auto_menu
 sleep action=auto releaseDuringEntry=true
+wait ms=1000
 sleep action=capture
 sleep action=release
 sleep action=wake

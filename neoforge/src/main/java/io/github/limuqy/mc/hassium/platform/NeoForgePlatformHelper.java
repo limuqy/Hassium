@@ -13,10 +13,6 @@ import java.nio.file.Path;
  * NeoForge ≥1.21.1：net.neoforged 包名（1.20.1 的 net.minecraftforge 兼容线已随 NeoForge 1.20.1 支持退役）
  */
 public class NeoForgePlatformHelper implements IPlatformHelper {
-    @Override public String sleepCompatibilityIssue() {
-        return io.github.limuqy.mc.hassium.server.sleep.SleepCompatibility.firstUnsupported(
-                ModList.get().getMods().stream().map(info->info.getModId()).toList());
-    }
 
     @Override
     public java.util.List<net.minecraft.resources.ResourceKey<? extends net.minecraft.core.Registry<?>>> cacheDataPackRegistryKeys() {

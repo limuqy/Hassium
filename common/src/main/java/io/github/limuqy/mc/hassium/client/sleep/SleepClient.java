@@ -98,6 +98,7 @@ public final class SleepClient {
     public static void tick() {
         Minecraft mc=Minecraft.getInstance();
         tickAutoSleep(mc);
+        if(sleeping()) SleepChunkResidency.enforce(mc);
         if(state==State.SLEEPING && mc.player!=null && SleepTerrainClient.moved(mc.player.chunkPosition().x,mc.player.chunkPosition().z)) wake();
         if(state==State.SLEEPING && mc.player!=null && mc.screen==null && mc.getOverlay()==null
                 && SleepWakeTrigger.shouldWake(movementInput(mc),sleepYaw,sleepPitch,mc.player.getYRot(),mc.player.getXRot())) wake();

@@ -1,0 +1,2063 @@
+{
+  "status": "PASS",
+  "generatedAt": "2026-10-23T20:49:50.240661+08:00",
+  "branch": "2.0.0",
+  "baseCommit": "83ab4620314cf47dd1721f49d80491cf12323d01",
+  "validationSummary": {
+    "currentCandidateRuntimeCount": 11,
+    "historicalSupportingRuntimeCount": 5,
+    "currentCandidateAllPass": true,
+    "junitPassed": 1913,
+    "junitSkipped": 8
+  },
+  "scope": {
+    "sleepEnabledByDefault": false,
+    "validatedSleepPlatforms": [
+      "1.20.1 Forge",
+      "1.21.1 NeoForge"
+    ],
+    "activeNativeClientColumns": 9,
+    "nativeNeighbourColumns": 16,
+    "residentNativeClientColumns": 25,
+    "shadowLightWindowColumns": 25,
+    "serverViewAndSimulationRangeChanged": false,
+    "wake": "same connection/world/player; restore pre-sleep effective view; tracking/ShadowPull/LIGHT/cache reuse",
+    "rendererSpecificSleepHooks": false,
+    "farsight": "4.5 replacement cache: enumerate live map, invoke its native drop override",
+    "nativeReplacementUnload": "scope to same column during own snapshot apply; genuine evictions still invalidate recovery",
+    "desktopControlUsed": false,
+    "originalHmclInstancesAndPersonalSavesWritten": false
+  },
+  "units": [
+    {
+      "version": "1.20.1",
+      "tests": 644,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 2
+    },
+    {
+      "version": "1.21.1",
+      "tests": 637,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 2
+    },
+    {
+      "version": "1.21.11",
+      "tests": 640,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 4
+    }
+  ],
+  "compileAnchors": [
+    {
+      "version": "1.20.1",
+      "log": "build/sleep-residency-20261023/build-1201-halo2.log",
+      "status": "PASS"
+    },
+    {
+      "version": "1.21.1",
+      "log": "build/sleep-residency-20261023/build-1211-halo2.log",
+      "status": "PASS"
+    },
+    {
+      "version": "1.21.2",
+      "tasks": [
+        "common:compileJava",
+        "fabric:compileJava",
+        "neoforge:compileJava",
+        "scanVersionBoundaries"
+      ],
+      "exitCode": 0,
+      "log": "build/sleep-residency-20261023/matrix-1.21.2.log"
+    },
+    {
+      "version": "1.21.5",
+      "tasks": [
+        "common:compileJava",
+        "fabric:compileJava",
+        "neoforge:compileJava",
+        "scanVersionBoundaries",
+        "forge:compileJava"
+      ],
+      "exitCode": 0,
+      "log": "build/sleep-residency-20261023/matrix-1.21.5.log"
+    },
+    {
+      "version": "1.21.6",
+      "tasks": [
+        "common:compileJava",
+        "fabric:compileJava",
+        "neoforge:compileJava",
+        "scanVersionBoundaries",
+        "forge:compileJava"
+      ],
+      "exitCode": 0,
+      "log": "build/sleep-residency-20261023/matrix-1.21.6.log"
+    },
+    {
+      "version": "1.21.9",
+      "tasks": [
+        "common:compileJava",
+        "fabric:compileJava",
+        "neoforge:compileJava",
+        "scanVersionBoundaries",
+        "forge:compileJava"
+      ],
+      "exitCode": 0,
+      "log": "build/sleep-residency-20261023/matrix-1.21.9.log"
+    },
+    {
+      "version": "1.21.11",
+      "tasks": [
+        "common:compileJava",
+        "fabric:compileJava",
+        "neoforge:compileJava",
+        "scanVersionBoundaries",
+        "common:test"
+      ],
+      "exitCode": 0,
+      "log": "build/sleep-residency-20261023/matrix-1.21.11.log"
+    }
+  ],
+  "geometryVisualAndTickAudit": [
+    {
+      "case": "geometry_forge",
+      "png": "build/sleep-residency-20261023/production/geometry_forge/evidence/probe/sleep-geometry.png",
+      "sha256": "45e2cd823de16e24d43921de2c8d7bd847510f704967f3b32ded9d4bd2c69353",
+      "visualInspection": "view_image of native Minecraft capture; all nine coloured columns visible, grey halo not rendered",
+      "colourGridOnScreen": [
+        [
+          "magenta",
+          "purple",
+          "blue"
+        ],
+        [
+          "cyan",
+          "white",
+          "lime"
+        ],
+        [
+          "yellow",
+          "orange",
+          "red"
+        ]
+      ],
+      "player": [
+        8.5,
+        166,
+        8.5
+      ],
+      "playerChunk": [
+        0,
+        0
+      ],
+      "activeBlockBounds": {
+        "x": [
+          -16,
+          31
+        ],
+        "z": [
+          -16,
+          31
+        ]
+      },
+      "allNineVisible": true,
+      "realTickLoopNineActiveSixteenInactiveAndWakeRestored": true
+    },
+    {
+      "case": "geometry_embeddium",
+      "png": "build/sleep-residency-20261023/production/geometry_embeddium/evidence/probe/sleep-geometry.png",
+      "sha256": "52661a2934fb144a8ab4ffe9fe88f0cfa7ffa303b0af9d328d2fde119d852439",
+      "visualInspection": "view_image of native Minecraft capture; all nine coloured columns visible, grey halo not rendered",
+      "colourGridOnScreen": [
+        [
+          "magenta",
+          "purple",
+          "blue"
+        ],
+        [
+          "cyan",
+          "white",
+          "lime"
+        ],
+        [
+          "yellow",
+          "orange",
+          "red"
+        ]
+      ],
+      "player": [
+        8.5,
+        166,
+        8.5
+      ],
+      "playerChunk": [
+        0,
+        0
+      ],
+      "activeBlockBounds": {
+        "x": [
+          -16,
+          31
+        ],
+        "z": [
+          -16,
+          31
+        ]
+      },
+      "allNineVisible": true,
+      "realTickLoopNineActiveSixteenInactiveAndWakeRestored": true
+    },
+    {
+      "case": "geometry_sodium",
+      "png": "build/sleep-residency-20261023/production/geometry_sodium/evidence/probe/sleep-geometry.png",
+      "sha256": "eb6fa35671c4de683f90288068d4cfea7b823e69c09146f1abce0336a9c1172a",
+      "visualInspection": "view_image of native Minecraft capture; all nine coloured columns visible, grey halo not rendered",
+      "colourGridOnScreen": [
+        [
+          "magenta",
+          "purple",
+          "blue"
+        ],
+        [
+          "cyan",
+          "white",
+          "lime"
+        ],
+        [
+          "yellow",
+          "orange",
+          "red"
+        ]
+      ],
+      "player": [
+        8.5,
+        166,
+        8.5
+      ],
+      "playerChunk": [
+        0,
+        0
+      ],
+      "activeBlockBounds": {
+        "x": [
+          -16,
+          31
+        ],
+        "z": [
+          -16,
+          31
+        ]
+      },
+      "allNineVisible": true,
+      "realTickLoopNineActiveSixteenInactiveAndWakeRestored": true
+    }
+  ],
+  "originalAngleVisualAudit": [
+    {
+      "case": "atm9_sleep_c",
+      "png": "build/sleep-residency-20261023/production/atm9_sleep_c/evidence/probe/sleep-window.png",
+      "sha256": "2b7effc746f9c8de5c070ac7afd5cf1c29030fa21dd88df98dfd3f37eb95c531",
+      "inspection": "Native PNG viewed: at (0.5,140,0.5), yaw 0 pitch 25, the platform extends across adjacent columns; no void boundary at the player feet.",
+      "footBoundaryFixed": true
+    },
+    {
+      "case": "atm10_sleep_b",
+      "png": "build/sleep-residency-20261023/production/atm10_sleep_b/evidence/probe/sleep-window.png",
+      "sha256": "cd7ae62f09f503c4bcbc0e85ba2ce7690258cacc6ab81ba42341a98439ea4759",
+      "inspection": "Native PNG viewed: at (0.5,140,0.5), yaw 0 pitch 25, the platform extends across adjacent columns; no void boundary at the player feet.",
+      "footBoundaryFixed": true
+    },
+    {
+      "case": "embeddium_halo_c",
+      "png": "build/sleep-residency-20261023/production/embeddium_halo_c/evidence/probe/sleep-window.png",
+      "sha256": "ae7d9bdc2c09ad31a04a164c3e184815972dc3eea6df58139bca697d186a3c7f",
+      "inspection": "Native PNG viewed: at (0.5,140,0.5), yaw 0 pitch 25, the platform extends across adjacent columns; no void boundary at the player feet.",
+      "footBoundaryFixed": true
+    }
+  ],
+  "artifacts": [
+    {
+      "loader": "forge",
+      "version": "1.20.1",
+      "path": "forge\\build\\1_20_1\\libs\\hassium-forge-2.1.3-1.20.1.jar",
+      "sha256": "b4f72d83eae2ac9147f5a93d551f8b41c46258a0f9bce5502194705a7ff9f621"
+    },
+    {
+      "loader": "neoforge",
+      "version": "1.21.1",
+      "path": "neoforge\\build\\1_21_1\\libs\\hassium-neoforge-2.1.3-1.21.1.jar",
+      "sha256": "c0466c090baff3d351d4a90aaa39d79d9735f7e03a16e56c8deeea6bc8a364f1"
+    }
+  ],
+  "runtimes": [
+    {
+      "name": "geometry_forge",
+      "candidateStage": "final gameplay including native meshing neighbours and inactive halo tick gate",
+      "status": "PASS",
+      "rawResult": "build\\sleep-residency-20261023\\production\\geometry_forge\\result.json",
+      "releaseSha256": "b4f72d83eae2ac9147f5a93d551f8b41c46258a0f9bce5502194705a7ff9f621",
+      "diagnosticCopiesAllGameplayClassesMatch": true,
+      "args": {
+        "name": "geometry_forge",
+        "version": "1.20.1",
+        "scenario": "sleepgeometry",
+        "renderer": false,
+        "waystones": false,
+        "ovd": false,
+        "distant_factory": false,
+        "pack": null,
+        "farsight": false
+      },
+      "strictAdditionalGates": {
+        "noShadowCreationFailure": true,
+        "noNativeDecodeFailure": true,
+        "noPoiDispatchTimeout": true,
+        "noDuplicateLogin": true,
+        "noFullPushTimeout": true,
+        "noShadowBlockEntitySaveFailure": true,
+        "noMixinLocalAnalysisFailure": true,
+        "normalExit": true
+      },
+      "jarCounts": {
+        "server": 1,
+        "client": 1
+      },
+      "modsOfInterest": [],
+      "residencyEvidence": [
+        "activeColumns=9 neighbourColumns=16 residentColumns=25 nativeUnload=true unloadedColumns=428 removedBlockEntities=42 backend=net.minecraft.client.multiplayer.ClientChunkCache"
+      ],
+      "lightEvidence": [],
+      "recoveryEvidence": [],
+      "viewEvidence": [
+        "[OVD] effectiveClientVD=10 serverVD=10 slider=10 effectiveRD=10 config=false engine=false shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=10 effectiveRD=2 config=false engine=false shadowFailed=false",
+        "[OVD] effectiveClientVD=10 serverVD=10 slider=10 effectiveRD=10 config=false engine=false shadowFailed=false"
+      ],
+      "finalRenderSlider": "10",
+      "clientFinalExit": 0,
+      "serverFinalExit": 0,
+      "cpuAffinity": {
+        "serverAffinity": {
+          "pid": 9612,
+          "mask": "0xFFFF",
+          "verified": true
+        },
+        "clientAffinity": {
+          "pid": 40200,
+          "mask": "0xFFFF0000",
+          "verified": true
+        }
+      },
+      "originalFullPackClientJarInventoryVerified": false,
+      "renderSliderBeforeSleep": "10",
+      "renderSliderRestored": true
+    },
+    {
+      "name": "geometry_embeddium",
+      "candidateStage": "final gameplay including native meshing neighbours and inactive halo tick gate",
+      "status": "PASS",
+      "rawResult": "build\\sleep-residency-20261023\\production\\geometry_embeddium\\result.json",
+      "releaseSha256": "b4f72d83eae2ac9147f5a93d551f8b41c46258a0f9bce5502194705a7ff9f621",
+      "diagnosticCopiesAllGameplayClassesMatch": true,
+      "args": {
+        "name": "geometry_embeddium",
+        "version": "1.20.1",
+        "scenario": "sleepgeometry",
+        "renderer": true,
+        "waystones": false,
+        "ovd": true,
+        "distant_factory": false,
+        "pack": null,
+        "farsight": true
+      },
+      "strictAdditionalGates": {
+        "noShadowCreationFailure": true,
+        "noNativeDecodeFailure": true,
+        "noPoiDispatchTimeout": true,
+        "noDuplicateLogin": true,
+        "noFullPushTimeout": true,
+        "noShadowBlockEntitySaveFailure": true,
+        "noMixinLocalAnalysisFailure": true,
+        "normalExit": true
+      },
+      "jarCounts": {
+        "server": 1,
+        "client": 4
+      },
+      "modsOfInterest": [
+        {
+          "name": "cupboard-1.20.1-2.7.jar",
+          "sha256": "63a1b6e8e9cffd53f283fae04f64b8d63dcaaa99fe0e383bb664f23ec87d395f"
+        },
+        {
+          "name": "embeddium-0.3.31+mc1.20.1.jar",
+          "sha256": "eed3d1325f2acc2fd4e69bb495e5ccb91d962126ac5330f0582ebc2a3daf47fb"
+        },
+        {
+          "name": "farsight-1.20.1-4.5.jar",
+          "sha256": "8347d07ee5bb0898ef32dc4161f065f36cb3c60dcc19cad164a58417af5ffee5"
+        }
+      ],
+      "residencyEvidence": [
+        "activeColumns=9 neighbourColumns=16 residentColumns=25 nativeUnload=true unloadedColumns=605 removedBlockEntities=51 backend=com.farsight.FarsightClientChunkManager"
+      ],
+      "lightEvidence": [],
+      "recoveryEvidence": [],
+      "viewEvidence": [
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=16 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false"
+      ],
+      "finalRenderSlider": "16",
+      "clientFinalExit": 0,
+      "serverFinalExit": 0,
+      "cpuAffinity": {
+        "serverAffinity": {
+          "pid": 7112,
+          "mask": "0xFFFF",
+          "verified": true
+        },
+        "clientAffinity": {
+          "pid": 23976,
+          "mask": "0xFFFF0000",
+          "verified": true
+        }
+      },
+      "originalFullPackClientJarInventoryVerified": false,
+      "renderSliderBeforeSleep": "16",
+      "renderSliderRestored": true
+    },
+    {
+      "name": "geometry_sodium",
+      "candidateStage": "final gameplay including native meshing neighbours and inactive halo tick gate",
+      "status": "PASS",
+      "rawResult": "build\\sleep-residency-20261023\\production\\geometry_sodium\\result.json",
+      "releaseSha256": "c0466c090baff3d351d4a90aaa39d79d9735f7e03a16e56c8deeea6bc8a364f1",
+      "diagnosticCopiesAllGameplayClassesMatch": true,
+      "args": {
+        "name": "geometry_sodium",
+        "version": "1.21.1",
+        "scenario": "sleepgeometry",
+        "renderer": true,
+        "waystones": false,
+        "ovd": true,
+        "distant_factory": false,
+        "pack": null,
+        "farsight": false
+      },
+      "strictAdditionalGates": {
+        "noShadowCreationFailure": true,
+        "noNativeDecodeFailure": true,
+        "noPoiDispatchTimeout": true,
+        "noDuplicateLogin": true,
+        "noFullPushTimeout": true,
+        "noShadowBlockEntitySaveFailure": true,
+        "noMixinLocalAnalysisFailure": true,
+        "normalExit": true
+      },
+      "jarCounts": {
+        "server": 1,
+        "client": 2
+      },
+      "modsOfInterest": [
+        {
+          "name": "sodium-neoforge-0.6.13+mc1.21.1.jar",
+          "sha256": "7acd7af2ef75ec883a6872c17494ead65e38025151eb08a1d60e36d34377f403"
+        }
+      ],
+      "residencyEvidence": [
+        "activeColumns=9 neighbourColumns=16 residentColumns=25 nativeUnload=true unloadedColumns=572 removedBlockEntities=50 backend=net.minecraft.client.multiplayer.ClientChunkCache"
+      ],
+      "lightEvidence": [],
+      "recoveryEvidence": [],
+      "viewEvidence": [
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=16 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false"
+      ],
+      "finalRenderSlider": "16",
+      "clientFinalExit": 0,
+      "serverFinalExit": 0,
+      "cpuAffinity": {
+        "serverAffinity": {
+          "pid": 22496,
+          "mask": "0xFFFF",
+          "verified": true
+        },
+        "clientAffinity": {
+          "pid": 35008,
+          "mask": "0xFFFF0000",
+          "verified": true
+        }
+      },
+      "originalFullPackClientJarInventoryVerified": false,
+      "renderSliderBeforeSleep": "16",
+      "renderSliderRestored": true
+    },
+    {
+      "name": "embeddium_halo_c",
+      "candidateStage": "final gameplay including native meshing neighbours and inactive halo tick gate",
+      "status": "PASS",
+      "rawResult": "build\\sleep-residency-20261023\\production\\embeddium_halo_c\\result.json",
+      "releaseSha256": "b4f72d83eae2ac9147f5a93d551f8b41c46258a0f9bce5502194705a7ff9f621",
+      "diagnosticCopiesAllGameplayClassesMatch": true,
+      "args": {
+        "name": "embeddium_halo_c",
+        "version": "1.20.1",
+        "scenario": "sleepresume",
+        "renderer": true,
+        "waystones": true,
+        "ovd": true,
+        "distant_factory": false,
+        "pack": null,
+        "farsight": false
+      },
+      "strictAdditionalGates": {
+        "noShadowCreationFailure": true,
+        "noNativeDecodeFailure": true,
+        "noPoiDispatchTimeout": true,
+        "noDuplicateLogin": true,
+        "noFullPushTimeout": true,
+        "noShadowBlockEntitySaveFailure": true,
+        "noMixinLocalAnalysisFailure": true,
+        "normalExit": true
+      },
+      "jarCounts": {
+        "server": 3,
+        "client": 4
+      },
+      "modsOfInterest": [
+        {
+          "name": "balm-forge-1.20.1-7.3.37-all.jar",
+          "sha256": "7f10f01866c8316edfc1ffbc49baf1154923beac637e2d7b5399d26508fdd914"
+        },
+        {
+          "name": "embeddium-0.3.31+mc1.20.1.jar",
+          "sha256": "eed3d1325f2acc2fd4e69bb495e5ccb91d962126ac5330f0582ebc2a3daf47fb"
+        },
+        {
+          "name": "waystones-forge-1.20.1-14.1.17.jar",
+          "sha256": "079aa58d6e95bee3caff622e10dcb6504efef43b803c7c21e2551201bd1ca78c"
+        }
+      ],
+      "residencyEvidence": [
+        "activeColumns=9 neighbourColumns=16 residentColumns=25 nativeUnload=true unloadedColumns=599 removedBlockEntities=49 backend=net.minecraft.client.multiplayer.ClientChunkCache"
+      ],
+      "lightEvidence": [
+        "roof/halo boundary light sky=11 block=14",
+        "roof/halo boundary light sky=11 block=14"
+      ],
+      "recoveryEvidence": [
+        "in-place trigger=turn identity/input/near-entity preserved using=true visiblePending=0 elapsedMs=4377",
+        "in-place trigger=move identity/input/near-entity preserved using=true visiblePending=0 elapsedMs=4399",
+        "in-place trigger=esc identity/input/near-entity preserved using=false visiblePending=0 elapsedMs=4290",
+        "in-place trigger=sprint identity/input/near-entity preserved using=false visiblePending=0 elapsedMs=4360"
+      ],
+      "viewEvidence": [
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=16 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=16 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=16 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=16 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=16 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false"
+      ],
+      "finalRenderSlider": "16",
+      "clientFinalExit": 0,
+      "serverFinalExit": 0,
+      "cpuAffinity": {
+        "serverAffinity": {
+          "pid": 36596,
+          "mask": "0xFFFF",
+          "verified": true
+        },
+        "clientAffinity": {
+          "pid": 24368,
+          "mask": "0xFFFF0000",
+          "verified": true
+        }
+      },
+      "originalFullPackClientJarInventoryVerified": false,
+      "renderSliderBeforeSleep": "16",
+      "renderSliderRestored": true
+    },
+    {
+      "name": "atm9_sleep_c",
+      "candidateStage": "final gameplay including native meshing neighbours and inactive halo tick gate",
+      "status": "PASS",
+      "rawResult": "build\\sleep-residency-20261023\\production\\atm9_sleep_c\\result.json",
+      "releaseSha256": "b4f72d83eae2ac9147f5a93d551f8b41c46258a0f9bce5502194705a7ff9f621",
+      "diagnosticCopiesAllGameplayClassesMatch": true,
+      "args": {
+        "name": "atm9_sleep_c",
+        "version": "1.20.1",
+        "scenario": "sleepresume",
+        "renderer": false,
+        "waystones": false,
+        "ovd": true,
+        "distant_factory": false,
+        "pack": "atm9",
+        "farsight": false
+      },
+      "strictAdditionalGates": {
+        "noShadowCreationFailure": true,
+        "noNativeDecodeFailure": true,
+        "noPoiDispatchTimeout": true,
+        "noDuplicateLogin": true,
+        "noFullPushTimeout": true,
+        "noShadowBlockEntitySaveFailure": true,
+        "noMixinLocalAnalysisFailure": true,
+        "normalExit": true
+      },
+      "jarCounts": {
+        "server": 423,
+        "client": 434
+      },
+      "modsOfInterest": [
+        {
+          "name": "balm-forge-1.20.1-7.3.37-all.jar",
+          "sha256": "7f10f01866c8316edfc1ffbc49baf1154923beac637e2d7b5399d26508fdd914"
+        },
+        {
+          "name": "cupboard-1.20.1-2.7.jar",
+          "sha256": "63a1b6e8e9cffd53f283fae04f64b8d63dcaaa99fe0e383bb664f23ec87d395f"
+        },
+        {
+          "name": "embeddium-0.3.31+mc1.20.1.jar",
+          "sha256": "eed3d1325f2acc2fd4e69bb495e5ccb91d962126ac5330f0582ebc2a3daf47fb"
+        },
+        {
+          "name": "farsight-1.20.1-4.5.jar",
+          "sha256": "8347d07ee5bb0898ef32dc4161f065f36cb3c60dcc19cad164a58417af5ffee5"
+        },
+        {
+          "name": "sodiumdynamiclights-forge-1.0.10-1.20.1.jar",
+          "sha256": "dff5325abb58c0c8526dffb80e764188bde045fd02ca6ed5e2bb76f0897d46f4"
+        },
+        {
+          "name": "sodiumoptionsapi-forge-1.0.10-1.20.1.jar",
+          "sha256": "37ec0b6248f04e856e6e5ba2066c4ded9981ce128282a9b45cdb10b67b9c8415"
+        },
+        {
+          "name": "waystones-forge-1.20.1-14.1.17.jar",
+          "sha256": "079aa58d6e95bee3caff622e10dcb6504efef43b803c7c21e2551201bd1ca78c"
+        }
+      ],
+      "residencyEvidence": [
+        "activeColumns=9 neighbourColumns=16 residentColumns=25 nativeUnload=true unloadedColumns=555 removedBlockEntities=691 backend=com.farsight.FarsightClientChunkManager"
+      ],
+      "lightEvidence": [
+        "roof/halo boundary light sky=11 block=14",
+        "roof/halo boundary light sky=11 block=14"
+      ],
+      "recoveryEvidence": [
+        "in-place trigger=turn identity/input/near-entity preserved using=true visiblePending=0 elapsedMs=4275",
+        "in-place trigger=move identity/input/near-entity preserved using=true visiblePending=0 elapsedMs=4249",
+        "in-place trigger=esc identity/input/near-entity preserved using=false visiblePending=0 elapsedMs=4292",
+        "in-place trigger=sprint identity/input/near-entity preserved using=false visiblePending=0 elapsedMs=4252"
+      ],
+      "viewEvidence": [
+        "[OVD] effectiveClientVD=11 serverVD=10 slider=11 effectiveRD=11 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=11 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=11 serverVD=10 slider=11 effectiveRD=11 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=11 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=11 serverVD=10 slider=11 effectiveRD=11 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=11 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=11 serverVD=10 slider=11 effectiveRD=11 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=11 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=11 serverVD=10 slider=11 effectiveRD=11 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=11 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=11 serverVD=10 slider=11 effectiveRD=11 config=true engine=true shadowFailed=false"
+      ],
+      "finalRenderSlider": "11",
+      "clientFinalExit": 0,
+      "serverFinalExit": 0,
+      "cpuAffinity": {
+        "serverAffinity": {
+          "pid": 39300,
+          "mask": "0xFFFF",
+          "verified": true
+        },
+        "clientAffinity": {
+          "pid": 20012,
+          "mask": "0xFFFF0000",
+          "verified": true
+        }
+      },
+      "originalFullPackClientJarInventoryVerified": true,
+      "renderSliderBeforeSleep": "11",
+      "renderSliderRestored": true
+    },
+    {
+      "name": "atm10_sleep_b",
+      "candidateStage": "final gameplay including native meshing neighbours and inactive halo tick gate",
+      "status": "PASS",
+      "rawResult": "build\\sleep-residency-20261023\\production\\atm10_sleep_b\\result.json",
+      "releaseSha256": "c0466c090baff3d351d4a90aaa39d79d9735f7e03a16e56c8deeea6bc8a364f1",
+      "diagnosticCopiesAllGameplayClassesMatch": true,
+      "args": {
+        "name": "atm10_sleep_b",
+        "version": "1.21.1",
+        "scenario": "sleepresume",
+        "renderer": false,
+        "waystones": false,
+        "ovd": true,
+        "distant_factory": false,
+        "pack": "atm10",
+        "farsight": false
+      },
+      "strictAdditionalGates": {
+        "noShadowCreationFailure": true,
+        "noNativeDecodeFailure": true,
+        "noPoiDispatchTimeout": true,
+        "noDuplicateLogin": true,
+        "noFullPushTimeout": true,
+        "noShadowBlockEntitySaveFailure": true,
+        "noMixinLocalAnalysisFailure": true,
+        "normalExit": true
+      },
+      "jarCounts": {
+        "server": 479,
+        "client": 492
+      },
+      "modsOfInterest": [
+        {
+          "name": "balm-neoforge-1.21.1-21.0.65.jar",
+          "sha256": "490fa5fcb7ca83a9b5a84e33c2832298db99d189131001b9277a1de7fdc0bf91"
+        },
+        {
+          "name": "cupboard-1.21.1-4.2.jar",
+          "sha256": "5162922647fe07c7b9f446870915b57ddd0ae9dcf56b243611130fea30f2f77a"
+        },
+        {
+          "name": "sodium-extra-neoforge-0.9.4+mc1.21.1.jar",
+          "sha256": "655b4a25d3d1ccc0f53d0589c676f0a86e46843ae537749048b4b0edc33a0f6f"
+        },
+        {
+          "name": "sodium-neoforge-0.8.13+mc1.21.1.jar",
+          "sha256": "575d187b15328d7bddd8a9b1bee64333c22c14735f5780ec49eac0cd5503c08d"
+        },
+        {
+          "name": "waystones-neoforge-1.21.1-21.1.45.jar",
+          "sha256": "02c78df4a5e774cdc741d2fec8a19dac5c918ca8bd18da47444a4270322ee937"
+        }
+      ],
+      "residencyEvidence": [
+        "activeColumns=9 neighbourColumns=16 residentColumns=25 nativeUnload=true unloadedColumns=428 removedBlockEntities=396 backend=net.minecraft.client.multiplayer.ClientChunkCache"
+      ],
+      "lightEvidence": [
+        "roof/halo boundary light sky=11 block=14",
+        "roof/halo boundary light sky=11 block=14"
+      ],
+      "recoveryEvidence": [
+        "in-place trigger=turn identity/input/near-entity preserved using=true visiblePending=0 elapsedMs=4439",
+        "in-place trigger=move identity/input/near-entity preserved using=true visiblePending=0 elapsedMs=4847",
+        "in-place trigger=esc identity/input/near-entity preserved using=false visiblePending=0 elapsedMs=4239",
+        "in-place trigger=sprint identity/input/near-entity preserved using=false visiblePending=0 elapsedMs=4338"
+      ],
+      "viewEvidence": [
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=false shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=16 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=16 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=16 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=16 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=16 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false"
+      ],
+      "finalRenderSlider": "16",
+      "clientFinalExit": 0,
+      "serverFinalExit": 0,
+      "cpuAffinity": {
+        "serverAffinity": {
+          "pid": 27412,
+          "mask": "0xFFFF",
+          "verified": true
+        },
+        "clientAffinity": {
+          "pid": 37816,
+          "mask": "0xFFFF0000",
+          "verified": true
+        }
+      },
+      "originalFullPackClientJarInventoryVerified": true,
+      "renderSliderBeforeSleep": "16",
+      "renderSliderRestored": true
+    },
+    {
+      "name": "forge_auto_b",
+      "candidateStage": "final gameplay including native meshing neighbours and inactive halo tick gate",
+      "status": "PASS",
+      "rawResult": "build\\sleep-residency-20261023\\production\\forge_auto_b\\result.json",
+      "releaseSha256": "b4f72d83eae2ac9147f5a93d551f8b41c46258a0f9bce5502194705a7ff9f621",
+      "diagnosticCopiesAllGameplayClassesMatch": true,
+      "args": {
+        "name": "forge_auto_b",
+        "version": "1.20.1",
+        "scenario": "sleepauto",
+        "renderer": true,
+        "waystones": true,
+        "ovd": true,
+        "distant_factory": false,
+        "pack": null,
+        "farsight": false
+      },
+      "strictAdditionalGates": {
+        "noShadowCreationFailure": true,
+        "noNativeDecodeFailure": true,
+        "noPoiDispatchTimeout": true,
+        "noDuplicateLogin": true,
+        "noFullPushTimeout": true,
+        "noShadowBlockEntitySaveFailure": true,
+        "noMixinLocalAnalysisFailure": true,
+        "normalExit": true
+      },
+      "jarCounts": {
+        "server": 3,
+        "client": 4
+      },
+      "modsOfInterest": [
+        {
+          "name": "balm-forge-1.20.1-7.3.37-all.jar",
+          "sha256": "7f10f01866c8316edfc1ffbc49baf1154923beac637e2d7b5399d26508fdd914"
+        },
+        {
+          "name": "embeddium-0.3.31+mc1.20.1.jar",
+          "sha256": "eed3d1325f2acc2fd4e69bb495e5ccb91d962126ac5330f0582ebc2a3daf47fb"
+        },
+        {
+          "name": "waystones-forge-1.20.1-14.1.17.jar",
+          "sha256": "079aa58d6e95bee3caff622e10dcb6504efef43b803c7c21e2551201bd1ca78c"
+        }
+      ],
+      "residencyEvidence": [],
+      "lightEvidence": [],
+      "recoveryEvidence": [],
+      "viewEvidence": [
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=16 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false"
+      ],
+      "finalRenderSlider": "16",
+      "clientFinalExit": 0,
+      "serverFinalExit": 0,
+      "cpuAffinity": {
+        "serverAffinity": {
+          "pid": 3280,
+          "mask": "0xFFFF",
+          "verified": true
+        },
+        "clientAffinity": {
+          "pid": 25392,
+          "mask": "0xFFFF0000",
+          "verified": true
+        }
+      },
+      "originalFullPackClientJarInventoryVerified": false,
+      "renderSliderBeforeSleep": "16",
+      "renderSliderRestored": true
+    },
+    {
+      "name": "forge_disabled_b",
+      "candidateStage": "final gameplay including native meshing neighbours and inactive halo tick gate",
+      "status": "PASS",
+      "rawResult": "build\\sleep-residency-20261023\\production\\forge_disabled_b\\result.json",
+      "releaseSha256": "b4f72d83eae2ac9147f5a93d551f8b41c46258a0f9bce5502194705a7ff9f621",
+      "diagnosticCopiesAllGameplayClassesMatch": true,
+      "args": {
+        "name": "forge_disabled_b",
+        "version": "1.20.1",
+        "scenario": "sleepdisabled",
+        "renderer": true,
+        "waystones": false,
+        "ovd": true,
+        "distant_factory": false,
+        "pack": null,
+        "farsight": true
+      },
+      "strictAdditionalGates": {
+        "noShadowCreationFailure": true,
+        "noNativeDecodeFailure": true,
+        "noPoiDispatchTimeout": true,
+        "noDuplicateLogin": true,
+        "noFullPushTimeout": true,
+        "noShadowBlockEntitySaveFailure": true,
+        "noMixinLocalAnalysisFailure": true,
+        "normalExit": true
+      },
+      "jarCounts": {
+        "server": 1,
+        "client": 4
+      },
+      "modsOfInterest": [
+        {
+          "name": "cupboard-1.20.1-2.7.jar",
+          "sha256": "63a1b6e8e9cffd53f283fae04f64b8d63dcaaa99fe0e383bb664f23ec87d395f"
+        },
+        {
+          "name": "embeddium-0.3.31+mc1.20.1.jar",
+          "sha256": "eed3d1325f2acc2fd4e69bb495e5ccb91d962126ac5330f0582ebc2a3daf47fb"
+        },
+        {
+          "name": "farsight-1.20.1-4.5.jar",
+          "sha256": "8347d07ee5bb0898ef32dc4161f065f36cb3c60dcc19cad164a58417af5ffee5"
+        }
+      ],
+      "residencyEvidence": [],
+      "lightEvidence": [],
+      "recoveryEvidence": [],
+      "viewEvidence": [
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false"
+      ],
+      "finalRenderSlider": "16",
+      "clientFinalExit": 0,
+      "serverFinalExit": 0,
+      "cpuAffinity": {
+        "serverAffinity": {
+          "pid": 42136,
+          "mask": "0xFFFF",
+          "verified": true
+        },
+        "clientAffinity": {
+          "pid": 42168,
+          "mask": "0xFFFF0000",
+          "verified": true
+        }
+      },
+      "originalFullPackClientJarInventoryVerified": false,
+      "renderSliderBeforeSleep": "16",
+      "renderSliderRestored": true
+    },
+    {
+      "name": "neo_disabled_b",
+      "candidateStage": "final gameplay including native meshing neighbours and inactive halo tick gate",
+      "status": "PASS",
+      "rawResult": "build\\sleep-residency-20261023\\production\\neo_disabled_b\\result.json",
+      "releaseSha256": "c0466c090baff3d351d4a90aaa39d79d9735f7e03a16e56c8deeea6bc8a364f1",
+      "diagnosticCopiesAllGameplayClassesMatch": true,
+      "args": {
+        "name": "neo_disabled_b",
+        "version": "1.21.1",
+        "scenario": "sleepdisabled",
+        "renderer": true,
+        "waystones": false,
+        "ovd": true,
+        "distant_factory": false,
+        "pack": null,
+        "farsight": false
+      },
+      "strictAdditionalGates": {
+        "noShadowCreationFailure": true,
+        "noNativeDecodeFailure": true,
+        "noPoiDispatchTimeout": true,
+        "noDuplicateLogin": true,
+        "noFullPushTimeout": true,
+        "noShadowBlockEntitySaveFailure": true,
+        "noMixinLocalAnalysisFailure": true,
+        "normalExit": true
+      },
+      "jarCounts": {
+        "server": 1,
+        "client": 2
+      },
+      "modsOfInterest": [
+        {
+          "name": "sodium-neoforge-0.6.13+mc1.21.1.jar",
+          "sha256": "7acd7af2ef75ec883a6872c17494ead65e38025151eb08a1d60e36d34377f403"
+        }
+      ],
+      "residencyEvidence": [],
+      "lightEvidence": [],
+      "recoveryEvidence": [],
+      "viewEvidence": [
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false"
+      ],
+      "finalRenderSlider": "16",
+      "clientFinalExit": 0,
+      "serverFinalExit": 0,
+      "cpuAffinity": {
+        "serverAffinity": {
+          "pid": 1624,
+          "mask": "0xFFFF",
+          "verified": true
+        },
+        "clientAffinity": {
+          "pid": 12528,
+          "mask": "0xFFFF0000",
+          "verified": true
+        }
+      },
+      "originalFullPackClientJarInventoryVerified": false,
+      "renderSliderBeforeSleep": "16",
+      "renderSliderRestored": true
+    },
+    {
+      "name": "factory_forge_far_b",
+      "candidateStage": "final gameplay including native meshing neighbours and inactive halo tick gate",
+      "status": "PASS",
+      "rawResult": "build\\sleep-residency-20261023\\production\\factory_forge_far_b\\result.json",
+      "releaseSha256": "b4f72d83eae2ac9147f5a93d551f8b41c46258a0f9bce5502194705a7ff9f621",
+      "diagnosticCopiesAllGameplayClassesMatch": true,
+      "args": {
+        "name": "factory_forge_far_b",
+        "version": "1.20.1",
+        "scenario": "sleepwindowtraffic",
+        "renderer": true,
+        "waystones": true,
+        "ovd": true,
+        "distant_factory": true,
+        "pack": null,
+        "farsight": false
+      },
+      "strictAdditionalGates": {
+        "noShadowCreationFailure": true,
+        "noNativeDecodeFailure": true,
+        "noPoiDispatchTimeout": true,
+        "noDuplicateLogin": true,
+        "noFullPushTimeout": true,
+        "noShadowBlockEntitySaveFailure": true,
+        "noMixinLocalAnalysisFailure": true,
+        "normalExit": true
+      },
+      "jarCounts": {
+        "server": 3,
+        "client": 4
+      },
+      "modsOfInterest": [
+        {
+          "name": "balm-forge-1.20.1-7.3.37-all.jar",
+          "sha256": "7f10f01866c8316edfc1ffbc49baf1154923beac637e2d7b5399d26508fdd914"
+        },
+        {
+          "name": "embeddium-0.3.31+mc1.20.1.jar",
+          "sha256": "eed3d1325f2acc2fd4e69bb495e5ccb91d962126ac5330f0582ebc2a3daf47fb"
+        },
+        {
+          "name": "waystones-forge-1.20.1-14.1.17.jar",
+          "sha256": "079aa58d6e95bee3caff622e10dcb6504efef43b803c7c21e2551201bd1ca78c"
+        }
+      ],
+      "residencyEvidence": [],
+      "lightEvidence": [],
+      "recoveryEvidence": [],
+      "viewEvidence": [
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=16 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=16 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=16 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false"
+      ],
+      "finalRenderSlider": "16",
+      "clientFinalExit": 0,
+      "serverFinalExit": 0,
+      "cpuAffinity": {
+        "serverAffinity": {
+          "pid": 29332,
+          "mask": "0xFFFF",
+          "verified": true
+        },
+        "clientAffinity": {
+          "pid": 55044,
+          "mask": "0xFFFF0000",
+          "verified": true
+        }
+      },
+      "originalFullPackClientJarInventoryVerified": false,
+      "renderSliderBeforeSleep": "16",
+      "renderSliderRestored": true,
+      "factory": {
+        "fixture": "Player (-10.5,140,-10.5), chunk (-1,-1); all 16 native production lanes outside active 3x3, 13 outside shadow 5x5; server VD10/simulation6, client slider16/OVD enabled",
+        "cycles": {
+          "idle": {
+            "normalBytesPerSecond": 10715.433465220161,
+            "sleepBytesPerSecond": 1207.6515317273395,
+            "entryBytes": 3073,
+            "recoveryBytes": 579035,
+            "recoverySeconds": 30.2998693,
+            "measuredCycleBytes": 943303,
+            "conservativeBreakEvenSeconds": 61.22437431483603,
+            "incrementalBreakEvenSeconds": 26.735794816419677,
+            "reductionPercent": 88.72979300700155,
+            "recoveryBytesPerSecond": 19110.148438825112,
+            "recoveryPullResults": {
+              "UNCHANGED": 424,
+              "DELTA": 116,
+              "FULL": 6
+            },
+            "visibleWindowReadyMs": 4246,
+            "recoveryObservationMs": 30040,
+            "normalOutput": 1215,
+            "sleepOutput": 1216,
+            "outputRatio": 1.0008230452674898
+          },
+          "hold_attack": {
+            "normalBytesPerSecond": 10702.282791124251,
+            "sleepBytesPerSecond": 1169.7731052070162,
+            "entryBytes": 4054,
+            "recoveryBytes": 546997,
+            "recoverySeconds": 30.250833,
+            "measuredCycleBytes": 910235,
+            "conservativeBreakEvenSeconds": 57.807546822017926,
+            "incrementalBreakEvenSeconds": 23.506851104642525,
+            "reductionPercent": 89.06987296040106,
+            "recoveryBytesPerSecond": 18082.047525765654,
+            "recoveryPullResults": {
+              "UNCHANGED": 461,
+              "DELTA": 79,
+              "FULL": 5
+            },
+            "visibleWindowReadyMs": 4407,
+            "recoveryObservationMs": 30009,
+            "normalOutput": 1200,
+            "sleepOutput": 1216,
+            "outputRatio": 1.0133333333333334
+          },
+          "periodic_attack": {
+            "normalBytesPerSecond": 10311.76016851148,
+            "sleepBytesPerSecond": 1186.5270545507012,
+            "entryBytes": 3968,
+            "recoveryBytes": 521383,
+            "recoverySeconds": 30.300211,
+            "measuredCycleBytes": 873677,
+            "conservativeBreakEvenSeconds": 57.57124157149044,
+            "incrementalBreakEvenSeconds": 22.992001902116115,
+            "reductionPercent": 88.49345761382288,
+            "recoveryBytesPerSecond": 17207.239909979504,
+            "recoveryPullResults": {
+              "UNCHANGED": 467,
+              "DELTA": 73,
+              "FULL": 3
+            },
+            "visibleWindowReadyMs": 4311,
+            "recoveryObservationMs": 30007,
+            "normalOutput": 1216,
+            "sleepOutput": 1215,
+            "outputRatio": 0.9991776315789473
+          }
+        },
+        "qualityProblems": [],
+        "sampling": "One adjacent 30-second normal/sleep pair per input mode; recovery >=30 seconds and all paused visible columns ready; no injected offline wait"
+      }
+    },
+    {
+      "name": "factory_neo_far_b",
+      "candidateStage": "final gameplay including native meshing neighbours and inactive halo tick gate",
+      "status": "PASS",
+      "rawResult": "build\\sleep-residency-20261023\\production\\factory_neo_far_b\\result.json",
+      "releaseSha256": "c0466c090baff3d351d4a90aaa39d79d9735f7e03a16e56c8deeea6bc8a364f1",
+      "diagnosticCopiesAllGameplayClassesMatch": true,
+      "args": {
+        "name": "factory_neo_far_b",
+        "version": "1.21.1",
+        "scenario": "sleepwindowtraffic",
+        "renderer": true,
+        "waystones": false,
+        "ovd": true,
+        "distant_factory": true,
+        "pack": null,
+        "farsight": false
+      },
+      "strictAdditionalGates": {
+        "noShadowCreationFailure": true,
+        "noNativeDecodeFailure": true,
+        "noPoiDispatchTimeout": true,
+        "noDuplicateLogin": true,
+        "noFullPushTimeout": true,
+        "noShadowBlockEntitySaveFailure": true,
+        "noMixinLocalAnalysisFailure": true,
+        "normalExit": true
+      },
+      "jarCounts": {
+        "server": 1,
+        "client": 2
+      },
+      "modsOfInterest": [
+        {
+          "name": "sodium-neoforge-0.6.13+mc1.21.1.jar",
+          "sha256": "7acd7af2ef75ec883a6872c17494ead65e38025151eb08a1d60e36d34377f403"
+        }
+      ],
+      "residencyEvidence": [],
+      "lightEvidence": [],
+      "recoveryEvidence": [],
+      "viewEvidence": [
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=16 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=16 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=16 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false"
+      ],
+      "finalRenderSlider": "16",
+      "clientFinalExit": 0,
+      "serverFinalExit": 0,
+      "cpuAffinity": {
+        "serverAffinity": {
+          "pid": 21400,
+          "mask": "0xFFFF",
+          "verified": true
+        },
+        "clientAffinity": {
+          "pid": 32432,
+          "mask": "0xFFFF0000",
+          "verified": true
+        }
+      },
+      "originalFullPackClientJarInventoryVerified": false,
+      "renderSliderBeforeSleep": "16",
+      "renderSliderRestored": true,
+      "factory": {
+        "fixture": "Player (-10.5,140,-10.5), chunk (-1,-1); all 16 native production lanes outside active 3x3, 13 outside shadow 5x5; server VD10/simulation6, client slider16/OVD enabled",
+        "cycles": {
+          "idle": {
+            "normalBytesPerSecond": 13193.54150098887,
+            "sleepBytesPerSecond": 1281.3578428522217,
+            "entryBytes": 5143,
+            "recoveryBytes": 802320,
+            "recoverySeconds": 30.2994224,
+            "measuredCycleBytes": 1245984,
+            "conservativeBreakEvenSeconds": 67.78463321025615,
+            "incrementalBreakEvenSeconds": 33.83604889056887,
+            "reductionPercent": 90.28799172112974,
+            "recoveryBytesPerSecond": 26479.71269577733,
+            "recoveryPullResults": {
+              "UNCHANGED": 370,
+              "DELTA": 170,
+              "FULL": 5
+            },
+            "visibleWindowReadyMs": 4294,
+            "recoveryObservationMs": 30046,
+            "normalOutput": 1200,
+            "sleepOutput": 1216,
+            "outputRatio": 1.0133333333333334
+          },
+          "hold_attack": {
+            "normalBytesPerSecond": 12960.336725006624,
+            "sleepBytesPerSecond": 1344.633238280835,
+            "entryBytes": 5078,
+            "recoveryBytes": 643507,
+            "recoverySeconds": 30.2504436,
+            "measuredCycleBytes": 1082048,
+            "conservativeBreakEvenSeconds": 55.83691084583821,
+            "incrementalBreakEvenSeconds": 21.75041786179831,
+            "reductionPercent": 89.62501309332187,
+            "recoveryBytesPerSecond": 21272.64672574917,
+            "recoveryPullResults": {
+              "UNCHANGED": 456,
+              "DELTA": 84,
+              "FULL": 3
+            },
+            "visibleWindowReadyMs": 4355,
+            "recoveryObservationMs": 30000,
+            "normalOutput": 1200,
+            "sleepOutput": 1216,
+            "outputRatio": 1.0133333333333334
+          },
+          "periodic_attack": {
+            "normalBytesPerSecond": 12911.280688751694,
+            "sleepBytesPerSecond": 1307.8600421428903,
+            "entryBytes": 5024,
+            "recoveryBytes": 618815,
+            "recoverySeconds": 30.2505849,
+            "measuredCycleBytes": 1054669,
+            "conservativeBreakEvenSeconds": 53.763370216378576,
+            "incrementalBreakEvenSeconds": 19.76834533100679,
+            "reductionPercent": 89.87040810535319,
+            "recoveryBytesPerSecond": 20456.29868135211,
+            "recoveryPullResults": {
+              "UNCHANGED": 469,
+              "DELTA": 71,
+              "FULL": 3
+            },
+            "visibleWindowReadyMs": 4308,
+            "recoveryObservationMs": 30007,
+            "normalOutput": 1201,
+            "sleepOutput": 1216,
+            "outputRatio": 1.0124895920066612
+          }
+        },
+        "qualityProblems": [],
+        "sampling": "One adjacent 30-second normal/sleep pair per input mode; recovery >=30 seconds and all paused visible columns ready; no injected offline wait"
+      }
+    },
+    {
+      "name": "embeddium_waystones_ovd_b",
+      "candidateStage": "obsolete nine-native-column candidate: raw lifecycle/traffic checks passed but visual nine-column coverage was NOT validated",
+      "status": "PASS",
+      "rawResult": "build\\sleep-residency-20261023\\production\\embeddium_waystones_ovd_b\\result.json",
+      "releaseSha256": "88895bd8993d0dd97e2d0ff62ff3659debed62df5f47c733499aa8890940f4a4",
+      "diagnosticCopiesAllGameplayClassesMatch": true,
+      "args": {
+        "name": "embeddium_waystones_ovd_b",
+        "version": "1.20.1",
+        "scenario": "sleepresume",
+        "renderer": true,
+        "waystones": true,
+        "ovd": true
+      },
+      "strictAdditionalGates": {
+        "noShadowCreationFailure": true,
+        "noNativeDecodeFailure": true,
+        "noPoiDispatchTimeout": true,
+        "noDuplicateLogin": true,
+        "noFullPushTimeout": true,
+        "noShadowBlockEntitySaveFailure": true,
+        "noMixinLocalAnalysisFailure": true,
+        "normalExit": true
+      },
+      "jarCounts": {
+        "server": 3,
+        "client": 4
+      },
+      "modsOfInterest": [
+        {
+          "name": "balm-forge-1.20.1-7.3.37-all.jar",
+          "sha256": "7f10f01866c8316edfc1ffbc49baf1154923beac637e2d7b5399d26508fdd914"
+        },
+        {
+          "name": "embeddium-0.3.31+mc1.20.1.jar",
+          "sha256": "eed3d1325f2acc2fd4e69bb495e5ccb91d962126ac5330f0582ebc2a3daf47fb"
+        },
+        {
+          "name": "waystones-forge-1.20.1-14.1.17.jar",
+          "sha256": "079aa58d6e95bee3caff622e10dcb6504efef43b803c7c21e2551201bd1ca78c"
+        }
+      ],
+      "residencyEvidence": [
+        "residentColumns=9 nativeUnload=true unloadedColumns=601 removedBlockEntities=52"
+      ],
+      "lightEvidence": [
+        "roof/halo boundary light sky=11 block=14",
+        "roof/halo boundary light sky=11 block=14"
+      ],
+      "recoveryEvidence": [
+        "in-place trigger=turn identity/input/near-entity preserved using=true visiblePending=0 elapsedMs=4218",
+        "in-place trigger=move identity/input/near-entity preserved using=true visiblePending=0 elapsedMs=4258",
+        "in-place trigger=esc identity/input/near-entity preserved using=false visiblePending=0 elapsedMs=4260",
+        "in-place trigger=sprint identity/input/near-entity preserved using=false visiblePending=0 elapsedMs=4287"
+      ],
+      "viewEvidence": [
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=16 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=16 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=16 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=16 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=16 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false"
+      ],
+      "finalRenderSlider": "16",
+      "clientFinalExit": 0,
+      "serverFinalExit": 0,
+      "cpuAffinity": {
+        "serverAffinity": {
+          "pid": 4136,
+          "mask": "0xFFFF",
+          "verified": true
+        },
+        "clientAffinity": {
+          "pid": 14072,
+          "mask": "0xFFFF0000",
+          "verified": true
+        }
+      },
+      "originalFullPackClientJarInventoryVerified": false,
+      "renderSliderBeforeSleep": "16",
+      "renderSliderRestored": true
+    },
+    {
+      "name": "sodium_ovd_b",
+      "candidateStage": "obsolete nine-native-column candidate: raw lifecycle/traffic checks passed but visual nine-column coverage was NOT validated",
+      "status": "PASS",
+      "rawResult": "build\\sleep-residency-20261023\\production\\sodium_ovd_b\\result.json",
+      "releaseSha256": "98603e5a5f718d14052e8726ccf7e674500e01593720139cbc30df9f63b1fe5a",
+      "diagnosticCopiesAllGameplayClassesMatch": true,
+      "args": {
+        "name": "sodium_ovd_b",
+        "version": "1.21.1",
+        "scenario": "sleepresume",
+        "renderer": true,
+        "waystones": false,
+        "ovd": true,
+        "distant_factory": false
+      },
+      "strictAdditionalGates": {
+        "noShadowCreationFailure": true,
+        "noNativeDecodeFailure": true,
+        "noPoiDispatchTimeout": true,
+        "noDuplicateLogin": true,
+        "noFullPushTimeout": true,
+        "noShadowBlockEntitySaveFailure": true,
+        "noMixinLocalAnalysisFailure": true,
+        "normalExit": true
+      },
+      "jarCounts": {
+        "server": 1,
+        "client": 2
+      },
+      "modsOfInterest": [
+        {
+          "name": "sodium-neoforge-0.6.13+mc1.21.1.jar",
+          "sha256": "7acd7af2ef75ec883a6872c17494ead65e38025151eb08a1d60e36d34377f403"
+        }
+      ],
+      "residencyEvidence": [
+        "residentColumns=9 nativeUnload=true unloadedColumns=615 removedBlockEntities=54"
+      ],
+      "lightEvidence": [
+        "roof/halo boundary light sky=11 block=14",
+        "roof/halo boundary light sky=11 block=14"
+      ],
+      "recoveryEvidence": [
+        "in-place trigger=turn identity/input/near-entity preserved using=true visiblePending=0 elapsedMs=4382",
+        "in-place trigger=move identity/input/near-entity preserved using=true visiblePending=0 elapsedMs=4404",
+        "in-place trigger=esc identity/input/near-entity preserved using=false visiblePending=0 elapsedMs=4239",
+        "in-place trigger=sprint identity/input/near-entity preserved using=false visiblePending=0 elapsedMs=4354"
+      ],
+      "viewEvidence": [
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=16 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=16 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=16 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=16 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=16 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false"
+      ],
+      "finalRenderSlider": "16",
+      "clientFinalExit": 0,
+      "serverFinalExit": 0,
+      "cpuAffinity": {
+        "serverAffinity": {
+          "pid": 28824,
+          "mask": "0xFFFF",
+          "verified": true
+        },
+        "clientAffinity": {
+          "pid": 42280,
+          "mask": "0xFFFF0000",
+          "verified": true
+        }
+      },
+      "originalFullPackClientJarInventoryVerified": false,
+      "renderSliderBeforeSleep": "16",
+      "renderSliderRestored": true
+    },
+    {
+      "name": "neo_vanilla_ovd_a",
+      "candidateStage": "obsolete nine-native-column candidate: raw lifecycle/traffic checks passed but visual nine-column coverage was NOT validated",
+      "status": "PASS",
+      "rawResult": "build\\sleep-residency-20261023\\production\\neo_vanilla_ovd_a\\result.json",
+      "releaseSha256": "f9ff8e4c8c595b2409f25fa7c38b46369918440a762bb805f599a31e80ac1e95",
+      "diagnosticCopiesAllGameplayClassesMatch": true,
+      "args": {
+        "name": "neo_vanilla_ovd_a",
+        "version": "1.21.1",
+        "scenario": "sleepresume",
+        "renderer": false,
+        "waystones": false,
+        "ovd": true,
+        "distant_factory": false
+      },
+      "strictAdditionalGates": {
+        "noShadowCreationFailure": true,
+        "noNativeDecodeFailure": true,
+        "noPoiDispatchTimeout": true,
+        "noDuplicateLogin": true,
+        "noFullPushTimeout": true,
+        "noShadowBlockEntitySaveFailure": true,
+        "noMixinLocalAnalysisFailure": true,
+        "normalExit": true
+      },
+      "jarCounts": {
+        "server": 1,
+        "client": 1
+      },
+      "modsOfInterest": [],
+      "residencyEvidence": [
+        "residentColumns=9 nativeUnload=true unloadedColumns=625 removedBlockEntities=51"
+      ],
+      "lightEvidence": [
+        "roof/halo boundary light sky=11 block=14",
+        "roof/halo boundary light sky=11 block=14"
+      ],
+      "recoveryEvidence": [
+        "in-place trigger=turn identity/input/near-entity preserved using=true visiblePending=0 elapsedMs=4419",
+        "in-place trigger=move identity/input/near-entity preserved using=true visiblePending=0 elapsedMs=4243",
+        "in-place trigger=esc identity/input/near-entity preserved using=false visiblePending=0 elapsedMs=4189",
+        "in-place trigger=sprint identity/input/near-entity preserved using=false visiblePending=0 elapsedMs=4335"
+      ],
+      "viewEvidence": [
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=16 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=16 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=16 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=16 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=16 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false"
+      ],
+      "finalRenderSlider": "16",
+      "clientFinalExit": 0,
+      "serverFinalExit": 0,
+      "cpuAffinity": {
+        "serverAffinity": {
+          "pid": 30872,
+          "mask": "0xFFFF",
+          "verified": true
+        },
+        "clientAffinity": {
+          "pid": 31272,
+          "mask": "0xFFFF0000",
+          "verified": true
+        }
+      },
+      "originalFullPackClientJarInventoryVerified": false,
+      "renderSliderBeforeSleep": "16",
+      "renderSliderRestored": true
+    },
+    {
+      "name": "factory_forge_far_a",
+      "candidateStage": "obsolete nine-native-column candidate: raw lifecycle/traffic checks passed but visual nine-column coverage was NOT validated",
+      "status": "PASS",
+      "rawResult": "build\\sleep-residency-20261023\\production\\factory_forge_far_a\\result.json",
+      "releaseSha256": "711f6ac7a345868c7eafb7f2ead475379cecad3e4da2ea0d8e95360f755e073d",
+      "diagnosticCopiesAllGameplayClassesMatch": true,
+      "args": {
+        "name": "factory_forge_far_a",
+        "version": "1.20.1",
+        "scenario": "sleepwindowtraffic",
+        "renderer": true,
+        "waystones": true,
+        "ovd": true,
+        "distant_factory": true
+      },
+      "strictAdditionalGates": {
+        "noShadowCreationFailure": true,
+        "noNativeDecodeFailure": true,
+        "noPoiDispatchTimeout": true,
+        "noDuplicateLogin": true,
+        "noFullPushTimeout": true,
+        "noShadowBlockEntitySaveFailure": true,
+        "noMixinLocalAnalysisFailure": true,
+        "normalExit": true
+      },
+      "jarCounts": {
+        "server": 3,
+        "client": 4
+      },
+      "modsOfInterest": [
+        {
+          "name": "balm-forge-1.20.1-7.3.37-all.jar",
+          "sha256": "7f10f01866c8316edfc1ffbc49baf1154923beac637e2d7b5399d26508fdd914"
+        },
+        {
+          "name": "embeddium-0.3.31+mc1.20.1.jar",
+          "sha256": "eed3d1325f2acc2fd4e69bb495e5ccb91d962126ac5330f0582ebc2a3daf47fb"
+        },
+        {
+          "name": "waystones-forge-1.20.1-14.1.17.jar",
+          "sha256": "079aa58d6e95bee3caff622e10dcb6504efef43b803c7c21e2551201bd1ca78c"
+        }
+      ],
+      "residencyEvidence": [],
+      "lightEvidence": [],
+      "recoveryEvidence": [],
+      "viewEvidence": [
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=16 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=16 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=16 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false"
+      ],
+      "finalRenderSlider": "16",
+      "clientFinalExit": 0,
+      "serverFinalExit": 0,
+      "cpuAffinity": {
+        "serverAffinity": {
+          "pid": 27080,
+          "mask": "0xFFFF",
+          "verified": true
+        },
+        "clientAffinity": {
+          "pid": 50256,
+          "mask": "0xFFFF0000",
+          "verified": true
+        }
+      },
+      "originalFullPackClientJarInventoryVerified": false,
+      "renderSliderBeforeSleep": "16",
+      "renderSliderRestored": true,
+      "factory": {
+        "fixture": "Player (-10.5,140,-10.5), chunk (-1,-1); all 16 native production lanes outside active 3x3, 13 outside shadow 5x5; server VD10/simulation6, client slider16/OVD enabled",
+        "cycles": {
+          "idle": {
+            "normalBytesPerSecond": 11092.752067884094,
+            "sleepBytesPerSecond": 1187.4581343195923,
+            "entryBytes": 4237,
+            "recoveryBytes": 562277,
+            "recoverySeconds": 30.3015283,
+            "measuredCycleBytes": 938604,
+            "conservativeBreakEvenSeconds": 57.19305290682426,
+            "incrementalBreakEvenSeconds": 22.921230298963643,
+            "reductionPercent": 89.29518908335164,
+            "recoveryBytesPerSecond": 18556.060751562818,
+            "recoveryPullResults": {
+              "UNCHANGED": 426,
+              "DELTA": 114,
+              "FULL": 3
+            },
+            "visibleWindowReadyMs": 4407,
+            "recoveryObservationMs": 30001,
+            "normalOutput": 1215,
+            "sleepOutput": 1216,
+            "outputRatio": 1.0008230452674898
+          },
+          "hold_attack": {
+            "normalBytesPerSecond": 10707.539641603635,
+            "sleepBytesPerSecond": 1171.202250545967,
+            "entryBytes": 3999,
+            "recoveryBytes": 557971,
+            "recoverySeconds": 30.3003824,
+            "measuredCycleBytes": 921344,
+            "conservativeBreakEvenSeconds": 58.92933281984818,
+            "incrementalBreakEvenSeconds": 24.56979327481116,
+            "reductionPercent": 89.06189199622183,
+            "recoveryBytesPerSecond": 18414.652087031085,
+            "recoveryPullResults": {
+              "UNCHANGED": 457,
+              "DELTA": 83,
+              "FULL": 5
+            },
+            "visibleWindowReadyMs": 4390,
+            "recoveryObservationMs": 30046,
+            "normalOutput": 1200,
+            "sleepOutput": 1216,
+            "outputRatio": 1.0133333333333334
+          },
+          "periodic_attack": {
+            "normalBytesPerSecond": 10838.431028660925,
+            "sleepBytesPerSecond": 1239.3638664709351,
+            "entryBytes": 4276,
+            "recoveryBytes": 529469,
+            "recoverySeconds": 30.3008347,
+            "measuredCycleBytes": 899644,
+            "conservativeBreakEvenSeconds": 55.603840558839075,
+            "incrementalBreakEvenSeconds": 21.053590096468856,
+            "reductionPercent": 88.56509892258771,
+            "recoveryBytesPerSecond": 17473.743058305914,
+            "recoveryPullResults": {
+              "UNCHANGED": 466,
+              "DELTA": 74,
+              "FULL": 4
+            },
+            "visibleWindowReadyMs": 4289,
+            "recoveryObservationMs": 30049,
+            "normalOutput": 1200,
+            "sleepOutput": 1216,
+            "outputRatio": 1.0133333333333334
+          }
+        },
+        "qualityProblems": [],
+        "sampling": "One adjacent 30-second normal/sleep pair per input mode; recovery >=30 seconds and all paused visible columns ready; no injected offline wait"
+      }
+    },
+    {
+      "name": "factory_neo_far_a",
+      "candidateStage": "obsolete nine-native-column candidate: raw lifecycle/traffic checks passed but visual nine-column coverage was NOT validated",
+      "status": "PASS",
+      "rawResult": "build\\sleep-residency-20261023\\production\\factory_neo_far_a\\result.json",
+      "releaseSha256": "98603e5a5f718d14052e8726ccf7e674500e01593720139cbc30df9f63b1fe5a",
+      "diagnosticCopiesAllGameplayClassesMatch": true,
+      "args": {
+        "name": "factory_neo_far_a",
+        "version": "1.21.1",
+        "scenario": "sleepwindowtraffic",
+        "renderer": true,
+        "waystones": false,
+        "ovd": true,
+        "distant_factory": true
+      },
+      "strictAdditionalGates": {
+        "noShadowCreationFailure": true,
+        "noNativeDecodeFailure": true,
+        "noPoiDispatchTimeout": true,
+        "noDuplicateLogin": true,
+        "noFullPushTimeout": true,
+        "noShadowBlockEntitySaveFailure": true,
+        "noMixinLocalAnalysisFailure": true,
+        "normalExit": true
+      },
+      "jarCounts": {
+        "server": 1,
+        "client": 2
+      },
+      "modsOfInterest": [
+        {
+          "name": "sodium-neoforge-0.6.13+mc1.21.1.jar",
+          "sha256": "7acd7af2ef75ec883a6872c17494ead65e38025151eb08a1d60e36d34377f403"
+        }
+      ],
+      "residencyEvidence": [],
+      "lightEvidence": [],
+      "recoveryEvidence": [],
+      "viewEvidence": [
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=16 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=16 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=1 serverVD=10 slider=16 effectiveRD=2 config=true engine=true shadowFailed=false",
+        "[OVD] effectiveClientVD=16 serverVD=10 slider=16 effectiveRD=16 config=true engine=true shadowFailed=false"
+      ],
+      "finalRenderSlider": "16",
+      "clientFinalExit": 0,
+      "serverFinalExit": 0,
+      "cpuAffinity": {
+        "serverAffinity": {
+          "pid": 41720,
+          "mask": "0xFFFF",
+          "verified": true
+        },
+        "clientAffinity": {
+          "pid": 36120,
+          "mask": "0xFFFF0000",
+          "verified": true
+        }
+      },
+      "originalFullPackClientJarInventoryVerified": false,
+      "renderSliderBeforeSleep": "16",
+      "renderSliderRestored": true,
+      "factory": {
+        "fixture": "Player (-10.5,140,-10.5), chunk (-1,-1); all 16 native production lanes outside active 3x3, 13 outside shadow 5x5; server VD10/simulation6, client slider16/OVD enabled",
+        "cycles": {
+          "idle": {
+            "normalBytesPerSecond": 13726.14881136567,
+            "sleepBytesPerSecond": 1269.132369321249,
+            "entryBytes": 4905,
+            "recoveryBytes": 827899,
+            "recoverySeconds": 30.3006019,
+            "measuredCycleBytes": 1286449,
+            "conservativeBreakEvenSeconds": 66.85421054668865,
+            "incrementalBreakEvenSeconds": 33.13419040777376,
+            "reductionPercent": 90.75390783851644,
+            "recoveryBytesPerSecond": 27322.856579954605,
+            "recoveryPullResults": {
+              "UNCHANGED": 352,
+              "DELTA": 188,
+              "FULL": 5
+            },
+            "visibleWindowReadyMs": 4310,
+            "recoveryObservationMs": 30049,
+            "normalOutput": 1200,
+            "sleepOutput": 1216,
+            "outputRatio": 1.0133333333333334
+          },
+          "hold_attack": {
+            "normalBytesPerSecond": 12890.692384131175,
+            "sleepBytesPerSecond": 1308.8924540770797,
+            "entryBytes": 4817,
+            "recoveryBytes": 652565,
+            "recoverySeconds": 30.2505044,
+            "measuredCycleBytes": 1086960,
+            "conservativeBreakEvenSeconds": 56.7599167633808,
+            "incrementalBreakEvenSeconds": 22.756325894745487,
+            "reductionPercent": 89.84622070659009,
+            "recoveryBytesPerSecond": 21572.0369938691,
+            "recoveryPullResults": {
+              "UNCHANGED": 464,
+              "DELTA": 76,
+              "FULL": 6
+            },
+            "visibleWindowReadyMs": 4406,
+            "recoveryObservationMs": 30002,
+            "normalOutput": 1200,
+            "sleepOutput": 1216,
+            "outputRatio": 1.0133333333333334
+          },
+          "periodic_attack": {
+            "normalBytesPerSecond": 12803.042914296619,
+            "sleepBytesPerSecond": 1296.0229695269686,
+            "entryBytes": 5060,
+            "recoveryBytes": 612760,
+            "recoverySeconds": 30.2485726,
+            "measuredCycleBytes": 1044376,
+            "conservativeBreakEvenSeconds": 53.690703845596545,
+            "incrementalBreakEvenSeconds": 19.70083019798749,
+            "reductionPercent": 89.87722701390187,
+            "recoveryBytesPerSecond": 20257.48481103535,
+            "recoveryPullResults": {
+              "UNCHANGED": 464,
+              "DELTA": 76,
+              "FULL": 3
+            },
+            "visibleWindowReadyMs": 4408,
+            "recoveryObservationMs": 30003,
+            "normalOutput": 1216,
+            "sleepOutput": 1216,
+            "outputRatio": 1.0
+          }
+        },
+        "qualityProblems": [],
+        "sampling": "One adjacent 30-second normal/sleep pair per input mode; recovery >=30 seconds and all paused visible columns ready; no injected offline wait"
+      }
+    }
+  ],
+  "configRestoration": [
+    {
+      "loader": "forge",
+      "relative": "client/options.txt",
+      "existed": true,
+      "match": true,
+      "sha256": "542930E71CF07E4B677A43F5FB63EF7B9418E1B157EE1A2BDDC865329C1924F5"
+    },
+    {
+      "loader": "forge",
+      "relative": "client/config/hassium/hassium-client.toml",
+      "existed": true,
+      "match": true,
+      "sha256": "6B57734274C58C71A9100293A6357635D5863D1139302867AC366083AF67EA6B"
+    },
+    {
+      "loader": "forge",
+      "relative": "client/config/hassium/hassium-server.toml",
+      "existed": true,
+      "match": true,
+      "sha256": "58CD8D54CE98508EFF79A07154C95B51044266A42073607A2889D843FFA502CF"
+    },
+    {
+      "loader": "forge",
+      "relative": "server/server.properties",
+      "existed": true,
+      "match": true,
+      "sha256": "676FDC39013941243177FFF4880CCE5ECC6F667E2CB7152864D4D66C3E26FF8D"
+    },
+    {
+      "loader": "forge",
+      "relative": "client/config/hassium/sleep-profiles.properties",
+      "existed": false,
+      "match": true,
+      "sha256": null
+    },
+    {
+      "loader": "forge",
+      "relative": "server/eula.txt",
+      "existed": true,
+      "match": true,
+      "sha256": "94169D86BECDFCCBB25AB7800C7FFEC69ABA470FBC1A7E4604E36833AB2EEB8F"
+    },
+    {
+      "loader": "forge",
+      "relative": "server/ops.json",
+      "existed": true,
+      "match": true,
+      "sha256": "6E9C35424CBFE39A9FD471CE69A001D2C75F9C324AADA7B353EDB007F3AB0AF1"
+    },
+    {
+      "loader": "forge",
+      "relative": "server/config/hassium/hassium-server.toml",
+      "existed": true,
+      "match": true,
+      "sha256": "3970569ACAD12BDCCDB25FCE00B9040BBA487D3342F7075EA8233CFE5ADF384F"
+    },
+    {
+      "loader": "forge",
+      "relative": "server/config/hassium/hassium_aggregation_dict.bin",
+      "existed": true,
+      "match": true,
+      "sha256": "EA1CF4F698E99FD0B882897C1AD8CD99DBAF827083C14336351A574AF736C178"
+    },
+    {
+      "loader": "forge",
+      "relative": "server/config/hassium/aggregation_corpus/retrain.marker",
+      "existed": true,
+      "match": true,
+      "sha256": "53574A79D7A855D6C3532EB798BD3336DD81D4E87ABB830E23E9268284BC73EC"
+    },
+    {
+      "loader": "neoforge",
+      "relative": "client/options.txt",
+      "existed": true,
+      "match": true,
+      "sha256": "FC58509B329181353F5C8EB7459E911AF2089A06A9DBFAE9FFF3F87EB5412A8C"
+    },
+    {
+      "loader": "neoforge",
+      "relative": "client/config/hassium/hassium-client.toml",
+      "existed": true,
+      "match": true,
+      "sha256": "89653B2F20070251FF19816DE1FF62CD02416BD70D1D85EDB6518295C45E6A5D"
+    },
+    {
+      "loader": "neoforge",
+      "relative": "client/config/hassium/hassium-server.toml",
+      "existed": true,
+      "match": true,
+      "sha256": "66DDC76AB33EF2845FEE7646DAE5912A56BB1ED79E8F077485104166BCBCF5AC"
+    },
+    {
+      "loader": "neoforge",
+      "relative": "server/server.properties",
+      "existed": true,
+      "match": true,
+      "sha256": "B12F13C78A3EA47303C992320B317A8961B768E24BA2A80D00FB421F7D1D4108"
+    },
+    {
+      "loader": "neoforge",
+      "relative": "client/config/hassium/sleep-profiles.properties",
+      "existed": false,
+      "match": true,
+      "sha256": null
+    },
+    {
+      "loader": "neoforge",
+      "relative": "server/eula.txt",
+      "existed": true,
+      "match": true,
+      "sha256": "94169D86BECDFCCBB25AB7800C7FFEC69ABA470FBC1A7E4604E36833AB2EEB8F"
+    },
+    {
+      "loader": "neoforge",
+      "relative": "server/ops.json",
+      "existed": true,
+      "match": true,
+      "sha256": "6E9C35424CBFE39A9FD471CE69A001D2C75F9C324AADA7B353EDB007F3AB0AF1"
+    },
+    {
+      "loader": "neoforge",
+      "relative": "server/config/hassium/hassium-server.toml",
+      "existed": true,
+      "match": true,
+      "sha256": "C09F7E1EB535A29EB5AD34AAACAD0663DA32FB4D9FBA6FB8661F6BF8FA4CC732"
+    },
+    {
+      "loader": "neoforge",
+      "relative": "server/config/hassium/hassium_aggregation_dict.bin",
+      "existed": true,
+      "match": true,
+      "sha256": "6E84D7F9151273ADAE19D90AE101A08891513205C7D5F3AD97CB0B1A457FB17F"
+    },
+    {
+      "loader": "neoforge",
+      "relative": "server/config/hassium/aggregation_corpus/retrain.marker",
+      "existed": true,
+      "match": true,
+      "sha256": "9B062ABCBA4796A055BF28822B4AFC8892AA08212047802E882748D48DA59CB4"
+    }
+  ],
+  "environmentCleanup": {
+    "checkedAt": "2026-10-23T20:49:29.8487216+08:00",
+    "ownedGameProcessCount": 0,
+    "testPort25579ListenerCount": 0,
+    "allCandidateRuntimesExitedNormally": true
+  },
+  "preservedFailures": [
+    {
+      "fixture": "pre-halo-fix candidates (including raw lifecycle PASS cases)",
+      "cause": "nine native chunks leave only the centre render-ready in Sodium/Embeddium; old tests counted data, not nine rendered columns",
+      "fix": "retain sixteen native meshing/light neighbours, gate their BE ticks, verify nine-colour native screenshots"
+    },
+    {
+      "fixture": "sleep_residency_1201_vanilla_20261023_a / b",
+      "cause": "boundary light missing after real halo unload",
+      "fix": "native incremental light for active 3x3"
+    },
+    {
+      "fixture": "sleep_residency_1201_vanilla_20261023_c",
+      "cause": "final dump ran before asynchronous recovery completed",
+      "fix": "bounded wait for selected columns"
+    },
+    {
+      "fixture": "development renderer fixtures",
+      "cause": "release mapping / debug-local-capture mismatch",
+      "fix": "isolated production runtime; no third-party code change"
+    },
+    {
+      "fixture": "embeddium_waystones_ovd_a",
+      "cause": "test harness selected old jar and omitted test resources",
+      "fix": "exact version/new-class assertion, pinned hash, gameplay-class equality"
+    },
+    {
+      "fixture": "atm9_sleep_a",
+      "cause": "Farsight replaces native Storage with a separate map; native Storage trim did not touch it",
+      "fix": "use replacement cache native drop"
+    },
+    {
+      "fixture": "farsight_embeddium_a",
+      "cause": "replacement BE unload restarted current recovery",
+      "fix": "native apply scope only for same column"
+    },
+    {
+      "fixture": "failed-replacement-test-fixture.xml",
+      "cause": "unit fixture assumed successful dispatch retained its lease",
+      "fix": "verify pending lease and sent retry credentials separately"
+    }
+  ],
+  "limitations": [
+    "Only two primary platforms negotiate sleep; other anchors compile without enabling it.",
+    "Factory measurements are one adjacent 30-second pair per input mode, functional evidence rather than a repeated MSPT benchmark.",
+    "Unknown custom payloads use native delivery and are not all region-throttled; existing asynchronous known-world-update ordering guard remains.",
+    "Initial imported fixture setup files serve launcher metadata only; authoritative candidate identity is pinned JAR/hash plus inventory.json."
+  ],
+  "sourceEvidence": {
+    "trackedDiffSha256": "09661a7112dec3d80ee4b41a7d88cdd618e06673a38e9534830dd1accfdf286b",
+    "newSources": {
+      "common/src/main/java/io/github/limuqy/mc/hassium/compat/SleepChunkResidency.java": "b14ad9f567b22432d56e7d67b0c784e7c67123e5f1228766c4f8b497580008b3",
+      "common/src/main/java/io/github/limuqy/mc/hassium/compat/mods/FarsightSleepCompat.java": "ef01bf4fe116b043a63df12fe2b0576d5a3cb49ee323280f883be3c1c16198bb",
+      "common/src/main/java/io/github/limuqy/mc/hassium/mixin/client/MixinSleepChunkStorage.java": "55930988dfb5438d16b1f905f74cacb70b37298d0fb9f768208c68eaf0ca9f50",
+      "common/src/main/java/io/github/limuqy/mc/hassium/mixin/client/MixinSleepLevelTicks.java": "aee59c512084b4325e46ef4bc4ab1601c1cccb7b9b3b0a1a944ebbb394f5e205",
+      "common/src/main/java/io/github/limuqy/mc/hassium/mixin/client/MixinSleepOptions.java": "e84395e9f9150eef0b166b5f06524684fa94cdc5515a853ae357d0c7af36430f",
+      "common/src/main/resources/hassium/smoke/scenario/sleepgeometry.scenario": "8b208a3231ac2f2d123c4180b1e90df555f3bf82d91bff6df4eec3830b177e8b",
+      "common/src/test/java/io/github/limuqy/mc/hassium/compat/SleepChunkResidencyTest.java": "8d8287a40193caf2c9bba352c3b44a7834ecf74884c625e3c7bdb5c4b9b1b772",
+      "common/src/test/java/io/github/limuqy/mc/hassium/compat/mods/FarsightSleepCompatTest.java": "862c4ea73f05bef9d08d92a591e39128aafc1d1faf5fc03f06f3ec9fa4a76f6d"
+    }
+  },
+  "designReference": {
+    "repository": "https://github.com/Johni0702/bobby",
+    "revision": "241f973106ee4e5552a5950d0a12433c07921c93",
+    "locations": [
+      "FakeChunkManager.java:170",
+      "src/sodium06/.../SodiumClientLevelMixin.java:22"
+    ],
+    "use": "native lifecycle approach only, no copied GPL/LGPL code"
+  },
+  "rendererReadinessEvidence": {
+    "jar": "embeddium-0.3.31+mc1.20.1.jar",
+    "license": "LGPL-3.0-only",
+    "location": "me/jellysquid/mods/sodium/client/render/chunk/map/ChunkTracker.java:63",
+    "method": "updateMerged",
+    "rule": "A render-ready column needs block and light flags in its full 3x3 neighbourhood.",
+    "use": "Actual shipped JAR behavior inspected with Minecraft-dev; no implementation copied."
+  },
+  "farsightAbiEvidence": {
+    "jar": "farsight-1.20.1-4.5.jar",
+    "sha256": "8347d07ee5bb0898ef32dc4161f065f36cb3c60dcc19cad164a58417af5ffee5",
+    "license": "ARR; inspected ABI/behavior only, no implementation copied",
+    "source": "Minecraft-dev decompiled actual JAR; REA archive identity checked and closed"
+  }
+}

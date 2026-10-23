@@ -16,10 +16,6 @@ public class ForgePlatformHelper implements IPlatformHelper {
         return 8;
 #endif
     }
-    @Override public String sleepCompatibilityIssue() {
-        return io.github.limuqy.mc.hassium.server.sleep.SleepCompatibility.firstUnsupported(
-                ModList.get().getMods().stream().map(info->info.getModId()).toList());
-    }
 
     @Override
     public java.util.List<net.minecraft.resources.ResourceKey<? extends net.minecraft.core.Registry<?>>> cacheDataPackRegistryKeys() {

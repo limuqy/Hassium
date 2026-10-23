@@ -1,0 +1,30 @@
+join label=SLEEP_GEOMETRY_JOIN since=start timeoutMs=120000
+wait ms=15000
+command text="gamemode creative"
+command text="gamerule doMobSpawning false"
+command text="gamerule doDaylightCycle false"
+command text="time set noon"
+command text="weather clear"
+command text="fill -32 139 -32 47 139 47 gray_concrete"
+command text="fill -16 139 -16 -1 139 -1 red_concrete"
+command text="fill 0 139 -16 15 139 -1 orange_concrete"
+command text="fill 16 139 -16 31 139 -1 yellow_concrete"
+command text="fill -16 139 0 -1 139 15 lime_concrete"
+command text="fill 0 139 0 15 139 15 white_concrete"
+command text="fill 16 139 0 31 139 15 cyan_concrete"
+command text="fill -16 139 16 -1 139 31 blue_concrete"
+command text="fill 0 139 16 15 139 31 purple_concrete"
+command text="fill 16 139 16 31 139 31 magenta_concrete"
+command text="setblock 8 165 8 barrier"
+command text="tp @s 8.5 166 8.5 0 90"
+wait ms=15000
+dump label=ROUND1 round=1 world=true
+sleep action=enter
+sleep action=geometry_begin
+wait ms=3000
+sleep action=geometry
+sleep action=wake
+wait ms=1000
+sleep action=geometry_awake
+dump label=ROUND2 round=2 world=true
+exit rounds=2
